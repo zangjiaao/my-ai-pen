@@ -64,7 +64,11 @@ export type TaskEnvelope = {
   /** Optional test accounts / credentials provided by the customer (structured). */
   accounts?: unknown;
   scanMode?: string;
-  /** Optional parent task for future multi-agent platform orchestration (pass-through). */
+  /**
+   * Parent work-unit task id for multi-agent / sub-agent package workers.
+   * Spec #427: sticky pen-sandbox is keyed by (conversationId, expertId), not this field.
+   * parentTaskId remains useful for package worker routing / logging.
+   */
   parentTaskId?: string;
   /**
    * Explicit structured long-task objective to seed OMP-style goal mode
@@ -198,6 +202,13 @@ export type ToolRuntime = {
      * Disable: NODE4_SUBAGENT_IDLE=0.
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
+    /**
+     * Optional seat-scoped sandbox dispose (Session delete / tests).
+     * Spec #427: task-end cleanup does **not** call this — sticky env outlives work-bursts.
+     */
+    browserSandbox?: {
+      dispose(seatKey: string): Promise<void>;
+    };
     /**
      * finding(confirm) ground-fail counts by title|location — anti-thrash for identical retries.
      * After ≥2 failures, errors include bookable_unbooked judgment guidance.

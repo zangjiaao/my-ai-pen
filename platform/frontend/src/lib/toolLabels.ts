@@ -27,6 +27,7 @@ const TOOL_LABEL_ZH: Record<string, string> = {
   read: "读取文件",
   finding: "登记发现",
   fact: "记录过程事实",
+  surface: "记录攻击面",
   todo: "更新任务清单",
   skill: "加载技能",
   subagent: "启动子代理",

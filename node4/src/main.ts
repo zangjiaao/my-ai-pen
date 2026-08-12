@@ -3,6 +3,10 @@ import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
+import {
+  stopAllBrowserSandboxes,
+  startBrowserSandboxBackgroundJobs,
+} from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
 import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
 import type { TaskEnvelope } from "./types.js";
@@ -174,23 +178,31 @@ client.on("case_session_release", async (message) => {
     cancelApprovalsForConversation(conversationId);
     prev.abort();
   }
-  const idle = await waitConversationIdle(conversationId);
-  const result = await disposeWorkingSessionsForCase(conversationId);
-  // Only clear pending when idle (finally already ran). If still busy, keep pending
-  // so a late finally force-disposes instead of re-parking (Spec #354 L1).
-  if (idle) {
-    clearPendingCaseDispose(conversationId);
-  }
-  console.log(
-    `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle}`,
-  );
+  // Ack = accepted only (Platform does not wait). Cleanup is async; do not invent
+  // disposed/keys counts before work finishes (Spec #354 deferred release).
   await client.send({
     type: "case_session_release_ack",
     conversation_id: conversationId,
-    disposed: result.disposed,
-    keys: result.keys,
-    pending: !idle,
+    accepted: true,
+    deferred: true,
   });
+  void (async () => {
+    try {
+      const idle = await waitConversationIdle(conversationId);
+      const result = await disposeWorkingSessionsForCase(conversationId);
+      if (idle) {
+        clearPendingCaseDispose(conversationId);
+      }
+      console.log(
+        `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle} deferred=true`,
+      );
+    } catch (err) {
+      console.error(
+        `[node4] case_session_release background dispose failed conv=${conversationId.slice(0, 8)}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  })();
 });
 
 /**
@@ -559,6 +571,46 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       undefined,
   };
 }
+
+/** Spec #334: startup + periodic janitor and lease heartbeat. */
+const browserSandboxJobs = startBrowserSandboxBackgroundJobs();
+
+/** Bounded wait so docker/lock hangs cannot block process exit forever (review #320). */
+const BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS = 20_000;
+
+/** Spec #430: stop (not rm) sticky pen-sandboxes on graceful Node exit. */
+function installGracefulBrowserSandboxShutdown(): void {
+  let shuttingDown = false;
+  const onSignal = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    browserSandboxJobs.stop();
+    console.log(
+      `[node4] ${signal}: stopping sticky pen-sandboxes (timeout ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms)`,
+    );
+    const timedOut = new Promise<never>((_, reject) => {
+      const t = setTimeout(
+        () => reject(new Error(`browser sandbox stop timed out after ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms`)),
+        BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS,
+      );
+      t.unref?.();
+    });
+    void Promise.race([stopAllBrowserSandboxes(), timedOut])
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((err) => {
+        console.warn(
+          `[node4] browser sandbox stopAll failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        process.exit(1);
+      });
+  };
+  process.once("SIGTERM", () => onSignal("SIGTERM"));
+  process.once("SIGINT", () => onSignal("SIGINT"));
+}
+
+installGracefulBrowserSandboxShutdown();
 
 console.log(`[node4] starting node=${config.nodeName} ws=${config.platformWsUrl}`);
 await client.connect();

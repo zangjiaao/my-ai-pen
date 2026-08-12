@@ -19,7 +19,7 @@ That forced morph/align/delete logic across the list, live overlay, and React Qu
 - **Delete live-slot-as-Message.** Pending is **chrome**, not a Message.
 - **Message list identity** for progressive text/thinking = **`stream_id` only**.
 - **RQ** remains durable message SOT; **live overlay** is `Record<streamId, stream frame>` only (no live-slot keys).
-- **Working chrome:** show **indicator light + `工作中...`** at list tail after successful send **until first agent output** (thinking/text progressive or tool_output); then hide. **Do not** invent Working from tool alone when chrome already null. Toggle off for A/B: `localStorage my-ai-pen.workingChrome=0`.
+- **Working chrome:** show **indicator light + `工作中...`** at list tail after successful send through tools/thinking. Hide when agent **final reply text** starts progressive streaming, or on **task terminal / clear**. tool_output does not invent Working. Toggle off for A/B: `localStorage my-ai-pen.workingChrome=0`.
 - **Thinking / tool leading:** pulse **status light while running**; **category/Brain icon when done/fail**. Cards remain stream content (Chinese labels for tools).
 - **Missing `stream_id`:** fail-closed — do not enter live progressive list; do not invent fallback keys.
 - **Prune live:** clear on conversation load/switch, task_complete, task_error, interrupt settle; optionally drop a live key when RQ already has same stream_id with text ≥ live.
@@ -45,7 +45,7 @@ Prefer S1–S3 pure functions over ConversationPage integration tests.
 ## Frozen decisions (grilling)
 
 1. End state A — delete live-slot-as-Message  
-2. Pending A — Working chrome until first agent output (light + 工作中...); thinking/tool cards use light while running, icon when done
+2. Pending A — Working chrome for whole active turn (light + 工作中... at list tail); hide on terminal; thinking/tool cards use light while running, icon when done
 3. Data A — RQ SOT + live by stream_id  
 4. Retire `agent_pending` Message type (filter history)  
 5. Tools A — tool_call cards only  

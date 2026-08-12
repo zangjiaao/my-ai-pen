@@ -31,7 +31,12 @@ This is a **lifecycle projection gap**, not a separate background Agent subsyste
 
 ## Accepted residual
 
-- If the model turn aborts after name-known running but before `tool_execution_end`, the tool card may remain `running` until session/turn failure surfaces via existing fail paths (adjacent Spec #353 stream health / `LlmTurnError`). Emitting synthetic error frames for open run ids on abort is a follow-up, not required for D1.
+- **Interrupt / abort settle (Case e8a62c56):** if the turn aborts after name-known running but before `tool_execution_end`, pi often never emits end. Product path:
+  1. **Node** `attachProductToolEventBridge` wraps `session.abort` / `dispose` and emits `tool_output` `status: "error"` + `summary: "interrupted"` for every open run id.
+  2. **Platform** `_settle_inflight_execution_chrome` on `task_complete` / `task_error` / idle `work_status` / idle interrupt patches durable `tool_call` (and orphan `thinking`) rows still at `status=running` (including nested `tool_items` + progressive `* running` summaries), then rebroadcasts full `tool_items` so live FE upserts without reload.
+  3. **Merge** prefers fail over done over running (`_merge_tool_lifecycle_status` / FE `mergeToolLifecycleStatus` **and** per-`tool_run_id` `tool_items` merge) so a late progressive frame cannot replace items and re-light 「执行中」 under a canceled card.
+  4. **FE projection safety net:** when Case is idle, explicit orphan `running` projects to fail/`canceled` (summary 「失败」, not success-family 「已执行」); progressive chip text `shell running` is scrubbed. Spec #325 B1 also withholds 耗时 on a turn while any tool_call in that segment is still running — so duration does not sit above a stuck mid-interrupt shell card.
+  Without this, the next user turn sets `sessionActive` again and both the old tool pulse light and Working chrome light up.
 
 ## Out of scope (still)
 

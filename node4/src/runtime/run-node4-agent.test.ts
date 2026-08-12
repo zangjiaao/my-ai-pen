@@ -6,9 +6,15 @@
 import assert from "node:assert/strict";
 import {
   attachProductToolEventBridge,
+  clipToolResultTextForWire,
+  commandFromResultText,
+  commandFromToolArgs,
+  enrichArgsWithCommand,
   resolveNode4Model,
   resolveToolExecutionEndIsError,
   runNode4Agent,
+  SHELL_COMMAND_WIRE_MAX,
+  surfaceFieldsFromToolArgs,
   toolResultDetailsIsError,
   type Node4AgentSession,
 } from "./run-node4-agent.js";
@@ -257,6 +263,122 @@ async function testToolEventBridgeSingleFanOut() {
   assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "running"));
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "done"));
+}
+
+/**
+ * Case e8a62c56: user interrupt mid-tool — pi may skip tool_execution_end.
+ * Bridge must emit terminal error so the card does not stay status=running.
+ */
+async function testToolEventBridgeSettlesOpenToolsOnAbort() {
+  const platformMsgs: Array<{
+    type: string;
+    status?: string;
+    summary?: string;
+    tool_run_id?: string;
+    command?: string;
+  }> = [];
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: {
+        type: string;
+        status?: string;
+        summary?: string;
+        tool_run_id?: string;
+        command?: string;
+      }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  // Only start — no end (simulates abort during shell).
+  const session = fakeSession({
+    events: [
+      {
+        type: "tool_execution_start",
+        toolCallId: "call_stuck",
+        toolName: "shell",
+        args: { command: "sleep 999" },
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime);
+  await session.prompt("run long tool");
+  assert.ok(
+    platformMsgs.some((m) => m.type === "tool_output" && m.status === "running" && m.tool_run_id === "call_stuck"),
+  );
+  assert.ok(
+    platformMsgs.some(
+      (m) => m.type === "tool_output" && m.status === "running" && m.command === "sleep 999",
+    ),
+    "running frame surfaces shell command for Main chip",
+  );
+  session.abort();
+  // settle is async void from abort — drain microtasks
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setImmediate(r));
+  const errors = platformMsgs.filter(
+    (m) => m.type === "tool_output" && m.status === "error" && m.tool_run_id === "call_stuck",
+  );
+  assert.equal(errors.length, 1, "abort must settle open tool as error");
+  assert.equal(String(errors[0]?.summary || ""), "interrupted");
+  assert.equal(
+    String(errors[0]?.command || ""),
+    "sleep 999",
+    "interrupt settle keeps command for chip (not only interrupted summary)",
+  );
+  // Second abort must not double-emit
+  session.abort();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(
+    platformMsgs.filter((m) => m.type === "tool_output" && m.status === "error" && m.tool_run_id === "call_stuck")
+      .length,
+    1,
+    "settle is idempotent",
+  );
+}
+
+function testCommandFromToolArgs() {
+  assert.equal(commandFromToolArgs({ command: "nmap -sV target" }), "nmap -sV target");
+  assert.equal(commandFromToolArgs({ cmd: "ls" }), "ls");
+  assert.equal(commandFromToolArgs({ other: 1 }), "");
+  assert.equal(commandFromToolArgs(null), "");
+
+  // Multi-line shell scripts must not be 500-char teased on content.command.
+  const longCmd = `# proof\n${"A".repeat(2000)}\ncurl http://x`;
+  assert.ok(longCmd.length > 500);
+  const kept = commandFromToolArgs({ command: longCmd });
+  assert.ok(kept.length > 500);
+  assert.ok(kept.startsWith("# proof"));
+  assert.ok(kept.length <= SHELL_COMMAND_WIRE_MAX);
+
+  const shellSurf = surfaceFieldsFromToolArgs("shell", { command: longCmd });
+  assert.ok(shellSurf.command.length > 500);
+  assert.ok(shellSurf.command.includes("curl http://x") || shellSurf.command.startsWith("# proof"));
+
+  const http = surfaceFieldsFromToolArgs("http", { method: "GET", url: "https://x/" });
+  assert.equal(http.command, "GET https://x/");
+  assert.equal(http.target, "https://x/");
+
+  const browser = surfaceFieldsFromToolArgs("browser", { action: "open", url: "https://y/" });
+  assert.equal(browser.target, "open https://y/");
+
+  const skill = surfaceFieldsFromToolArgs("skill", { op: "load", id: "sqli" });
+  assert.equal(skill.target, "load sqli");
+
+  const read = surfaceFieldsFromToolArgs("read", { path: "a.py" });
+  assert.equal(read.command, "a.py");
+  assert.equal(read.target, "a.py");
+
+  // Done frame: command recovered from result JSON when args empty.
+  assert.equal(
+    commandFromResultText(JSON.stringify({ ok: true, command: "curl -sI http://x", exitCode: 0 })),
+    "curl -sI http://x",
+  );
+  const enriched = enrichArgsWithCommand({}, JSON.stringify({ command: "echo hi", exitCode: 0 }));
+  assert.equal(enriched?.command, "echo hi");
 }
 
 /**
@@ -797,12 +919,59 @@ async function testNoCodingAgentImportInModule() {
   assert.ok(src.includes("getBuiltinModel") || src.includes("providers/all"));
 }
 
+function testClipToolResultTextForWire() {
+  const longCmd = `python3 -c ${JSON.stringify("x".repeat(6000))}`;
+  const stdout = `HTTP/1.1 200 OK\n${"BODY".repeat(50)}`;
+  const raw = JSON.stringify({
+    ok: true,
+    command: longCmd,
+    exitCode: 0,
+    timedOut: false,
+    aborted: false,
+    stdout,
+    stderr: "",
+    timeout_seconds: 30,
+  });
+  assert.ok(raw.length > 4000, "fixture must exceed legacy 4k clip");
+  const clipped = clipToolResultTextForWire(raw, 4000);
+  assert.ok(clipped.length <= 4000);
+  const parsed = JSON.parse(clipped) as Record<string, unknown>;
+  assert.match(String(parsed.stdout || ""), /HTTP\/1\.1 200 OK/);
+  assert.equal(parsed.exitCode, 0);
+  assert.ok(String(parsed.stdout).length > 10);
+
+  const small = JSON.stringify({ ok: true, command: "echo hi", stdout: "hi\n", exitCode: 0 });
+  assert.equal(clipToolResultTextForWire(small), small);
+
+  // Platform list_vulnerabilities: large ok+array must NOT be rewritten to empty shell.
+  const vulns = Array.from({ length: 80 }, (_, i) => ({
+    id: `v-${i}`,
+    title: `Finding ${i} ${"x".repeat(80)}`,
+    status: "open",
+  }));
+  const ledger = JSON.stringify({ ok: true, vulnerabilities: vulns, total: vulns.length });
+  assert.ok(ledger.length > 4000);
+  const ledgerClipped = clipToolResultTextForWire(ledger, 4000);
+  assert.ok(ledgerClipped.length <= 4000);
+  const ledgerParsed = JSON.parse(ledgerClipped) as Record<string, unknown>;
+  assert.ok(Array.isArray(ledgerParsed.vulnerabilities));
+  assert.ok((ledgerParsed.vulnerabilities as unknown[]).length >= 1);
+  assert.equal(ledgerParsed.stdout, undefined);
+  assert.notEqual(
+    String(ledgerClipped).includes("无 stdout"),
+    true,
+  );
+}
+
 async function main() {
   await testPromptAndEvents();
   await testAbortStopsFurtherWork();
   await testToolResultDetailsIsErrorPromotion();
   await testToolEventBridgeErrorFromDetailsIsError();
   await testToolEventBridgeSingleFanOut();
+  await testToolEventBridgeSettlesOpenToolsOnAbort();
+  testCommandFromToolArgs();
+  testClipToolResultTextForWire();
   await testToolEventBridgeRunningFromToolNameKnown();
   await testToolEventBridgeRunningAfterDeferredIdAndName();
   await testToolEventBridgeIndependentRunIds();

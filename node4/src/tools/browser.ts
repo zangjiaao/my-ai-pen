@@ -1,6 +1,6 @@
 /**
- * Browser tool — prefer first-party pen-browser (S5), then Strix fallback;
- * host agent-browser if sandbox cannot start.
+ * Browser tool — prefer first-party pen-sandbox (explicit PEN_SANDBOX_IMAGE pin);
+ * host agent-browser only when sandbox is disabled or cannot start after image is configured.
  * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
@@ -12,7 +12,6 @@ import { parseCookiesJson } from "../runtime/agent-browser-cli.js";
 import {
   rewriteUrlForSandbox,
   runBrowserCommand,
-  stopBrowserSandbox,
 } from "../runtime/browser-sandbox.js";
 import {
   drainBrowserNetworkRows,
@@ -76,7 +75,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
     label: "Browser",
     description: [
       "Real browser automation via agent-browser.",
-      "Default: Docker pen-sandbox (unified pentest image: browser + scanners); Strix only if first-party image missing. Host fallback if sandbox unavailable.",
+      "Default: Docker pen-sandbox (set PEN_SANDBOX_IMAGE or NODE4_BROWSER_SANDBOX_IMAGE). Host fallback when NODE4_BROWSER_SANDBOX=0/host or sandbox start fails after image is pinned.",
       `Actions: ${ACTIONS.join(", ")}.`,
       "Use for JS-heavy pages, captcha UI, stored XSS verification, multi-step forms.",
       "Workflow: open → snapshot -i → click/fill @refs → re-snapshot.",
@@ -105,8 +104,8 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         runBrowserCommand(runtime, args, timeoutMs);
 
       if (action === "close") {
+        // Spec #333: close browser UI/session only — container GC is runtime dispose (task end/abort).
         const r = await run(["close"], 30_000);
-        await stopBrowserSandbox(runtime.task.taskId).catch(() => {});
         return jsonResult({
           ok: r.exitCode === 0,
           action: "close",
@@ -129,7 +128,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const opened = await run(["open", openUrl], 120_000);
         if (opened.unavailable) {
           return textResult(
-            `error: browser unavailable: ${opened.error || "no docker/host agent-browser"}. Build pen-sandbox (bash sandbox/pen-sandbox/scripts/build.sh) or set PEN_SANDBOX_IMAGE. Host needs: agent-browser install --with-deps`,
+            `error: browser unavailable: ${opened.error || "no docker/host agent-browser"}. Set PEN_SANDBOX_IMAGE (or NODE4_BROWSER_SANDBOX_IMAGE) to a first-party pen-sandbox pin and pull it (bash sandbox/pen-sandbox/scripts/build.sh). Host path: NODE4_BROWSER_SANDBOX=0 and agent-browser install --with-deps`,
           );
         }
         if (opened.exitCode !== 0 && !/https?:\/\//i.test(opened.text)) {

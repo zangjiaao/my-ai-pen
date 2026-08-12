@@ -248,23 +248,28 @@ export default function Sidebar({ activeId }: Props) {
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     const targetId = deleteTarget.id;
+    const wasActive = activeId === targetId;
     setDeleteError(null);
+    // Optimistic: close dialog + drop from sidebar immediately so DELETE latency
+    // (Node release / network) does not freeze the UI.
+    removeLocal(targetId);
+    setDeleteTarget(null);
+    if (wasActive) {
+      localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+      try {
+        sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      navigate(HOME_CHAT_PATH, { state: { preferBlankChat: true } });
+    }
     try {
       await authFetch(`/api/conversations/${targetId}`, { method: "DELETE" });
-      removeLocal(targetId);
-      if (activeId === targetId) {
-        localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-        try {
-          sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
-        } catch {
-          /* ignore */
-        }
-        navigate(HOME_CHAT_PATH, { state: { preferBlankChat: true } });
-      }
-      setDeleteTarget(null);
       await fetchAll();
     } catch (error) {
+      // Restore list from server; surface error (rare after optimistic drop).
       setDeleteError(error instanceof Error ? error.message : "删除失败");
+      await fetchAll();
     }
   };
 

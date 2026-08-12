@@ -4,10 +4,12 @@
  */
 import assert from "node:assert/strict";
 import {
+  isProgressiveRunningSummary,
   isSuccessfulToolExecution,
   mergeThinkingStatus,
   mergeToolLifecycleStatus,
   normalizeExecutionStatus,
+  projectToolLifecycleStatus,
   resolveThinkingUiStatus,
   resolveThinkingUiStatusForSession,
   resolveToolChromeStatusForSession,
@@ -31,6 +33,7 @@ import {
   assert.equal(thinkingLifecycleTitle(""), "思考完成");
   assert.equal(thinkingLifecycleTitle("running"), "思考中…");
   assert.equal(thinkingLifecycleTitle("done"), "思考完成");
+  assert.equal(thinkingLifecycleTitle("done", { durationSeconds: 4 }), "思考 4 秒");
   console.log("ok: S3 thinking title + historical missing → done");
 }
 
@@ -85,6 +88,11 @@ import {
   assert.equal(resolveThinkingUiStatusForSession("running", { sessionActive: true }), "running");
   const orphan = thinkingCardProjection({ status: "running", text: "" }, { sessionActive: false });
   assert.equal(orphan.title, "思考完成");
+  assert.equal(orphan.visible, false, "orphan empty running hides (no empty 思考完成 spam)");
+  assert.equal(runningEmpty.visible, true, "live empty running T1 stays visible");
+  assert.equal(doneBody.visible, true, "done with body visible");
+  const emptyDone = thinkingCardProjection({ status: "done", text: "" });
+  assert.equal(emptyDone.visible, false, "empty done thinking hides");
   console.log("ok: S3 thinkingCardProjection default expanded + empty body");
 }
 
@@ -158,14 +166,38 @@ import {
   console.log("ok: S5 toolActivitySummary 执行中 vs success family");
 }
 
-// Tool chrome leading status (running light vs done icon)
+// Tool chrome leading status (running light vs done/fail icon)
 {
   assert.equal(resolveToolChromeStatusForSession("running", { sessionActive: true }), "running");
-  assert.equal(resolveToolChromeStatusForSession("running", { sessionActive: false }), "done");
+  // Idle + orphan running → fail (interrupt mid-tool), not success-family done.
+  assert.equal(resolveToolChromeStatusForSession("running", { sessionActive: false }), "fail");
   assert.equal(resolveToolChromeStatusForSession("", { sessionActive: true }), "running");
   assert.equal(resolveToolChromeStatusForSession("", { sessionActive: false }), "done");
   assert.equal(resolveToolChromeStatusForSession("error", { sessionActive: true }), "fail");
+  // Case e8a62c56: interrupt terminal must not re-pulse when session becomes active again.
+  assert.equal(resolveToolChromeStatusForSession("canceled", { sessionActive: true }), "fail");
+  assert.equal(resolveToolChromeStatusForSession("interrupted", { sessionActive: true }), "fail");
+  assert.equal(normalizeExecutionStatus("interrupted"), "fail");
+  assert.equal(mergeToolLifecycleStatus("running", "error"), "fail");
+  assert.equal(mergeToolLifecycleStatus("error", "done"), "fail");
+  assert.equal(mergeToolLifecycleStatus("done", "running"), "done");
   console.log("ok: tool chrome status for leading light/icon");
+}
+
+// Interrupt/idle projection: projectToolLifecycleStatus + progressive summary
+{
+  assert.equal(projectToolLifecycleStatus("running", { sessionActive: true }), "running");
+  assert.equal(projectToolLifecycleStatus("running", { sessionActive: false }), "canceled");
+  assert.equal(projectToolLifecycleStatus("", { sessionActive: false }), "");
+  assert.equal(projectToolLifecycleStatus("done", { sessionActive: false }), "done");
+  assert.equal(isProgressiveRunningSummary("shell running"), true);
+  assert.equal(isProgressiveRunningSummary("interrupted"), false);
+  // Idle demotion must not leave activity label as 执行中.
+  const idleItems = [
+    { status: projectToolLifecycleStatus("running", { sessionActive: false }), toolName: "shell" },
+  ];
+  assert.equal(toolActivitySummaryLabel(idleItems, "shell"), "失败");
+  console.log("ok: idle/orphan running tool projects to 失败 (not 执行中)");
 }
 
 // Spec #350 secondary seam: running progressive payload → in-progress tool chrome

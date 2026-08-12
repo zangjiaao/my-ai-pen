@@ -29,7 +29,9 @@ import {
 {
   const idle: WorkBurstProjection = { active_burst_id: null, live_work_seconds: null };
   assert.equal(composerTimerVisible(idle, false), false);
-  assert.equal(composerTimerVisible(null, true), false);
+  // Optimistic / mid-reload: working without ledger still shows timer+list-tail.
+  assert.equal(composerTimerVisible(null, true), true);
+  assert.equal(composerTimerVisible(idle, true), true);
 
   const open: WorkBurstProjection = {
     active_burst_id: "wb_1",
@@ -37,6 +39,7 @@ import {
     accruing: true,
   };
   assert.equal(composerTimerVisible(open, true), true);
+  assert.equal(composerTimerVisible(open, false), true, "open burst keeps timer even if working flag lags");
 
   const paused: WorkBurstProjection = {
     active_burst_id: "wb_1",
@@ -137,6 +140,94 @@ import {
   const map = selectResultAnchorMessageIds(msgs, { b1: 99, b2: 5 });
   assert.equal(map.a1, 99);
   console.log("ok: B1 keeps server stamp");
+}
+
+{
+  // Streaming reply: withhold 耗时 until output finishes
+  const msgs = [
+    { id: "u1", role: "user", msg_type: "text", content: {} },
+    { id: "a1", role: "agent", msg_type: "text", content: { text: "partial..." } },
+  ];
+  const whileStreaming = selectResultAnchorMessageIds(msgs, { wb: 42 }, {
+    streamingMessageIds: ["a1"],
+  });
+  assert.equal(whileStreaming.a1, undefined, "no duration while text still streaming");
+  const afterDone = selectResultAnchorMessageIds(msgs, { wb: 42 }, {
+    streamingMessageIds: [],
+  });
+  assert.equal(afterDone.a1, 42);
+  console.log("ok: B1 withholds duration until stream completes");
+}
+
+// Withhold 耗时 while a tool_call in the same segment is still running (interrupt sticky).
+{
+  const msgs = [
+    { id: "u1", role: "user", msg_type: "text", content: { text: "go" } },
+    { id: "a1", role: "agent", msg_type: "text", content: { text: "starting" } },
+    {
+      id: "t1",
+      role: "agent",
+      msg_type: "tool_call",
+      content: { tool_name: "shell", status: "running", summary: "shell running" },
+    },
+  ];
+  const whileToolRunning = selectResultAnchorMessageIds(msgs, { wb: 49 }, {
+    suppressOpenSegment: false,
+  });
+  assert.equal(whileToolRunning.a1, undefined, "no 耗时 above stuck running tool");
+
+  const settled = selectResultAnchorMessageIds(
+    [
+      msgs[0]!,
+      msgs[1]!,
+      {
+        id: "t1",
+        role: "agent",
+        msg_type: "tool_call",
+        content: { tool_name: "shell", status: "canceled", summary: "interrupted" },
+      },
+    ],
+    { wb: 49 },
+    { suppressOpenSegment: false },
+  );
+  assert.equal(settled.a1, 49, "耗时 returns once tools are terminal");
+  console.log("ok: withhold B1 耗时 while segment tool still running");
+}
+
+{
+  // Active turn: server may stamp is_result_anchor mid-stream — still suppress open segment
+  const msgs = [
+    { id: "u0", role: "user", msg_type: "text", content: {} },
+    {
+      id: "a0",
+      role: "agent",
+      msg_type: "text",
+      content: { text: "old", is_result_anchor: true, work_seconds: 10, work_burst_id: "old" },
+    },
+    { id: "u1", role: "user", msg_type: "text", content: {} },
+    {
+      id: "a1",
+      role: "agent",
+      msg_type: "text",
+      content: {
+        text: "partial...",
+        stream_id: "n4-text-x-1",
+        is_result_anchor: true,
+        work_seconds: 5,
+        work_burst_id: "new",
+      },
+    },
+  ];
+  const open = selectResultAnchorMessageIds(msgs, { old: 10, new: 5 }, {
+    suppressOpenSegment: true,
+  });
+  assert.equal(open.a0, 10, "historical turn still shows 耗时");
+  assert.equal(open.a1, undefined, "open segment withheld even if stamped");
+  const settled = selectResultAnchorMessageIds(msgs, { old: 10, new: 5 }, {
+    suppressOpenSegment: false,
+  });
+  assert.equal(settled.a1, 5);
+  console.log("ok: B1 suppressOpenSegment for active turn");
 }
 
 console.log("workBurstTime.test.ts: all ok");

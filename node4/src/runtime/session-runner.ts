@@ -48,6 +48,12 @@ import {
 } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
 import {
+  holdBrowserSandboxSeat,
+  releaseBrowserSandboxSeat,
+  resolveBrowserSandboxSeat,
+} from "./browser-sandbox.js";
+import { runTaskResourceCleanup } from "./task-resource-cleanup.js";
+import {
   buildGoalBudgetLimitPrompt,
   buildGoalContinuationPrompt,
 } from "../stores/goal.js";
@@ -271,6 +277,26 @@ export async function runNode4Task(
   });
 
   /**
+   * Spec #333 / #427: package teardown = idle pool only.
+   * Sticky pen-sandbox is **not** disposed on work-burst end (Session seat owns it).
+   */
+  const seatForHold = (() => {
+    try {
+      return resolveBrowserSandboxSeat(task);
+    } catch {
+      return null;
+    }
+  })();
+
+  const cleanupTaskResources = () => {
+    if (seatForHold) releaseBrowserSandboxSeat(seatForHold);
+    return runTaskResourceCleanup({
+      parentTaskId: task.taskId,
+      idlePool: runtime.lifecycle.subagentIdlePool,
+    });
+  };
+
+  /**
    * Graph × Pi Hard Graph path (ownership inversion).
    * Runs only after parent ToolRuntime exists so stage sessions use real stores/platform.
    * Default / ledger-assist seats never enter Expert Hard Graph.
@@ -278,18 +304,25 @@ export async function runNode4Task(
    */
   // Expert Graph vs free OMP (#76 Soft retired). No Soft scenario inject path.
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
+    // Spec #334/#427: hold seat for lease heartbeat while burst runs.
+    if (seatForHold) holdBrowserSandboxSeat(seatForHold);
     runtime.lifecycle.abortSignal = signal;
-    const hardOut = await runHardGraphExpertTask({
-      config,
-      platform: loggingPlatform,
-      task,
-      taskDir,
-      pack,
-      graph: hardResolved.graph,
-      parentRuntime: runtime,
-      signal,
-    });
-    return { terminalStatus: hardOut.harnessStatus, taskDir };
+    try {
+      const hardOut = await runHardGraphExpertTask({
+        config,
+        platform: loggingPlatform,
+        task,
+        taskDir,
+        pack,
+        graph: hardResolved.graph,
+        parentRuntime: runtime,
+        signal,
+      });
+      return { terminalStatus: hardOut.harnessStatus, taskDir };
+    } finally {
+      // Spec #333: dispose browser sandbox (and idle pool if any) after Hard Graph task.
+      await cleanupTaskResources().catch(() => {});
+    }
   }
   if (workPath.path === "unavailable") {
     // Spec #284 G5: fail-closed — never silent Free OMP under Graph intent.
@@ -307,6 +340,7 @@ export async function runNode4Task(
 
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).
   // Soft scenario Graph is retired (#76); freePentestGraphResolution is the free-path SOT.
+  // holdBrowserSandboxSeat is inside the try below so hold + cleanup share one scope.
   const graphResolved = freePentestGraphResolution(task);
   // Spec #278 S2: skill-like Graph L1 catalog in Free prompt (product ids only).
   let graphCatalogBlock = "";
@@ -356,8 +390,7 @@ export async function runNode4Task(
       } catch {
         /* ignore */
       }
-      // Drop warm subagent sessions so cancelled tasks do not leak LLM handles.
-      void runtime.lifecycle.subagentIdlePool?.disposeAll?.().catch(() => {});
+      // Spec #333 review: teardown only in `finally` (single lifecycle authority).
     };
     if (signal.aborted) onCancel();
     else signal.addEventListener("abort", onCancel, { once: true });
@@ -666,6 +699,9 @@ export async function runNode4Task(
   };
 
   try {
+    // Spec #334/#427: hold seat for lease heartbeat only while this try/finally owns the burst.
+    if (seatForHold) holdBrowserSandboxSeat(seatForHold);
+
     if (!cancelled()) {
       await promptAndAssert(userPrompt);
     }
@@ -856,12 +892,7 @@ export async function runNode4Task(
       }
     }
 
-    // OMP idle subagent sessions: dispose parked children at task end.
-    try {
-      await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
-    } catch {
-      // ignore
-    }
+    // Spec #333: resource dispose is in `finally` only (single authority).
 
     const booked = await loadConfirmedFindings(runtime.findingsDir);
     // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
@@ -974,6 +1005,8 @@ export async function runNode4Task(
 
     return { terminalStatus: emitStatus, taskDir };
   } finally {
+    // Spec #333/#427: idle pool only; sticky pen-sandbox survives work-burst end.
+    await cleanupTaskResources().catch(() => {});
     // Tear down stream / active-session registration always.
     // Spec #283 I0.9: on user interrupt, park Free Main captain (do not dispose).
     try {

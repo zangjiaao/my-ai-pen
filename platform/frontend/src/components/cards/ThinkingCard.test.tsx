@@ -48,12 +48,38 @@ function renderThinking(content: Record<string, unknown>): string {
   console.log("ok: empty running thinking shell unchanged");
 }
 
+// Empty done: hide entirely (no 「思考完成」 without content)
+{
+  const html = renderThinking({ status: "done", text: "" });
+  assert.equal(html, "", "empty done thinking renders nothing");
+  console.log("ok: empty done thinking hidden");
+}
+
+// Orphan empty running when session idle → hide (not empty 思考完成)
+{
+  const html = renderToStaticMarkup(
+    createElement(ThinkingCard, {
+      content: { status: "running", text: "" },
+      sessionActive: false,
+    }),
+  );
+  assert.equal(html, "", "orphan empty running hidden when session idle");
+  console.log("ok: orphan empty running hidden");
+}
+
 // Lifecycle title for done with body
 {
   const html = renderThinking({ status: "done", text: "done thought" });
-  assert.ok(html.includes("思考完成"), "done title");
+  assert.ok(html.includes("思考完成"), "done title without duration");
   assert.ok(html.includes("done thought"), "body text present");
   console.log("ok: done thinking title + body");
+}
+
+// Done with stamped duration → 思考 N 秒
+{
+  const html = renderThinking({ status: "done", text: "x", thinking_seconds: 4 });
+  assert.ok(html.includes("思考 4 秒"), "duration title");
+  console.log("ok: thinking duration title");
 }
 
 console.log("ThinkingCard.test.tsx: all ok");

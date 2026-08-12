@@ -386,6 +386,7 @@ async function runWarmPackage(args: {
     ({
       ...input.parent.task,
       taskId: `${input.parent.task.taskId}/sub/${agentId}`,
+      parentTaskId: input.parent.task.parentTaskId?.trim() || input.parent.task.taskId,
       instruction: input.handoff.this_turn_goal,
     } as typeof input.parent.task);
   if (warm.childRuntime) {
@@ -573,6 +574,8 @@ async function runColdPackage(args: {
   const childTask: TaskEnvelope = {
     ...parent.task,
     taskId: `${parent.task.taskId}/sub/${subagentId}`,
+    // Spec #332: browser sandbox/session key stays on the parent work unit.
+    parentTaskId: parent.task.parentTaskId?.trim() || parent.task.taskId,
     instruction: handoff.this_turn_goal,
   };
 

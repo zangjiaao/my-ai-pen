@@ -99,7 +99,9 @@ for needle in \
   'beta-fe-env.sh' \
   'DEPLOY_SHA' \
   'profile beta' \
-  '/api/health'
+  '/api/health' \
+  'docker pull' \
+  'PEN_SANDBOX_IMAGE'
 do
   grep -qF -- "$needle" "$DEPLOY_SH" || fail "beta-deploy.sh missing: $needle"
 done
@@ -134,6 +136,7 @@ pass "systemd unit templates present without reload"
 [[ -f "$DEPLOY_WF" ]] || fail "missing beta-deploy workflow"
 grep -q 'workflow_run' "$DEPLOY_WF" || fail "beta-deploy must use workflow_run"
 grep -q 'product-smoke' "$DEPLOY_WF" || fail "beta-deploy must reference product-smoke"
+grep -q 'pen-sandbox' "$DEPLOY_WF" || fail "beta-deploy must also run after pen-sandbox (Hub publish → host pull)"
 grep -q 'conclusion' "$DEPLOY_WF" || fail "beta-deploy must gate on workflow conclusion"
 grep -q 'head_sha\|DEPLOY_SHA' "$DEPLOY_WF" || fail "beta-deploy must pass smoke head_sha / DEPLOY_SHA"
 grep -qiE 'ssh|appleboy' "$DEPLOY_WF" || fail "beta-deploy must SSH"

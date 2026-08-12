@@ -13,6 +13,7 @@ from app.models.conversation import Conversation
 from app.models.evidence import Evidence
 from app.models.message import Message
 from app.models.node import Node
+from app.models.surface_inventory import SurfaceInventory
 from app.models.vulnerability import Vulnerability
 from app.services.conversation_state import (
     ConversationStatusError,
@@ -152,12 +153,17 @@ async def delete_conversation(conv_id: str, current_user: dict = Depends(get_cur
         n = r.scalar_one_or_none()
         if n:
             n.current_sessions = max(0, (n.current_sessions or 0) - 1)
-    # Spec #354 Case close protocol: release all Node captains for this Case.
+    # Spec #354 Case close: best-effort Node release (park + sticky pen-sandbox rm).
+    # Do **not** wait for case_session_release_ack — Node may take seconds on docker
+    # rm / busy-wait idle (was up to 6s + idle wait), which freezes the delete UI.
+    # Platform Case row is the operator SoT; sandbox cleanup is fire-and-forget.
     release_result = await _notify_node_case_session_release(node_id, str(conversation_id))
     await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
     await db.execute(delete(Evidence).where(Evidence.conversation_id == conversation_id))
-    # Vulnerability + asset ledgers are user-owned and long-lived: do not cascade-delete.
-    # Unbind conversation so rediscovered findings and history remain.
+    # Vulnerability + asset + surface inventory are user-owned and long-lived: do not
+    # cascade-delete. Schema SoT: surface_inventory first/last_conversation_id use
+    # ON DELETE SET NULL (migration 0011). App-level unbind is belt-and-suspenders for
+    # DBs that have not applied 0011 yet — keep until all envs are migrated.
     await db.execute(
         Vulnerability.__table__.update()
         .where(Vulnerability.conversation_id == conversation_id)
@@ -167,6 +173,16 @@ async def delete_conversation(conv_id: str, current_user: dict = Depends(get_cur
         Asset.__table__.update()
         .where(Asset.conversation_id == conversation_id)
         .values(conversation_id=None)
+    )
+    await db.execute(
+        SurfaceInventory.__table__.update()
+        .where(SurfaceInventory.first_conversation_id == conversation_id)
+        .values(first_conversation_id=None)
+    )
+    await db.execute(
+        SurfaceInventory.__table__.update()
+        .where(SurfaceInventory.last_conversation_id == conversation_id)
+        .values(last_conversation_id=None)
     )
     await _audit(db, user_id, "conversation.delete", "conversation", conversation_id, conversation_id, {
         "title": title,
@@ -1012,7 +1028,11 @@ def _open_todos_from_context(ctx: dict) -> list:
 
 
 async def _notify_node_case_session_release(node_id: object, conversation_id: str) -> dict:
-    """Spec #354: structured Case close → Node release all captains."""
+    """Spec #354: structured Case close → Node release all captains.
+
+    Fire-and-forget deliver only (no ack wait). Case DELETE latency must not track
+    docker sandbox dispose or mid-burst idle wait on Node.
+    """
     nid = str(node_id or "").strip()
     if not nid:
         return {"delivered": False, "reason": "no_node"}
@@ -1022,9 +1042,8 @@ async def _notify_node_case_session_release(node_id: object, conversation_id: st
             "type": "case_session_release",
             "conversation_id": conversation_id,
         },
-        wait_ack="case_session_release_ack",
+        wait_ack=None,
         conversation_id=conversation_id,
-        timeout_s=6.0,
     )
 
 

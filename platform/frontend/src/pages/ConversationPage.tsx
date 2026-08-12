@@ -19,7 +19,14 @@ import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
-import { mergeThinkingStatus, mergeToolLifecycleStatus } from "../lib/status";
+import {
+  groupConsecutiveToolMessages,
+  isRenderableMessage,
+  mergeMessageRecords,
+  messageRecordFromMessage,
+  recordMessageType,
+  shouldUpdateMessageRecord,
+} from "../lib/conversationMessageMerge";
 import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
@@ -66,9 +73,11 @@ import {
   mergeMessagesWithLiveStreams,
   messageListKey,
   pendingChromeSpeakerContent,
-  pendingChromeVisible,
   pruneLiveCatchUp,
   reducePendingChrome,
+  listTailWorkingVisible,
+  DEFAULT_PENDING_LABEL,
+  AUTHORIZE_PENDING_LABEL,
   upsertLiveByStreamId,
   type LiveStreamFrame,
   type PendingChrome,
@@ -101,6 +110,11 @@ import {
   selectResultAnchorMessageIds,
   type WorkBurstProjection,
 } from "../lib/workBurstTime";
+import {
+  clearQueuedSteerDeliveryPages,
+  STEER_DELIVERY_QUEUED,
+} from "../lib/steerDelivery";
+import { gateCaseWsHandlers } from "../lib/caseWsGate";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -372,7 +386,7 @@ export default function ConversationPage() {
    * Keyed by stream_id only (Spec #276). Pending is chrome, not a live-slot Message.
    */
   const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamFrame>>({});
-  /** List-tail “思考中…” after send — not a Message in RQ or live map. */
+  /** List-tail Working attribution (send_success); visibility follows work-burst. */
   const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
@@ -460,7 +474,6 @@ export default function ConversationPage() {
     () => projectStreamWithDaySeparators(displayMessages),
     [displayMessages],
   );
-  const showPendingChrome = pendingChromeVisible(pendingChrome, activeId);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   /**
    * Session work indicator: prefer platform/Node SOT (conversation.working or status=running),
@@ -473,6 +486,17 @@ export default function ConversationPage() {
     || activeConversation?.status === "running"
     || launchOptimisticRef.current,
   );
+  /** List-tail Working: same open/close as composer-work-timer (work-burst / Case working). */
+  const showListTailWorking = listTailWorkingVisible({
+    workBurst,
+    working: isActiveConversationRunning,
+    pending: pendingChrome,
+    conversationId: activeId,
+  });
+  const listTailWorkingLabel =
+    workBurst?.authorize_paused === true
+      ? AUTHORIZE_PENDING_LABEL
+      : (pendingChrome?.label || DEFAULT_PENDING_LABEL);
 
   // Spec #325 C1: tick composer timer while accruing (pause on authorize).
   const showComposerTimer = composerTimerVisible(workBurst, isActiveConversationRunning);
@@ -497,6 +521,27 @@ export default function ConversationPage() {
   }, [showComposerTimer, workBurst, composerTickMs]);
 
   const resultAnchorSecondsByMessageId = useMemo(() => {
+    // Withhold 耗时 until the open turn settles (text can keep streaming after
+    // platform stamps work_seconds; live map may also catch-up prune mid-stream).
+    const streamingIds = new Set<string>();
+    for (const frame of Object.values(liveStreams)) {
+      if (isWorkerAuditScoped({ msg_type: frame.msgType, content: frame.content || {} })) continue;
+      const sid = String(frame.streamId || "").trim();
+      if (sid) streamingIds.add(sid);
+      const mid = String(frame.messageId || frame.content?.message_id || "").trim();
+      if (mid) streamingIds.add(mid);
+    }
+    // Any display row whose stream_id is still live is also "streaming".
+    for (const m of displayMessages) {
+      const c = (m.content || {}) as Record<string, unknown>;
+      const sid = String(c.stream_id || "").trim();
+      if (sid && streamingIds.has(sid)) {
+        const id = String(m.id || "").trim();
+        if (id) streamingIds.add(id);
+        const mid = String(c.message_id || "").trim();
+        if (mid) streamingIds.add(mid);
+      }
+    }
     return selectResultAnchorMessageIds(
       displayMessages.map((m) => ({
         id: m.id,
@@ -505,8 +550,18 @@ export default function ConversationPage() {
         content: m.content as Record<string, unknown>,
       })),
       workBurst?.finalized_work_seconds,
+      {
+        streamingMessageIds: streamingIds,
+        // Active work: no 耗时 on the open user→agent segment until settle.
+        suppressOpenSegment: isActiveConversationRunning,
+      },
     );
-  }, [displayMessages, workBurst?.finalized_work_seconds]);
+  }, [
+    displayMessages,
+    workBurst?.finalized_work_seconds,
+    liveStreams,
+    isActiveConversationRunning,
+  ]);
   const activeWorkflowKind = useMemo(() => {
     if (kanban?.workflow_kind) return kanban.workflow_kind;
     const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
@@ -930,10 +985,13 @@ export default function ConversationPage() {
       setInterrupting(Boolean(interruptingFlag));
     } else {
       launchOptimisticRef.current = false;
-      // Interrupt settle only (Spec #276) — not every idle blip (would wipe post-send chrome).
+      // Turn idle: hide list-tail Working (whole-turn chrome ends with work, not first stream).
+      // Interrupt also clears live streams; plain idle only drops Working chrome.
       if (interrupting || interruptingFlag) {
         clearProgressiveStreamUi();
         clearPendingAgentMessage(convId);
+      } else {
+        setPendingChrome((cur) => reducePendingChrome(cur, { type: "terminal" }));
       }
       setInterrupting(false);
     }
@@ -966,7 +1024,10 @@ export default function ConversationPage() {
     }
   }, [activeId, clearPendingAgentMessage, clearProgressiveStreamUi, interrupting, patchConversation, refreshConversationState]);
 
-  const { send } = useWebSocket({
+  const { send } = useWebSocket(
+    gateCaseWsHandlers(
+      activeId,
+      {
     conversation_working: (msg) => {
       applyConversationWorking(msg);
     },
@@ -979,7 +1040,6 @@ export default function ConversationPage() {
     },
     traffic_exchange: (msg) => {
       // Spec #309: live upsert by exchange_id after platform persist (not chat SoT).
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const id = String(m.exchange_id || "").trim();
       if (!id) return;
@@ -992,7 +1052,6 @@ export default function ConversationPage() {
     },
     surface_upsert: (msg) => {
       // Spec #375: live merge by origin_key+path_key into Case surface_ledger.
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const surfaces = Array.isArray(m.surfaces)
         ? (m.surfaces as SurfaceLedgerRow[])
@@ -1010,7 +1069,6 @@ export default function ConversationPage() {
       );
     },
     vuln_found: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       // Spec #280: fail-closed rejects use vuln_found_error — never join Findings.
       if (String(m.type || "") === "vuln_found_error") return;
@@ -1034,12 +1092,11 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     tool_output: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const workerScoped = isWorkerAuditScoped(m as { channel?: string; agent_id?: string; package_turn_id?: string; content?: Record<string, unknown> });
-      // Spec #276: Main tools use tool_call cards only — never reseed pending chrome.
-      // Spec #308: Worker tools also persist for dialog but must not drive Main chrome.
+      // Main tools use tool_call cards; Working list-tail stays for the whole turn
+      // (tool_output does not clear chrome). Spec #308: Worker tools must not drive Main chrome.
       if (!workerScoped) {
         setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
         markMessageAutoScroll();
@@ -1054,44 +1111,70 @@ export default function ConversationPage() {
       // Spec #305 R2: preserve empty/missing status — do not invent "running".
       // MessageRenderer / mergeToolLifecycleStatus use result hints when empty.
       const toolStatus = String(m.status ?? "").trim();
+      const toolName = String(m.tool_name || "");
+      const argsObj =
+        m.args && typeof m.args === "object" && !Array.isArray(m.args)
+          ? (m.args as Record<string, unknown>)
+          : null;
+      const pickArg = (...keys: string[]) => {
+        if (!argsObj) return "";
+        for (const key of keys) {
+          const v = String(argsObj[key] ?? "").trim();
+          if (v) return v;
+        }
+        return "";
+      };
+      const toolCommand =
+        String(m.command || "").trim()
+        || pickArg("command", "cmd", "script", "code", "input");
+      const toolTarget =
+        String(m.target || "").trim()
+        || pickArg("url", "target", "path", "file", "query", "title", "id", "action", "op", "this_turn_goal");
+      const defaultItem = {
+        tool_name: toolName,
+        tool_run_id: m.tool_run_id,
+        status: toolStatus,
+        stdout: String(m.stdout || m.line || ""),
+        command: toolCommand,
+        evidence_id: m.evidence_id,
+        summary: String(m.summary || m.line || ""),
+        display_title: m.display_title || "",
+        category: m.category || "",
+        target: toolTarget,
+        args: m.args,
+        result: m.result,
+        result_text: m.result_text,
+      };
+      // Interrupt settle may broadcast full tool_items already terminalized.
+      const wireItems = Array.isArray(m.tool_items)
+        ? m.tool_items.filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === "object" && !Array.isArray(item)),
+        )
+        : [];
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
         ...workerStamp,
-        tool_name: String(m.tool_name || ""),
+        tool_name: toolName,
         tool_run_id: m.tool_run_id,
-        command: String(m.command || ""),
+        command: toolCommand,
         status: toolStatus,
         stdout: String(m.stdout || (m.line ? `${m.line}\n` : "") || ""),
         evidence_id: m.evidence_id,
         summary: String(m.summary || m.line || ""),
         display_title: m.display_title || "",
         category: m.category || "",
-        target: m.target || "",
+        target: toolTarget,
         args: m.args,
         result: m.result,
         result_text: m.result_text,
-        tool_items: [{
-          tool_name: String(m.tool_name || ""),
-          tool_run_id: m.tool_run_id,
-          status: toolStatus,
-          stdout: String(m.stdout || m.line || ""),
-          command: String(m.command || ""),
-          evidence_id: m.evidence_id,
-          summary: String(m.summary || m.line || ""),
-          display_title: m.display_title || "",
-          category: m.category || "",
-          target: m.target || "",
-          args: m.args,
-          result: m.result,
-          result_text: m.result_text,
-        }],
+        tool_items: wireItems.length ? wireItems : [defaultItem],
         message_id: m.message_id,
       });
       addMessageToConversation(convId, incoming);
       if (!workerScoped) void refreshConversationState(convId);
     },
     worker_package_start: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const handoff = m.handoff && typeof m.handoff === "object" ? m.handoff as Record<string, unknown> : {};
@@ -1106,7 +1189,6 @@ export default function ConversationPage() {
       );
     },
     worker_package_delivery: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       addMessageToConversation(
@@ -1122,7 +1204,6 @@ export default function ConversationPage() {
       );
     },
     worker_display_name: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       if (m.worker_display_names && typeof m.worker_display_names === "object") {
         const next: Record<string, string> = {};
@@ -1144,7 +1225,6 @@ export default function ConversationPage() {
       });
     },
     asset_discovered: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
@@ -1154,7 +1234,6 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     evidence_created: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(m, activeId);
       clearPendingAgentMessage(convId);
@@ -1162,7 +1241,6 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     plan_tree_updated: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
@@ -1213,7 +1291,6 @@ export default function ConversationPage() {
     },
     // Hard Graph Agent Graph packages — keep Status tree in sync while workers run.
     subagent_started: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       setRunning(true);
       if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
@@ -1250,7 +1327,6 @@ export default function ConversationPage() {
       }
     },
     subagent_finished: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
         const next = m.panel_agents.filter(isStrixAgentStatus);
@@ -1288,7 +1364,6 @@ export default function ConversationPage() {
       });
     },
     completion_blocked: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
@@ -1305,7 +1380,6 @@ export default function ConversationPage() {
     // Legacy alias only: older nodes may still emit task_incomplete.
     // New Node2 incomplete path uses task_complete(status=incomplete) exclusively.
     task_incomplete: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
@@ -1326,7 +1400,6 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     request_decision: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
@@ -1338,7 +1411,6 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     checkpoint_update: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
@@ -1423,7 +1495,6 @@ export default function ConversationPage() {
     },
     // Live Node2 worker lifecycle — do not wait for the next throttled checkpoint.
     worker_started: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const workerId = readString(m.worker_id) || readString(m.id);
       if (!workerId) return;
@@ -1443,7 +1514,6 @@ export default function ConversationPage() {
       }));
     },
     worker_finished: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const workerId = readString(m.worker_id) || readString(m.id);
       if (!workerId) return;
@@ -1471,7 +1541,6 @@ export default function ConversationPage() {
       }));
     },
     intake_update: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const phase = typeof m.phase === "string" ? m.phase : "intake";
       const convId = messageConversationId(msg, activeId);
@@ -1487,7 +1556,6 @@ export default function ConversationPage() {
     },
     // thinking / reasoning / agent_thinking: streamed via upsertStreamedAgentText (handlers below).
     status_update: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       // Prefer agent_phase from Node4; legacy used phase.
@@ -1572,7 +1640,6 @@ export default function ConversationPage() {
     engagement_closeout: (msg) => {
       // Same msg_type as platform persist path (engagement_closeout) — not a live-only status disguise.
       // Gist text prefers Node/platform message; do not re-build residual strings here (M2).
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const closeout =
@@ -1605,7 +1672,6 @@ export default function ConversationPage() {
       );
     },
     task_complete: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
@@ -1640,7 +1706,6 @@ export default function ConversationPage() {
       void refreshConversationState(convId);
     },
     task_error: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
@@ -1706,7 +1771,6 @@ export default function ConversationPage() {
     },
     // next_scope_suggested: no composer banner — OOS hosts land in Case Workset → chat-end choice chips.
     workset_updated: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       if (m.workset && typeof m.workset === "object" && !Array.isArray(m.workset)) {
         setWorkset(m.workset as Record<string, unknown>);
@@ -1751,10 +1815,12 @@ export default function ConversationPage() {
     reasoning: (msg) => {
       upsertStreamedAgentText(msg, "thinking");
     },
-  });
+  },
+      { bypass: ["conversation_working", "work_status"] },
+    ),
+  );
 
   function upsertStreamedAgentText(msg: Record<string, unknown>, msgType: "text" | "thinking") {
-    if (!isActiveMessage(msg, activeId)) return;
     const raw = msg;
     const c = (raw.content && typeof raw.content === "object" && !Array.isArray(raw.content)
       ? { ...(raw.content as Record<string, unknown>) }
@@ -1787,10 +1853,19 @@ export default function ConversationPage() {
     const attribution = agentAttribution(raw);
     const content = { ...attribution, ...c };
     const message = makeMessage(convId, "agent", msgType, content);
-    // Working hides on first progressive thinking/text (tool_output also clears).
+    // Working: hide when final reply **text** starts; keep through thinking/tools.
     // Spec #308: Worker process is dialog-only — do not drive Main chrome.
     if (!workerScoped) {
-      setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
+      setPendingChrome((cur) =>
+        reducePendingChrome(cur, {
+          type: "stream_started",
+          channel: msgType === "text" ? "text" : "thinking",
+        }),
+      );
+      // Mid-run steer: drop queue hint once Agent emits real content (not empty T1).
+      if (convId && body.trim()) {
+        setConversationMessageData(convId, (data) => clearQueuedSteerDeliveryPages(data));
+      }
     }
     setLiveStreams((prev) =>
       upsertLiveByStreamId(prev, {
@@ -2308,10 +2383,13 @@ export default function ConversationPage() {
         convId = data.id;
         // Pin as already-open so route effect does not re-load and wipe optimistic rows.
         caseRouteLoadedRef.current = convId;
+        // Always clear panel SoT when minting a Case (blank → first send, restart,
+        // or after delete). Do not require startFresh: blank home has activeId=null so
+        // startFresh is false, and polluted plan_tree from WS-while-blank would stick.
+        resetConversationState();
         setActiveId(convId);
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
-        if (startFresh) resetConversationState();
         if (location.pathname !== casePath(convId)) {
           navigate(casePath(convId), { replace: true });
         }
@@ -2404,7 +2482,12 @@ export default function ConversationPage() {
       shouldContinueExisting && activeConversation?.status === "running",
     );
     // Optimistic user row only — do not write agent_pending into RQ (Spec #276).
-    // Working is list-tail chrome until first agent output (or terminal); not a Message.
+    // Working list-tail stays for the whole work-burst (not first text); attribution from send.
+    // Mid-run steer: mark delivery=queued so the bubble is honest that Node injects
+    // after the current tool batch (pi Agent.steer) — not "already ignored".
+    if (willSteerDirectly) {
+      userContent.delivery = STEER_DELIVERY_QUEUED;
+    }
     setConversationMessageData(convId, (data) => {
       const withoutPending = removeMessageRecords(
         data,
@@ -3020,18 +3103,23 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 );
               })}
-              {/* Spec #276: pending is chrome only — not a Message / live-slot row.
-                  Spec #305: same speaker row rules as MessageRenderer (first / expert switch only). */}
-              {showPendingChrome && pendingChrome && (() => {
-                const pendingContent = pendingChromeSpeakerContent(pendingChrome);
+              {/* Spec #276: list-tail Working is chrome only — not a Message.
+                  Visibility = work-burst / Case working (same lifecycle as composer-work-timer).
+                  Spec #305: speaker row when send_success left attribution for this Case. */}
+              {showListTailWorking && (() => {
+                const pendingContent = pendingChrome && pendingChrome.conversationId === activeId
+                  ? pendingChromeSpeakerContent(pendingChrome)
+                  : { text: listTailWorkingLabel };
                 const lastAgent = [...displayMessages].reverse().find((m) => m.role === "agent");
-                const showSpeaker = shouldShowAgentSpeakerLabel(
-                  pendingContent,
-                  lastAgent?.content,
-                  agentNameById,
-                  fallbackPentestNodeId,
-                  platformAgentNodeId,
-                );
+                const showSpeaker = pendingChrome && pendingChrome.conversationId === activeId
+                  ? shouldShowAgentSpeakerLabel(
+                    pendingContent,
+                    lastAgent?.content,
+                    agentNameById,
+                    fallbackPentestNodeId,
+                    platformAgentNodeId,
+                  )
+                  : false;
                 const speakerLabel = agentDisplayName(
                   pendingContent,
                   agentNameById,
@@ -3048,7 +3136,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         <span className="font-medium text-ink-secondary">{speakerLabel}</span>
                       </div>
                     )}
-                    <AgentPendingCard content={{ text: pendingChrome.label }} />
+                    <AgentPendingCard content={{ text: listTailWorkingLabel }} />
                   </div>
                 );
               })()}
@@ -3579,247 +3667,6 @@ function removeMessageRecords(data: MessagesInfiniteData, predicate: (record: Me
   return { ...data, pages: data.pages.map(page => page.filter(record => !predicate(record))) };
 }
 
-function shouldUpdateMessageRecord(existing: MessageRecord, incoming: MessageRecord): boolean {
-  const existingId = recordMessageId(existing);
-  const incomingId = recordMessageId(incoming);
-  if (existingId && incomingId && existingId === incomingId) return true;
-  // Progressive assistant text/thinking: same stream_id updates one bubble.
-  const existingType = recordMessageType(existing);
-  const incomingType = recordMessageType(incoming);
-  if (
-    (existingType === "text" || existingType === "thinking")
-    && existingType === incomingType
-  ) {
-    const existingStream = recordStreamId(existing);
-    const incomingStream = recordStreamId(incoming);
-    if (existingStream && incomingStream && existingStream === incomingStream) return true;
-  }
-  return recordMessageType(existing) === "tool_call" && recordMessageType(incoming) === "tool_call" && Boolean(recordToolRunKey(existing)) && recordToolRunKey(existing) === recordToolRunKey(incoming);
-}
-
-function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): MessageRecord {
-  const existingType = recordMessageType(existing);
-  const incomingType = recordMessageType(incoming);
-  if (
-    (existingType === "text" || existingType === "thinking")
-    && existingType === incomingType
-  ) {
-    const existingContent = recordContent(existing);
-    const incomingContent = recordContent(incoming);
-    const prevText = readString(existingContent.text) || readString(existingContent.reasoning);
-    const nextText = readString(incomingContent.text) || readString(incomingContent.reasoning);
-    // Stream frames carry cumulative full text. Prefer monotonic growth / prefix
-    // relationship — never concatenate (that caused "好的好的" style doubles).
-    let text = nextText;
-    if (!nextText) text = prevText;
-    else if (!prevText) text = nextText;
-    else if (nextText.startsWith(prevText) || prevText.startsWith(nextText)) {
-      text = nextText.length >= prevText.length ? nextText : prevText;
-    } else if (nextText.length >= prevText.length) {
-      text = nextText;
-    } else {
-      text = prevText;
-    }
-    const mergedStatus =
-      existingType === "thinking"
-        ? mergeThinkingStatus(existingContent.status, incomingContent.status)
-        : incomingContent.status ?? existingContent.status;
-    return {
-      ...existing,
-      ...incoming,
-      id: recordMessageId(existing) || recordMessageId(incoming),
-      content: {
-        ...existingContent,
-        ...incomingContent,
-        text,
-        ...(existingType === "thinking" ? { reasoning: text } : {}),
-        ...(mergedStatus !== undefined ? { status: mergedStatus } : {}),
-        stream_id: incomingContent.stream_id || existingContent.stream_id,
-        message_id: existingContent.message_id || incomingContent.message_id,
-      },
-      created_at: existing.created_at || incoming.created_at,
-    };
-  }
-  if (existingType !== "tool_call" || incomingType !== "tool_call") return incoming;
-  const existingContent = recordContent(existing);
-  const incomingContent = recordContent(incoming);
-  const mergedStatus = mergeToolLifecycleStatus(existingContent.status, incomingContent.status);
-  return {
-    ...existing,
-    ...incoming,
-    content: {
-      ...existingContent,
-      ...incomingContent,
-      command: incomingContent.command || existingContent.command || "",
-      stdout: appendStdout(readString(existingContent.stdout), readString(incomingContent.stdout)),
-      // Prefer done over running; keep empty when both missing (result-hint path).
-      ...(mergedStatus ? { status: mergedStatus } : { status: "" }),
-    },
-    created_at: incoming.created_at || existing.created_at,
-  };
-}
-
-function messageRecordFromMessage(message: Message): MessageRecord {
-  const content = { ...message.content };
-  if (!content.message_id) content.message_id = message.id;
-  return {
-    id: message.id,
-    conversation_id: message.conversation_id,
-    role: message.role,
-    msg_type: message.msg_type,
-    content,
-    created_at: message.created_at,
-  };
-}
-
-function recordContent(record: MessageRecord): Record<string, unknown> {
-  return ((record.content || {}) as Record<string, unknown>);
-}
-
-function recordMessageType(record: MessageRecord): string {
-  return String(record.msg_type || "text");
-}
-
-function recordMessageId(record: MessageRecord): string {
-  return readString(record.id) || readString(recordContent(record).message_id);
-}
-
-function recordToolRunKey(record: MessageRecord): string {
-  return readString(recordContent(record).tool_run_id);
-}
-
-function recordStreamId(record: MessageRecord): string {
-  return readString(recordContent(record).stream_id);
-}
-
-function appendStdout(current: string, incoming: string): string {
-  if (!incoming) return current;
-  if (!current) return incoming;
-  if (current.endsWith(incoming)) return current;
-  return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
-}
-
-function isRenderableMessage(message: Message): boolean {
-  // Spec #312: only structured confirm_options decisions are visible bubbles.
-  if (message.role === "user" && message.msg_type === "decision") {
-    return readString(message.content.decision) === "confirm_options";
-  }
-  if (message.msg_type === "tool_call") return true;
-  // Spec #326 L9: drop infra status (tooling_health-class) from the stream list entirely.
-  if (
-    message.role === "system" ||
-    message.msg_type === "status" ||
-    message.msg_type === "engagement_closeout"
-  ) {
-    return shouldRenderStatusNotice(message);
-  }
-  if (["text", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
-  return false;
-}
-function groupConsecutiveToolMessages(messages: Message[]): Message[] {
-  const grouped: Message[] = [];
-  for (const message of messages) {
-    const previous = last(grouped);
-    if (!previous || !canGroupToolMessages(previous, message)) {
-      grouped.push(message);
-      continue;
-    }
-    grouped[grouped.length - 1] = mergeConsecutiveToolMessage(previous, message);
-  }
-  return grouped;
-}
-
-function canGroupToolMessages(previous: Message, incoming: Message): boolean {
-  if (previous.role !== "agent" || incoming.role !== "agent") return false;
-  if (previous.msg_type !== "tool_call" || incoming.msg_type !== "tool_call") return false;
-  const previousTool = readString(previous.content.latest_tool_name) || readString(previous.content.tool_name);
-  const incomingTool = readString(incoming.content.tool_name);
-  if (!previousTool || previousTool !== incomingTool) return false;
-  return readString(previous.content.agent_source) === readString(incoming.content.agent_source)
-    && readString(previous.content.agent_node_id) === readString(incoming.content.agent_node_id);
-}
-
-function mergeConsecutiveToolMessage(previous: Message, incoming: Message): Message {
-  const previousRunIds = toolRunIds(previous);
-  const incomingRunId = readString(incoming.content.tool_run_id) || incoming.id;
-  const tool_run_ids = previousRunIds.includes(incomingRunId) ? previousRunIds : [...previousRunIds, incomingRunId];
-  const tool_names = uniqueMessageStrings([...toolNames(previous), readString(incoming.content.tool_name)]);
-  const tool_items = [...toolItems(previous), toolItemForMessage(incoming)];
-  return {
-    ...previous,
-    content: {
-      ...previous.content,
-      ...incoming.content,
-      tool_name: tool_names[0] || previous.content.tool_name || incoming.content.tool_name,
-      latest_tool_name: incoming.content.tool_name || previous.content.latest_tool_name || previous.content.tool_name,
-      tool_names,
-      tool_items,
-      tool_run_id: previous.content.tool_run_id || incoming.content.tool_run_id,
-      tool_run_ids,
-      run_count: tool_run_ids.length,
-      command: mergeGroupedCommands(readString(previous.content.command), readString(incoming.content.command)),
-      stdout: appendGroupedStdout(readString(previous.content.stdout), readString(incoming.content.stdout)),
-      status: mergeGroupedToolStatus(readString(previous.content.status), readString(incoming.content.status)),
-    },
-    created_at: incoming.created_at || previous.created_at,
-  };
-}
-
-function toolItems(message: Message): Array<Record<string, unknown>> {
-  const existing = message.content.tool_items;
-  if (Array.isArray(existing)) return existing.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
-  return [toolItemForMessage(message)];
-}
-
-function toolItemForMessage(message: Message): Record<string, unknown> {
-  return {
-    tool_name: message.content.tool_name,
-    tool_run_id: message.content.tool_run_id,
-    status: message.content.status,
-    stdout: message.content.stdout,
-    command: message.content.command,
-    evidence_id: message.content.evidence_id,
-    summary: message.content.summary,
-    display_title: message.content.display_title,
-    category: message.content.category,
-    target: message.content.target,
-    args: message.content.args,
-    result: message.content.result,
-    result_text: message.content.result_text,
-  };
-}
-function toolNames(message: Message): string[] {
-  const existing = message.content.tool_names;
-  if (Array.isArray(existing)) return existing.map(item => String(item)).filter(Boolean);
-  return [readString(message.content.tool_name)].filter(Boolean);
-}
-
-function uniqueMessageStrings(values: string[]): string[] {
-  return Array.from(new Set(values.map(value => String(value || "").trim()).filter(Boolean)));
-}
-function toolRunIds(message: Message): string[] {
-  const existing = message.content.tool_run_ids;
-  if (Array.isArray(existing)) return existing.map(item => String(item)).filter(Boolean);
-  return [readString(message.content.tool_run_id) || message.id].filter(Boolean);
-}
-
-function mergeGroupedCommands(previous: string, incoming: string): string {
-  if (!incoming || previous === incoming) return previous;
-  if (!previous) return incoming;
-  return `${previous}\n${incoming}`;
-}
-
-function appendGroupedStdout(current: string, incoming: string): string {
-  if (!incoming) return current;
-  if (!current) return incoming;
-  if (current.includes(incoming)) return current;
-  return `${current}${current.endsWith("\n") ? "\n" : "\n\n"}${incoming}`;
-}
-
-function mergeGroupedToolStatus(previous: string, incoming: string): string {
-  // Spec #305 R2: prefer fail/done over running; do not invent done/running from empty.
-  return mergeToolLifecycleStatus(previous, incoming);
-}
 function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
   const normalizedStatus = String(status || "created") as Conversation["status"];
   const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
@@ -3988,10 +3835,6 @@ function progressForPhase(phase: string | undefined, status: Conversation["statu
   return { current, total, percent: total ? Math.round((current / total) * 100) : 0 };
 }
 
-function isActiveMessage(msg: Record<string, unknown>, activeId: string | null): boolean {
-  const convId = msg.conversation_id;
-  return !activeId || !convId || String(convId) === activeId;
-}
 
 function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIdentity = "pentest"): Record<string, unknown> {
   const content = msg.content && typeof msg.content === "object" && !Array.isArray(msg.content) ? msg.content as Record<string, unknown> : {};

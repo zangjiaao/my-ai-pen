@@ -3,7 +3,10 @@ export type UiExecutionStatus = "running" | "done" | "fail";
 export function normalizeExecutionStatus(value: unknown): UiExecutionStatus {
   const status = String(value || "").trim().toLowerCase();
   if (["done", "ok", "success", "completed", "complete", "saved", "loaded"].includes(status)) return "done";
-  if (["fail", "failed", "error", "blocked", "canceled", "cancelled"].includes(status)) return "fail";
+  // interrupted: user abort / delivery interrupt — not a live running pulse.
+  if (["fail", "failed", "error", "blocked", "canceled", "cancelled", "interrupted"].includes(status)) {
+    return "fail";
+  }
   return "running";
 }
 
@@ -17,9 +20,24 @@ export function resolveThinkingUiStatus(value: unknown): UiExecutionStatus {
   return normalizeExecutionStatus(value);
 }
 
-/** Title copy B: lifecycle string only — 思考中… / 思考完成. */
-export function thinkingLifecycleTitle(value: unknown): string {
-  return resolveThinkingUiStatus(value) === "running" ? "思考中…" : "思考完成";
+/**
+ * Title copy for Thinking group header.
+ * Running → 思考中…; done with duration → 思考 N 秒; else 思考完成.
+ */
+export function thinkingLifecycleTitle(
+  value: unknown,
+  options?: { sessionActive?: boolean; durationSeconds?: number | null },
+): string {
+  const ui =
+    options?.sessionActive === false
+      ? resolveThinkingUiStatusForSession(value, options)
+      : resolveThinkingUiStatus(value);
+  if (ui === "running") return "思考中…";
+  const n = options?.durationSeconds;
+  if (n != null && Number.isFinite(n) && n >= 0) {
+    return `思考 ${Math.max(0, Math.floor(n))} 秒`;
+  }
+  return "思考完成";
 }
 
 /**
@@ -39,7 +57,12 @@ export function resolveThinkingUiStatusForSession(
 /**
  * Tool main-row leading: running → status light; done/fail → category icon.
  * Empty status while session active treats as running (in-flight progressive);
- * idle session never keeps a running light (orphan → done → show icon).
+ * idle session never keeps a running light.
+ *
+ * Orphan explicit `running` after interrupt/settle → **fail** (not done): mid-tool
+ * abort did not complete successfully, so summary shows 失败 rather than
+ * success-family 「已执行N条」. Empty/missing status still demotes to done so
+ * legacy rows without lifecycle stay non-pulsing without inventing failure.
  */
 export function resolveToolChromeStatusForSession(
   value: unknown,
@@ -50,14 +73,41 @@ export function resolveToolChromeStatusForSession(
     return options?.sessionActive === false ? "done" : "running";
   }
   const base = normalizeExecutionStatus(raw);
-  if (options?.sessionActive === false && base === "running") return "done";
+  if (options?.sessionActive === false && base === "running") return "fail";
   return base;
+}
+
+/**
+ * Project raw tool item/card lifecycle for rows + activity summary.
+ * When the Case is idle, explicit `running` becomes `canceled` so cards do not
+ * stay on 「执行中」/「shell running」 after interrupt (Spec #350 residual).
+ * Empty stays empty (result-hint path).
+ */
+export function projectToolLifecycleStatus(
+  value: unknown,
+  options?: { sessionActive?: boolean },
+): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (options?.sessionActive === false && normalizeExecutionStatus(raw) === "running") {
+    return "canceled";
+  }
+  return raw;
+}
+
+/** Progressive name-known summaries look like `shell running` / `todo running`. */
+export function isProgressiveRunningSummary(summary: unknown): boolean {
+  return /\s+running$/i.test(String(summary ?? "").trim());
 }
 
 /**
  * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
  * defaultExpanded is always true; empty body yields no fake placeholder.
  * @param options.sessionActive when false, orphan running thinking → 思考完成
+ *
+ * Empty shells: only **live** empty running (T1, session active) is visible.
+ * Empty done / orphan empty-after-idle hide entirely — avoids Case spam of
+ * 「思考完成」 with no body after multi-tool T1 shells settle.
  */
 export function thinkingCardProjection(
   content: Record<string, unknown>,
@@ -67,14 +117,32 @@ export function thinkingCardProjection(
   body: string;
   defaultExpanded: true;
   showBodyWhenExpanded: boolean;
+  /** False → MessageRenderer returns null (empty done / orphan empty). */
+  visible: boolean;
 } {
   const body = String(content.reasoning || content.text || content.summary || "").trim();
   const ui = resolveThinkingUiStatusForSession(content.status, options);
+  // T1 empty running while session works; never show empty 思考完成.
+  const visible = Boolean(body) || ui === "running";
+  // Duration for header when stamped on content (live clock handled in ThinkingCard).
+  let durationSeconds: number | null = null;
+  for (const key of ["thinking_seconds", "duration_seconds", "duration_s"]) {
+    const n = Number(content[key]);
+    if (Number.isFinite(n) && n >= 0) {
+      durationSeconds = Math.floor(n);
+      break;
+    }
+  }
+  if (durationSeconds == null) {
+    const ms = Number(content.duration_ms ?? content.thinking_ms);
+    if (Number.isFinite(ms) && ms >= 0) durationSeconds = Math.floor(ms / 1000);
+  }
   return {
-    title: ui === "running" ? "思考中…" : "思考完成",
+    title: thinkingLifecycleTitle(content.status, { ...options, durationSeconds }),
     body,
     defaultExpanded: true,
     showBodyWhenExpanded: Boolean(body),
+    visible,
   };
 }
 

@@ -1,27 +1,17 @@
-import { useState, type ReactNode } from "react";
-import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { isTruthyNewFlag } from "../lib/findingNew";
-import {
-  normalizeExecutionStatus,
-  resolveToolChromeStatusForSession,
-  resolveToolItemStatus,
-  toolActivitySummaryLabel,
-} from "../lib/status";
-import { friendlyToolLabel } from "../lib/toolLabels";
-import {
-  PROCESS_LEADING_ICON_SIZE,
-  PROCESS_LEADING_ICON_STROKE,
-  PROCESS_LEADING_SLOT_CLASS,
-} from "../lib/processChromeIcon";
+import { PROCESS_LEADING_SLOT_CLASS } from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
-import { ProcessStatusLight } from "./ProcessStatusLight";
+import { ToolCallCard } from "./cards/ToolCallCard";
+import { LoadingPixelMark } from "./LoadingState";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
 import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
+import { isSteerDeliveryQueued, STEER_QUEUED_HINT } from "../lib/steerDelivery";
 
 interface Props {
   message: Message;
@@ -100,455 +90,6 @@ export function shouldShowAgentSpeakerLabel(
     platformAgentNodeId,
   );
   return previousLabel !== label;
-}
-function ToolCallCard({
-  content,
-  onOpenEvidence,
-  sessionActive,
-}: {
-  content: Record<string, unknown>;
-  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
-  sessionActive?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const toolNames = toolNamesFromContent(content);
-  const primaryTool = toolNames[0] || "tool";
-  const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
-  const chromeStatus = resolveToolChromeStatusForSession(content.status, { sessionActive });
-  const stdout = content.stdout as string || "";
-  const items = toolItemsFromContent(content);
-  const category = toolPrimaryCategory(toolNames, items.map(item => item.category || ""));
-  const fallbackSummary = summarizeToolOutput(stdout, latestTool);
-  const resultSummary = summarizeToolActivity(items, latestTool, chromeStatus);
-  // Running → pulse light; done/fail → category icon (same as thinking: light while in flight).
-  const leading =
-    chromeStatus === "running" ? (
-      <ProcessStatusLight status="running" pulse testId="tool-status-light" />
-    ) : (
-      <ToolCategoryIcon category={category} />
-    );
-  return (
-    <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
-      <button
-        data-testid="tool-card-toggle"
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded(value => !value)}
-        className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
-      >
-        <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
-        <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
-        <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
-        <span className="min-w-6 flex-1" aria-hidden="true" />
-      </button>
-      {expanded && (
-        <div className="space-y-0.5 pb-1 pl-2">
-          {items.length ? items.map((item, index) => (
-            <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
-          )) : (
-            <div className="py-1 text-xs text-ink-secondary">{fallbackSummary}</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-type ToolItem = {
-  toolName: string;
-  status: string;
-  summary: string;
-  category?: string;
-  target?: string;
-  evidenceId?: string;
-  runId?: string;
-  command?: string;
-  result?: Record<string, unknown>;
-};
-
-function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
-  const status = normalizeExecutionStatus(item.status);
-  const statusColor = status === "running" ? "bg-status-running" : status === "done" ? "bg-status-success" : "bg-status-error";
-  const showCommand = isCommandToolName(item.toolName) && Boolean(item.command);
-  const primaryText = showCommand ? item.command || item.summary : item.summary;
-  const secondaryText = showCommand && item.summary && item.summary !== item.command ? item.summary : "";
-  const evidenceButton = item.evidenceId ? (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpenEvidence?.({ evidence_id: item.evidenceId, id: item.evidenceId, source_tool: item.toolName, tool_run_id: item.runId, summary: item.summary, type: "tool_output" });
-      }}
-      className="ml-2 shrink-0 whitespace-nowrap text-xs text-ink-muted underline underline-offset-2 hover:text-ink"
-    >
-      Evidence
-    </button>
-  ) : null;
-  return (
-    <div className="flex min-w-0 items-start gap-2 py-1 text-xs">
-      <span className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusColor}`} />
-      <div className="min-w-0 flex-1 overflow-hidden">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className={`block min-w-0 max-w-full truncate ${showCommand ? "font-mono text-[11px] text-ink-secondary" : "text-ink-muted"}`}>{primaryText}</span>
-          {item.target && <span className="hidden shrink truncate font-mono text-[11px] text-ink-muted md:block">{item.target}</span>}
-        </div>
-        {secondaryText && <div className="mt-0.5 truncate text-[11px] text-ink-muted">{secondaryText}</div>}
-      </div>
-      {evidenceButton}
-    </div>
-  );
-}
-type ToolCategory = { key: string; label: string; Icon: LucideIcon };
-
-function ToolCategoryIcon({ category }: { category: ToolCategory }) {
-  const Icon = category.Icon;
-  return (
-    <span title={category.label} className={PROCESS_LEADING_SLOT_CLASS}>
-      <Icon size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
-    </span>
-  );
-}
-
-function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregateStatus: string): string {
-  const candidates: ToolItem[] = items.length
-    ? items
-    : [{ toolName: fallbackTool, status: aggregateStatus, summary: "" }];
-  // Spec #305 S+ / Issue 3+5: pure surface shares label language with tests.
-  return toolActivitySummaryLabel(
-    candidates.map((item) => ({
-      status: item.status,
-      toolName: item.toolName,
-      result: item.result || null,
-    })),
-    fallbackTool,
-  );
-}
-
-function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Record<string, unknown>): ToolItem {
-  const rawToolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
-  const toolName = displayToolName(rawToolName, readContentString(item.display_title) || readContentString(content.display_title));
-  const stdout = readContentString(item.stdout);
-  const output = parseToolOutput(stdout);
-  const explicitResult = item.result && typeof item.result === "object" && !Array.isArray(item.result) ? item.result as Record<string, unknown> : null;
-  const parsed = explicitResult || output.result;
-  // Issue 3: keep raw lifecycle empty when missing so result hints can mark success;
-  // do not invent "done" or force "running" over status_code success.
-  const explicitLifecycle = readContentString(item.status) || readContentString(content.status);
-  const resultHints = {
-    status: parsed?.status,
-    status_code: parsed?.status_code,
-  };
-  const status = resolveToolItemStatus(explicitLifecycle, resultHints);
-  const command = readContentString(item.command) || readContentString(parsed?.command);
-  const evidenceId = readContentString(item.evidence_id) || output.evidenceId || readContentString(parsed?.evidence_id) || readContentString(content.evidence_id);
-  const summary = readContentString(item.summary) || readContentString(content.summary);
-  return {
-    toolName,
-    status,
-    summary: summary || summarizeToolItem(toolName, status, parsed, stdout, command),
-    category: readContentString(item.category) || readContentString(content.category),
-    target: readContentString(item.target) || readContentString(parsed?.target) || readContentString(parsed?.url) || readContentString(parsed?.title),
-    evidenceId,
-    runId: readContentString(item.tool_run_id) || readContentString(content.tool_run_id),
-    command,
-    result: parsed || undefined,
-  };
-}
-
-function mergeToolItems(items: ToolItem[]): ToolItem[] {
-  const merged: ToolItem[] = [];
-  const byRunId = new Map<string, number>();
-  for (const item of items) {
-    const key = item.runId || "";
-    if (!key || !byRunId.has(key)) {
-      if (key) byRunId.set(key, merged.length);
-      merged.push(item);
-      continue;
-    }
-    const index = byRunId.get(key)!;
-    const previous = merged[index];
-    merged[index] = {
-      ...previous,
-      ...item,
-      evidenceId: item.evidenceId || previous.evidenceId,
-      command: item.command || previous.command,
-      result: item.result || previous.result,
-      summary: item.summary || previous.summary,
-      status: item.status || previous.status,
-    };
-  }
-  return merged;
-}
-
-function parseToolOutput(stdout: string): { result: Record<string, unknown> | null; evidenceId: string } {
-  const evidenceId = stdout.match(/(?:^|\n)\s*EVIDENCE_ID:\s*([^\s]+)/i)?.[1] || "";
-  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (/^EVIDENCE_ID:/i.test(line) || line.endsWith("...")) continue;
-    const parsed = parseLooseObject(line);
-    if (parsed) return { result: parsed, evidenceId };
-  }
-  return { result: parseLooseObject(stdout), evidenceId };
-}
-function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
-  const structured = Array.isArray(content.tool_items)
-    ? content.tool_items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
-    : [];
-  if (structured.length) {
-    return mergeToolItems(structured.map(item => toolItemFromStructuredRecord(item, content)));
-  }
-
-  if (readContentString(content.tool_run_id) || readContentString(content.tool_name)) {
-    return [toolItemFromStructuredRecord(content, content)];
-  }
-
-  const stdout = String(content.stdout || "");
-  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const toolNames = toolNamesFromContent(content);
-  const runIds = Array.isArray(content.tool_run_ids) ? content.tool_run_ids.map(item => String(item || "")) : [String(content.tool_run_id || "")];
-  const commands = readContentString(content.command).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const fallbackTool = String(content.latest_tool_name || content.tool_name || toolNames[0] || "tool");
-  // Issue 3: missing content.status stays empty (not invented done/running).
-  const fallbackStatus = resolveToolItemStatus(content.status);
-  const items = lines
-    .filter(line => !line.endsWith("..."))
-    .map((line, index) => toolItemFromLine(line, {
-      fallbackTool: toolNames[index] || fallbackTool,
-      fallbackStatus,
-      fallbackCommand: commands[index] || commands[commands.length - 1] || "",
-      runId: runIds[index] || runIds[runIds.length - 1] || "",
-    }))
-    .filter((item): item is ToolItem => Boolean(item));
-  if (items.length) return items;
-  return [{ toolName: displayToolName(fallbackTool), status: fallbackStatus, summary: summarizeToolItem(fallbackTool, fallbackStatus, null, stdout, commands[0] || ""), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id), command: commands[0] || "" }];
-}
-
-function summarizeToolLine(line: string, latestTool: string): string {
-  if (!line) return "Started tool call";
-  const parsed = parseLooseObject(line);
-  if (parsed) return summarizeToolItem(latestTool, readContentString(parsed.status) || readContentString(parsed.status_code), parsed, line, readContentString(parsed.command));
-  return stripJsonNoise(line);
-}
-function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallbackStatus: string; fallbackCommand: string; runId: string }): ToolItem | null {
-  const parsed = parseLooseObject(line);
-  if (parsed) {
-    const toolName = displayToolName(readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool);
-    // Lifecycle from explicit status only; HTTP codes stay on result for hints (Issue 3).
-    const lifecycle = readContentString(parsed.status);
-    const status = resolveToolItemStatus(
-      lifecycle && !/^\d{3}$/.test(lifecycle) ? lifecycle : fallback.fallbackStatus,
-      { status: parsed.status, status_code: parsed.status_code },
-    );
-    const command = readContentString(parsed.command) || fallback.fallbackCommand;
-    return {
-      toolName,
-      status,
-      summary: summarizeToolItem(toolName, status, parsed, line, command),
-      evidenceId: readContentString(parsed.evidence_id) || readContentString(parsed.EVIDENCE_ID),
-      runId: readContentString(parsed.tool_run_id) || fallback.runId,
-      command,
-      result: parsed,
-      target: readContentString(parsed.target) || readContentString(parsed.url) || readContentString(parsed.title),
-    };
-  }
-  return {
-    toolName: displayToolName(fallback.fallbackTool),
-    status: fallback.fallbackStatus,
-    summary: fallback.fallbackCommand || stripJsonNoise(line),
-    command: fallback.fallbackCommand,
-    runId: fallback.runId,
-  };
-}
-
-function summarizeToolItem(toolName: string, status: string, result: Record<string, unknown> | null, rawText: string, command = ""): string {
-  const lower = toolName.toLowerCase();
-  const value = result || {};
-  const displayStatus = compactStatus(status || readContentString(value.status) || readContentString(value.status_code) || readContentString(value.statusCode));
-  const inferred = inferToolText(rawText);
-  // Prefer structured result; Node2 often puts human summary in content.summary already.
-  const method = readContentString(value.method).toUpperCase() || inferred.method;
-  const url =
-    readContentString(value.url) ||
-    readContentString(value.requested_url) ||
-    readContentString(value.target) ||
-    readContentString(value.location) ||
-    inferred.url;
-  const commandText = command || readContentString(value.command) || inferred.command;
-
-  // If upstream already sent a clean non-JSON summary line, keep it.
-  const cleanRaw = String(rawText || "").trim();
-  if (cleanRaw && !cleanRaw.startsWith("{") && !cleanRaw.startsWith("[") && cleanRaw.length < 280 && !/^EVIDENCE_ID:/i.test(cleanRaw)) {
-    // Prefer structured HTTP/browser formatting when fields exist.
-    if (!((/http|request/.test(lower) || /browser/.test(lower)) && (method || url))) {
-      return stripJsonNoise(cleanRaw);
-    }
-  }
-
-  if (/browser|explore|crawl/.test(lower)) {
-    if (url) return joinSummaryParts([method || "GET", url, displayStatus || "done"]);
-    return joinSummaryParts([readContentString(value.action) || toolName, displayStatus]);
-  }
-  if (/http|request|replay|fetch|curl/.test(lower)) {
-    return joinSummaryParts([method || "HTTP", url, compactStatus(value.status_code || value.status || status)]);
-  }
-  if (/execute|command|shell|docker|process|scan/.test(lower)) {
-    return joinSummaryParts([commandText || stripJsonNoise(rawText), displayStatus]);
-  }
-  if (/verifier/.test(lower)) {
-    const klass = readContentString(value.vuln_class) || toolName;
-    const outcome = value.confirmed === true ? "confirmed" : value.confirmed === false ? "not confirmed" : displayStatus;
-    return joinSummaryParts([klass, url, outcome]);
-  }
-  if (/actor/.test(lower)) {
-    return joinSummaryParts([readContentString(value.action) || "actor", readContentString(value.id) || readContentString(value.active), displayStatus]);
-  }
-
-  const title = readContentString(value.title) || readContentString(value.summary) || readContentString(value.message) || readContentString(value.error) || readContentString(value.reason);
-  const evidence = readContentString(value.evidence_id) || readContentString(value.EVIDENCE_ID);
-  return joinSummaryParts([title || readContentString(value.action) || toolName, url || evidence, displayStatus]);
-}
-
-function inferToolText(text: string): { method: string; url: string; command: string } {
-  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(line => line && !/^EVIDENCE_ID:/i.test(line) && !line.startsWith("{")) || "";
-  const request = firstLine.match(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(https?:\/\/[^\s'"\])}]+)/i);
-  const browser = firstLine.match(/\bbrowser\s+\w+\s+(https?:\/\/[^\s'"\])}]+)/i);
-  return {
-    method: request?.[1]?.toUpperCase() || "",
-    url: (request?.[2] || browser?.[1] || "").replace(/\.\.\.$/, ""),
-    command: firstLine,
-  };
-}
-function compactStatus(value: unknown): string {
-  const status = String(value || "").trim();
-  if (!status) return "";
-  if (/^status\s+/i.test(status)) return status.replace(/^status\s+/i, "");
-  return status;
-}
-
-function joinSummaryParts(parts: Array<string | undefined>): string {
-  return parts.map(part => String(part || "").trim()).filter(Boolean).slice(0, 3).join(" - ");
-}
-function readContentString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-function toolNamesFromContent(content: Record<string, unknown>): string[] {
-  const names = Array.isArray(content.tool_names) ? content.tool_names : [content.display_title || content.tool_name];
-  return names.map(item => displayToolName(String(item || "").trim())).filter(Boolean);
-}
-
-function displayToolName(toolName: string, explicitTitle = ""): string {
-  const title = explicitTitle.trim();
-  if (title) return title;
-  const normalized = toolName.trim();
-  if (!normalized) return "";
-  return friendlyToolLabel(normalized);
-}
-
-function isCommandToolName(toolName: string): boolean {
-  // Match raw ids and Chinese display labels after friendlyToolLabel.
-  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b|执行命令|命令输入/i.test(
-    toolName,
-  );
-}
-
-function toolTitle(toolNames: string[]): string {
-  const unique = uniqueStrings(toolNames);
-  if (!unique.length) return "工具活动";
-  if (unique.length === 1) return unique[0];
-  return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
-}
-
-function toolPrimaryCategory(toolNames: string[], explicitCategories: string[] = []): ToolCategory {
-  const explicit = uniqueStrings(explicitCategories.map(normalizeToolCategoryKey));
-  const inferred = toolNames.map(toolCategoryKey);
-  const key = explicit.find(category => category !== "tool") || explicit[0] || inferred.find(category => category !== "tool") || inferred[0] || "tool";
-  return categoryForKey(key);
-}
-
-function toolCategoryKey(toolName: string): string {
-  const name = toolName.toLowerCase();
-  if (/browser|explore|crawl|capture|traffic|discover|asset|surface/.test(name)) return "discovery";
-  if (/http|request|replay|mutate|fetch|curl/.test(name)) return "request";
-  if (/execute|command|shell|docker|process/.test(name)) return "command";
-  if (/finding|vuln|verify|evidence|confirm/.test(name)) return "finding";
-  if (/search|scan|dir|wordlist|enumerate/.test(name)) return "search";
-  if (/agent|message|graph/.test(name)) return "agent";
-  if (/todo|note|think|skill/.test(name)) return "planning";
-  return "tool";
-}
-
-function categoryForKey(key: string): ToolCategory {
-  const normalizedKey = normalizeToolCategoryKey(key);
-  const categories: Record<string, ToolCategory> = {
-    discovery: { key: "discovery", label: "发现", Icon: Compass },
-    request: { key: "request", label: "请求", Icon: Globe2 },
-    command: { key: "command", label: "命令执行", Icon: Terminal },
-    finding: { key: "finding", label: "发现验证", Icon: ShieldAlert },
-    search: { key: "search", label: "搜索枚举", Icon: Search },
-    agent: { key: "agent", label: "Agent", Icon: Users },
-    planning: { key: "planning", label: "规划", Icon: Brain },
-    tool: { key: "tool", label: "工具", Icon: Wrench },
-  };
-  return categories[normalizedKey] || categories.tool;
-}
-
-function normalizeToolCategoryKey(value: string): string {
-  const key = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (!key) return "";
-  if (["discovery", "discover", "asset", "assets", "recon"].includes(key)) return "discovery";
-  if (["request", "requests", "http", "http_request", "traffic", "sitemap", "scope"].includes(key)) return "request";
-  if (["command", "commands", "exec", "execution", "shell", "process"].includes(key)) return "command";
-  if (["finding", "findings", "vuln", "vulns", "vulnerability", "vulnerabilities", "evidence", "report"].includes(key)) return "finding";
-  if (["search", "scan", "scanner", "enumeration", "enumerate", "skill", "skills"].includes(key)) return "search";
-  if (["agent", "agents", "subagent", "sub_agent"].includes(key)) return "agent";
-  if (["planning", "plan", "todo", "todos", "note", "notes", "think", "thinking"].includes(key)) return "planning";
-  if (key === "tool" || key === "tools") return "tool";
-  return key;
-}
-
-function summarizeToolOutput(stdout: string, latestTool = "tool"): string {
-  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (!lines.length) return "Waiting for tool output";
-  const last = lines[lines.length - 1];
-  const parsed = parseLooseObject(last);
-  if (parsed) {
-    const action = summarizeToolObject(parsed, latestTool);
-    if (action) return action;
-  }
-  return stripJsonNoise(last);
-}
-
-function summarizeToolObject(value: Record<string, unknown>, latestTool: string): string {
-  return summarizeToolItem(latestTool, readContentString(value.status) || readContentString(value.status_code), value, "", readContentString(value.command));
-}
-
-function parseLooseObject(text: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-  } catch {
-    // Tool output may be Python dict-like; fall through to a conservative extractor.
-  }
-  const pairs = [...text.matchAll(/["']?([A-Za-z_][\w-]*)["']?\s*:\s*["']([^"']{1,240})["']/g)];
-  if (!pairs.length) return null;
-  const result: Record<string, unknown> = {};
-  for (const match of pairs) {
-    if (result[match[1]] === undefined) result[match[1]] = match[2];
-  }
-  return result;
-}
-
-function stripJsonNoise(text: string): string {
-  return text
-    .replace(/^[-`\s]+/, "")
-    .replace(/[{}[\]"]/g, "")
-    .replace(/\s+/g, " ")
-    .slice(0, 220);
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
 }
 
 /** Chat card category: reuse vuln card UI; badge shows Vuln / Flag / Key. */
@@ -722,13 +263,35 @@ function normalizeSeverity(value: unknown): string {
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 /**
- * List-tail Working chrome — not a Message.
- * Indicator light + label (default "Working ..."); coexists with thinking/tool cards.
- * Hide entirely via localStorage my-ai-pen.workingChrome=0 (see isWorkingChromeEnabled).
+ * Wall-clock tenths since mount (`0.0s` / `1m 5.3s`). Remeasures Date.now()
+ * each tick so Agent streaming re-renders cannot under-count.
+ */
+function useMountElapsedTenthsLabel(): string {
+  const [totalSec, setTotalSec] = useState(0);
+  useEffect(() => {
+    const startedAt = Date.now();
+    const tick = () => setTotalSec(Math.max(0, (Date.now() - startedAt) / 1000));
+    tick();
+    const id = window.setInterval(tick, 100);
+    return () => window.clearInterval(id);
+  }, []);
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s.toFixed(1)}s`;
+}
+
+/**
+ * List-tail Working chrome — process row aligned with Thinking / Tool:
+ *
+ *   【像素 Loading 格】工作中...  12.3s
+ *
+ * Leading is the original Drive pixel-grid (not a status light). Row metrics
+ * match Think/Tool (h-7, gap-1.5). Elapsed is mount wall-clock with tenths.
+ * Hide via localStorage my-ai-pen.workingChrome=0.
  */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   const raw = String(content.text || "工作中...").trim() || "工作中...";
-  // Legacy English / old pending copy → product Chinese Working chrome
   const title =
     raw === "思考" ||
     raw === "思考中…" ||
@@ -738,19 +301,36 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     /^working\b/i.test(raw)
       ? "工作中..."
       : raw;
+  const elapsed = useMountElapsedTenthsLabel();
+
   return (
-    <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
-      <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <ProcessStatusLight status="running" pulse testId="working-status-light" />
-        </div>
+    <div
+      data-testid="agent-pending-card"
+      className="my-1.5 w-full min-w-0 max-w-full"
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        data-testid="pending-chrome-row"
+        className="-mx-1 flex h-7 w-fit max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left"
+      >
+        {/* Same leading slot metrics as Brain / tool icons; mark is the pixel loader. */}
+        <span className={PROCESS_LEADING_SLOT_CLASS} title="Working">
+          <LoadingPixelMark variant="Drive" testId="pending-status-light" />
+        </span>
         <span
           data-testid="agent-pending-title"
-          className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"
+          className="shimmer-label shrink-0 font-sans text-[13px] font-medium"
         >
           {title}
         </span>
-        <span className="min-w-6 flex-1" aria-hidden="true" />
+        <span
+          data-testid="loading-state-elapsed"
+          className="shrink-0 font-mono text-[12px] tabular-nums text-ink-muted"
+          title="本段展示计时（挂载墙钟）"
+        >
+          {elapsed}
+        </span>
       </div>
     </div>
   );
@@ -800,9 +380,19 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   }
 
   if (role === "user") {
+    // Mid-run user_steer: FE marks delivery=queued until Agent processes after tools.
+    const deliveryQueued = isSteerDeliveryQueued(content);
     return (
-      <div className="my-2 flex min-w-0 justify-end">
+      <div className="my-2 flex min-w-0 flex-col items-end">
         <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
+        {deliveryQueued ? (
+          <div
+            className="mt-1 max-w-[70%] text-right text-xs text-ink-muted"
+            data-testid="user-message-queued-hint"
+          >
+            {STEER_QUEUED_HINT}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -811,6 +401,9 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   const previousAgentLabel = previousMessage?.role === "agent" ? agentDisplayName(previousMessage.content, agentNameById, fallbackPentestNodeId, platformAgentNodeId) : "";
   const showAgentLabel = previousAgentLabel !== agentLabel;
   // Spec #325 B1: one duration per work-burst on result anchor — never on tool/thinking.
+  // Withhold 耗时 while session is active unless the parent map already assigned
+  // finalized seconds (historical turns). Content-stamp fallback only when idle
+  // so mid-stream replies never flash 耗时 before output finishes.
   const isToolOrThinking =
     msg_type === "tool_call"
     || msg_type === "thinking"
@@ -820,7 +413,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     ? null
     : (resultAnchorSecondsProp != null
       ? resultAnchorSecondsProp
-      : resultAnchorWorkSeconds(content));
+      : (sessionActive ? null : resultAnchorWorkSeconds(content)));
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":

@@ -52,7 +52,8 @@ async function testNoT1OnBareMessageStart() {
 }
 
 async function testEmptyRunningOnThinkingChannelOpen() {
-  // Issue 10: T1 on first thinking_* channel open.
+  // Empty T1 shells retired: thinking_start with empty body must not invent a Message.
+  // Mid-turn wait is list-tail Working chrome on the frontend.
   const platform = fakePlatform();
   const stream = new PlatformTextStream(platform, task());
   await stream.handle({
@@ -76,12 +77,8 @@ async function testEmptyRunningOnThinkingChannelOpen() {
   await drain(stream);
 
   const thinking = platform.messages.filter((m) => m.type === "thinking");
-  assert.ok(thinking.length >= 1, "T1 empty running on thinking_*");
-  const first = thinking[0]!;
-  const content = thinkingContent(first);
-  assert.equal(content.status, "running");
-  assert.ok(String(content.stream_id || first.stream_id || "").startsWith("n4-thinking-"));
-  console.log("ok: S1 empty running thinking on thinking_* open");
+  assert.equal(thinking.length, 0, "no empty T1 Message on empty thinking_start");
+  console.log("ok: no empty thinking shell on thinking_start without body");
 }
 
 async function testProgressiveRunningAndFinalDone() {
@@ -129,7 +126,8 @@ async function testProgressiveRunningAndFinalDone() {
 }
 
 async function testEmptyRunningThenEmptyDone() {
-  // Issue 1 protocol: empty T1 then final empty done.
+  // Empty thinking open + empty message_end must not invent thinking Messages
+  // (empty T1 shells retired; FE Working covers wait).
   const platform = fakePlatform();
   const stream = new PlatformTextStream(platform, task());
   await stream.handle({
@@ -148,10 +146,8 @@ async function testEmptyRunningThenEmptyDone() {
   await drain(stream);
 
   const thinking = platform.messages.filter((m) => m.type === "thinking");
-  assert.ok(thinking.some((m) => thinkingContent(m).status === "running"));
-  const last = thinking[thinking.length - 1]!;
-  assert.equal(thinkingContent(last).status, "done");
-  console.log("ok: Issue 1 empty running then empty done on wire");
+  assert.equal(thinking.length, 0, "empty thinking turn invents no thinking frames");
+  console.log("ok: empty thinking open/end invents no Message");
 }
 
 async function testNoDoneWhenThinkingNeverOpened() {
@@ -216,7 +212,7 @@ async function testToolEndOpensEmptyRunningBeforeThinkingTokens() {
     "text-only prior turn has no thinking",
   );
 
-  // tool_execution_end → T1 empty running (mid-task llm_waiting)
+  // tool_execution_end → no empty thinking shell (Working chrome covers llm_waiting)
   await stream.handle({
     type: "tool_execution_end",
     toolName: "shell",
@@ -225,14 +221,9 @@ async function testToolEndOpensEmptyRunningBeforeThinkingTokens() {
   await drain(stream);
 
   const afterTool = platform.messages.filter((m) => m.type === "thinking");
-  assert.ok(afterTool.length >= 1, "empty running thinking after tool end");
-  const t1 = afterTool[afterTool.length - 1]!;
-  const t1c = thinkingContent(t1);
-  assert.equal(t1c.status, "running");
-  assert.equal(String(t1c.text || t1c.reasoning || ""), "");
-  assert.ok(String(t1c.stream_id || t1.stream_id || "").startsWith("n4-thinking-"));
+  assert.equal(afterTool.length, 0, "no empty thinking after tool end");
 
-  // Later thinking tokens grow the same stream before final done
+  // Later thinking tokens open a real thinking stream with body
   await stream.handle({
     type: "message_update",
     message: {
@@ -262,7 +253,7 @@ async function testToolEndOpensEmptyRunningBeforeThinkingTokens() {
   const last = thinking[thinking.length - 1]!;
   assert.equal(thinkingContent(last).status, "done");
   assert.equal(String(thinkingContent(last).text || ""), "after tool analysis done");
-  console.log("ok: mid-task T1 after tool_execution_end before thinking tokens");
+  console.log("ok: no empty T1 after tool; real thinking when tokens arrive");
 }
 
 async function testTurnStartDoesNotOpenT1WithoutTools() {
@@ -352,6 +343,39 @@ async function testThinkingDoneBeforeTextStream() {
   console.log("ok: thinking done stamps on text_* before message_end");
 }
 
+async function testMultiToolBatchOpensSingleT1() {
+  // Empty T1 retired: multi-tool batch must never invent empty thinking shells.
+  const platform = fakePlatform();
+  const stream = new PlatformTextStream(platform, task());
+
+  await stream.handle({ type: "tool_execution_start", toolName: "browser", toolCallId: "t1" });
+  await stream.handle({ type: "tool_execution_start", toolName: "browser", toolCallId: "t2" });
+  await stream.handle({ type: "tool_execution_end", toolName: "browser", toolCallId: "t1" });
+  await drain(stream);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "thinking").length,
+    0,
+    "no thinking while tools still in-flight",
+  );
+
+  await stream.handle({ type: "tool_execution_end", toolName: "browser", toolCallId: "t2" });
+  await drain(stream);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "thinking").length,
+    0,
+    "no empty T1 after last tool ends",
+  );
+
+  await stream.handle({ type: "tool_execution_start", toolName: "browser", toolCallId: "t3" });
+  await drain(stream);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "thinking").length,
+    0,
+    "tool start invents no thinking when none was open",
+  );
+  console.log("ok: multi-tool batch invents no empty thinking shells");
+}
+
 async function main() {
   await testNoT1OnBareMessageStart();
   await testEmptyRunningOnThinkingChannelOpen();
@@ -361,6 +385,7 @@ async function main() {
   await testToolEndOpensEmptyRunningBeforeThinkingTokens();
   await testTurnStartDoesNotOpenT1WithoutTools();
   await testThinkingDoneBeforeTextStream();
+  await testMultiToolBatchOpensSingleT1();
   console.log("all platform-observability Spec #305 tests passed");
 }
 

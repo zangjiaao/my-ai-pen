@@ -26,10 +26,10 @@ Audit of real CTF runs showed hundreds of `curl -b/-c` shell turns. Use:
 
 ## Browser + captcha (assist, don’t restrict)
 
-- **browser (preferred path)**: Docker **pen-sandbox** (unified pentest image: `pen-sandbox:dev`) with in-container `agent-browser`; falls back to Strix if no first-party image. Same image runs **shell** scanners. See `docs/specs/pen-tools-sandbox.md`.
+- **browser (preferred path)**: Docker **pen-sandbox** with in-container `agent-browser`. Requires explicit image pin (`PEN_SANDBOX_IMAGE` or `NODE4_BROWSER_SANDBOX_IMAGE`); no third-party Strix default. Same image family runs **shell** scanners. See `docs/specs/pen-tools-sandbox.md`.
   - Env: `NODE4_BROWSER_SANDBOX=1` (default). Set `0` / `host` to force host CLI.
-  - Image override: `NODE4_BROWSER_SANDBOX_IMAGE`.
-- **browser (host fallback)**: `npm i -g agent-browser && agent-browser install` (+ `install --with-deps` if shared libs missing). Used only when sandbox cannot start.
+  - Image pin: `PEN_SANDBOX_IMAGE` and/or `NODE4_BROWSER_SANDBOX_IMAGE`.
+- **browser (host fallback)**: `npm i -g agent-browser && agent-browser install` (+ `install --with-deps` if shared libs missing). Used when sandbox is disabled or cannot start after image is pinned.
 - Actions: open/snapshot/click/fill/screenshot/export_cookies (cookies → session actor jars).
 - **captcha**: `fetch` image with actor cookies; `ocr` via host tesseract if present (best-effort).
 - If browser/OCR missing, tools return install guidance — agent may still use shell.
