@@ -99,7 +99,9 @@ for needle in \
   'beta-fe-env.sh' \
   'DEPLOY_SHA' \
   'profile beta' \
-  '/api/health'
+  '/api/health' \
+  'docker pull' \
+  'PEN_SANDBOX_IMAGE'
 do
   grep -qF -- "$needle" "$DEPLOY_SH" || fail "beta-deploy.sh missing: $needle"
 done

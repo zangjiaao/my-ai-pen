@@ -27,9 +27,9 @@ Automate **product-path** verification and **single-host internal beta** deploy 
 |-------|----------|
 | **product-smoke** | Seam-1 contract; FE unit + production build; **backend pytest**; Node4 **test:ci-pr** allowlist + smoke entrypoint |
 | Path filters | `platform/**`, `node4/**`, `experts/**`, `shared/**`, `deploy/**`, deploy scripts, `product-smoke.yml` / `beta-deploy.yml` / `product-deep.yml`, ci-cd doc |
-| **beta-deploy** | `workflow_run` after successful product-smoke on `main` **push** only → SSH → `scripts/beta-deploy.sh` (pin `DEPLOY_SHA`, `git reset --hard`) |
+| **beta-deploy** | `workflow_run` after successful product-smoke on `main` **push** only → SSH → `scripts/beta-deploy.sh` (pin `DEPLOY_SHA`, `git reset --hard`; `docker pull` public `PEN_SANDBOX_IMAGE` from `node4/.env` — no Hub token) |
 | **product-deep** | Phase B: **`workflow_dispatch` only** — heavy deterministic suites; **does not** gate merge or beta-deploy |
-| **pen-sandbox** | Independent image build/push on `sandbox/pen-sandbox/**` — not part of product-smoke/CD |
+| **pen-sandbox** | Independent **Hub publish** on `sandbox/pen-sandbox/**` (`pen-sandbox.yml`). Beta host **pulls** that public pin during `beta-deploy.sh` (not a rebuild). |
 | Host topology | Docker: db, rabbitmq, caddy, cloudflared; systemd: backend + node4; FE dist via Caddy |
 | Secrets | GH deploy: SSH only; host: JWT/DB/MQ/LLM/NODE_TOKEN/TUNNEL; CF: Access + Tunnel. product-smoke has **no** business secrets |
 

@@ -116,6 +116,25 @@ if [[ -f src/expert-cli.ts ]]; then
 fi
 cd "$REPO_ROOT"
 
+echo "==> 5b. docker pull pen-sandbox (public Hub pin; no login)"
+# Host pin lives in node4/.env — not GitHub, not a Hub token.
+if [[ -f "$REPO_ROOT/node4/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/node4/.env"
+  set +a
+fi
+if [[ -z "${PEN_SANDBOX_IMAGE:-}" ]]; then
+  echo "    WARN: PEN_SANDBOX_IMAGE unset in node4/.env — skip pull"
+elif [[ "$PEN_SANDBOX_IMAGE" != */* ]]; then
+  echo "    skip pull (local tag ${PEN_SANDBOX_IMAGE})"
+else
+  echo "    pull ${PEN_SANDBOX_IMAGE}"
+  docker pull "$PEN_SANDBOX_IMAGE"
+fi
+# Pull refreshes the host image only. Running sticky boxes keep the old layers
+# until Session/Case dispose rm's them — do not docker rm here (kicks login).
+
 echo "==> 6. systemctl restart + health"
 if command -v systemctl >/dev/null 2>&1; then
   sudo systemctl restart my-ai-pen-backend my-ai-pen-node4
