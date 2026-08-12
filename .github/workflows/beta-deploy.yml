@@ -1,4 +1,4 @@
-# SSH deploy to single beta host after product-smoke succeeds on main (Spec #231).
+# SSH deploy to single beta host after product-smoke or pen-sandbox succeeds on main (Spec #231).
 #
 # GitHub Environment: 测试环境
 #   Environment variables: BETA_SSH_HOST, BETA_SSH_PORT, BETA_SSH_USER
@@ -8,7 +8,7 @@ name: beta-deploy
 
 on:
   workflow_run:
-    workflows: ["product-smoke"]
+    workflows: ["product-smoke", "pen-sandbox"]
     types: [completed]
     branches: [main]
 
@@ -18,7 +18,8 @@ concurrency:
 
 jobs:
   deploy:
-    # After successful smoke on a push to main.
+    # After successful smoke or sandbox Hub publish on a push to main.
+    # PR runs of either workflow do not deploy (event != push).
     if: >-
       ${{ github.event.workflow_run.conclusion == 'success'
           && github.event.workflow_run.event == 'push' }}

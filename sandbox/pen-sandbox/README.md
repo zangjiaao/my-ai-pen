@@ -38,7 +38,7 @@ docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:v<VERSION>
 docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:sha-<short>
 ```
 
-PRs build only (no push).
+PRs build only (no push). A successful **push to `main`** also triggers **beta-deploy** (`workflow_run`) so the beta host pulls the published pin — sandbox-only commits do not go through product-smoke.
 
 **Current publish account** (set `DOCKERHUB_NAMESPACE` to this, or change both together):
 
