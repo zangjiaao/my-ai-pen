@@ -40,21 +40,19 @@ docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:sha-<short>
 
 PRs build only (no push).
 
-**Published (manual push 2026-07-18, account `billxlli`):**
+**Published namespace:** [`zangjiaao/pen-sandbox`](https://hub.docker.com/r/zangjiaao/pen-sandbox) (old `billxlli/pen-sandbox` is retired).
 
 ```text
-docker.io/billxlli/pen-sandbox:latest
-docker.io/billxlli/pen-sandbox:dev
-docker.io/billxlli/pen-sandbox:0.2.0
-docker.io/billxlli/pen-sandbox:v0.2.0
+docker.io/zangjiaao/pen-sandbox:latest
+docker.io/zangjiaao/pen-sandbox:dev
+docker.io/zangjiaao/pen-sandbox:0.2.0
+docker.io/zangjiaao/pen-sandbox:v0.2.0
 ```
 
-Hub: https://hub.docker.com/r/billxlli/pen-sandbox
-
-Node4 on a worker:
+Node4 on a worker / production:
 
 ```bash
-export PEN_SANDBOX_IMAGE=billxlli/pen-sandbox:latest
+export PEN_SANDBOX_IMAGE=zangjiaao/pen-sandbox:latest
 docker pull "$PEN_SANDBOX_IMAGE"
 ```
 

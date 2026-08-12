@@ -55,14 +55,14 @@ bash sandbox/pen-sandbox/scripts/update-templates.sh   # nuclei-templates host c
 
 **Docker Hub CI:** `.github/workflows/pen-sandbox.yml`  
 Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access token).  
-Image: `<user>/pen-sandbox:{latest,dev,<version>,sha-*}`.
+Image: `zangjiaao/pen-sandbox:{latest,dev,<version>,sha-*}` (CI namespace = Hub user; set `DOCKERHUB_USERNAME=zangjiaao`). Old `billxlli/pen-sandbox` is retired.
 
 Aliases at local build: `pen-tools:dev` / `pen-browser:dev` for old env vars.
 
-Worker:
+Worker / production:
 
 ```bash
-export PEN_SANDBOX_IMAGE=<user>/pen-sandbox:latest
+export PEN_SANDBOX_IMAGE=zangjiaao/pen-sandbox:latest
 docker pull "$PEN_SANDBOX_IMAGE"
 ```
 
