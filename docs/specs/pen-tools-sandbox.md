@@ -54,15 +54,15 @@ bash sandbox/pen-sandbox/scripts/update-templates.sh   # nuclei-templates host c
 ```
 
 **Docker Hub CI:** `.github/workflows/pen-sandbox.yml`  
-Optional CI secret: `DOCKERHUB_TOKEN` (access token) if you want GitHub Actions to push.  
-Image namespace is **`zangjiaao`** (hardcoded; no `DOCKERHUB_USERNAME` secret). Old `billxlli/pen-sandbox` is retired.
+Repo **variable** `DOCKERHUB_NAMESPACE` = Hub user/org (change when the account moves).  
+Optional **secret** `DOCKERHUB_TOKEN` if CI should push on `main`.
 
 Aliases at local build: `pen-tools:dev` / `pen-browser:dev` for old env vars.
 
-Worker / production:
+Worker / production — pin whatever namespace you published:
 
 ```bash
-export PEN_SANDBOX_IMAGE=zangjiaao/pen-sandbox:latest
+export PEN_SANDBOX_IMAGE=<DOCKERHUB_NAMESPACE>/pen-sandbox:latest
 docker pull "$PEN_SANDBOX_IMAGE"
 ```
 

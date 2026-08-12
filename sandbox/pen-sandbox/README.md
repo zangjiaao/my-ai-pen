@@ -23,35 +23,34 @@ Also tags `pen-tools:dev` and `pen-browser:dev` for older env vars.
 
 GitHub Actions: [`.github/workflows/pen-sandbox.yml`](../../.github/workflows/pen-sandbox.yml)
 
-| Secret | Purpose |
-|--------|---------|
-| `DOCKERHUB_TOKEN` | Hub **access token** (not password). Optional — only for CI push to `zangjiaao/pen-sandbox`. Namespace is hardcoded `zangjiaao`. |
+| Knob | Purpose |
+|------|---------|
+| **Variable** `DOCKERHUB_NAMESPACE` | Hub user/org. Change here when the publish account moves — not hardcoded in the workflow. |
+| **Secret** `DOCKERHUB_TOKEN` | Optional Hub **access token**. Only needed for CI push on `main`. |
 
 On push to `main` touching `sandbox/pen-sandbox/**` (or manual **workflow_dispatch**):
 
 ```text
-docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:latest
-docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:dev
-docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:<VERSION>
-docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:v<VERSION>
-docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:sha-<short>
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:latest
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:dev
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:<VERSION>
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:v<VERSION>
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:sha-<short>
 ```
 
 PRs build only (no push).
 
-**Published namespace:** [`zangjiaao/pen-sandbox`](https://hub.docker.com/r/zangjiaao/pen-sandbox) (old `billxlli/pen-sandbox` is retired).
+**Current publish account** (set `DOCKERHUB_NAMESPACE` to this, or change both together):
 
 ```text
-docker.io/zangjiaao/pen-sandbox:latest
-docker.io/zangjiaao/pen-sandbox:dev
-docker.io/zangjiaao/pen-sandbox:0.2.0
-docker.io/zangjiaao/pen-sandbox:v0.2.0
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:latest
+docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox:dev
 ```
 
-Node4 on a worker / production:
+Node4 on a worker / production — pin the namespace you actually pulled:
 
 ```bash
-export PEN_SANDBOX_IMAGE=zangjiaao/pen-sandbox:latest
+export PEN_SANDBOX_IMAGE=<DOCKERHUB_NAMESPACE>/pen-sandbox:latest
 docker pull "$PEN_SANDBOX_IMAGE"
 ```
 
