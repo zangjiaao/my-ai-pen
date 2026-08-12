@@ -55,17 +55,14 @@ export function formatAgentDurationLabel(seconds: unknown): string {
 }
 
 /**
- * Composer C1: visible only while Case has an active work-burst that is busy
- * or authorize-paused (paused clock still shows). Hidden when settled/idle.
+ * Composer C1 + list-tail Working (Spec #325): same open/close lifecycle.
+ * - Open: active work-burst id (incl. authorize-paused), or Case `working`
+ *   (send→first-burst gap / reload before ledger lands).
+ * - Closed: settled/idle (no active_burst_id and not working).
  */
 export function composerTimerVisible(workBurst: WorkBurstProjection | null | undefined, working: boolean): boolean {
-  if (!workBurst) return false;
-  if (workBurst.active_burst_id) {
-    // Show while open burst exists (including authorize pause).
-    return true;
-  }
-  // Optimistic: session working but ledger not yet projected.
-  return working && (workBurst.live_work_seconds != null || workBurst.accruing === true);
+  if (workBurst?.active_burst_id) return true;
+  return working;
 }
 
 /**
@@ -119,27 +116,134 @@ function isAgentResultMessage(m: {
   return RESULT_MSG_TYPES.has(mt);
 }
 
+/** True when a tool_call content still looks in-flight (mid-interrupt sticky). */
+export function toolContentLooksRunning(content: Record<string, unknown> | null | undefined): boolean {
+  if (!content || typeof content !== "object") return false;
+  const top = String(content.status ?? "").trim().toLowerCase();
+  if (top && !["done", "ok", "success", "completed", "complete", "saved", "loaded",
+    "fail", "failed", "error", "blocked", "canceled", "cancelled", "interrupted"].includes(top)) {
+    return true;
+  }
+  const items = Array.isArray(content.tool_items) ? content.tool_items : [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const st = String((raw as Record<string, unknown>).status ?? "").trim().toLowerCase();
+    if (!st) continue;
+    if (["running", "in_progress", "pending", "active"].includes(st)) return true;
+    if (!["done", "ok", "success", "completed", "complete", "saved", "loaded",
+      "fail", "failed", "error", "blocked", "canceled", "cancelled", "interrupted"].includes(st)
+      && !/^\d{3}$/.test(st)) {
+      return true;
+    }
+  }
+  // Top empty + progressive summary like "shell running" with no terminal items.
+  if (!top && /\s+running$/i.test(String(content.summary ?? "").trim())) return true;
+  return top === "running";
+}
+
 /**
  * messageId → work_seconds for B1 display.
  *
  * Prefer server-stamped content; then attach each finalized burst to the **last
  * agent text of each user→agent turn** so multi-turn Cases always show 耗时
  * (not only when finalized map has exactly one entry).
+ *
+ * @param opts.streamingMessageIds — message / stream ids still progressive; withheld.
+ * @param opts.suppressOpenSegment — when Case is still working, withhold 耗时 on
+ *   **all** agent result rows after the last user message (covers stamp-before-
+ *   stream-end races and live-map catch-up prune). Historical turns still show.
+ *
+ * Also withholds 耗时 on a turn segment while any tool_call in that segment is
+ * still `running` — avoids 「耗时」 sitting above a stuck mid-interrupt shell card.
  */
 export function selectResultAnchorMessageIds(
   messages: Array<{ id?: string; role?: string; msg_type?: string; content?: Record<string, unknown> }>,
   finalized: Record<string, number> | undefined,
+  opts?: {
+    streamingMessageIds?: Iterable<string> | null;
+    /** When true, no 耗时 on the open user→agent segment (active turn). */
+    suppressOpenSegment?: boolean;
+  },
 ): Record<string, number> {
   const out: Record<string, number> = {};
   if (!messages?.length) return out;
 
+  const streaming = new Set(
+    [...(opts?.streamingMessageIds || [])].map((id) => String(id || "").trim()).filter(Boolean),
+  );
+
+  // Open segment = after last user message. Suppress 耗时 there while turn is live.
+  const openSegmentIds = new Set<string>();
+  if (opts?.suppressOpenSegment) {
+    let lastUserIdx = -1;
+    for (let i = 0; i < messages.length; i++) {
+      if (String(messages[i]!.role || "") === "user") lastUserIdx = i;
+    }
+    if (lastUserIdx >= 0) {
+      for (let i = lastUserIdx + 1; i < messages.length; i++) {
+        const m = messages[i]!;
+        if (!isAgentResultMessage(m)) continue;
+        const id = String(m.id || "").trim();
+        if (id) openSegmentIds.add(id);
+        const content = m.content && typeof m.content === "object" ? m.content : {};
+        const sid = String(content.stream_id || "").trim();
+        if (sid) openSegmentIds.add(sid);
+        const mid = String(content.message_id || "").trim();
+        if (mid) openSegmentIds.add(mid);
+      }
+    }
+  }
+
+  // Segment indexes where a tool_call is still running — no B1 耗时 on that turn yet.
+  const inflightToolSegmentEndIds = new Set<string>();
+  {
+    let segmentResultId: string | null = null;
+    let segmentHasRunningTool = false;
+    const flush = () => {
+      if (segmentHasRunningTool && segmentResultId) {
+        inflightToolSegmentEndIds.add(segmentResultId);
+      }
+    };
+    for (const m of messages) {
+      if (String(m.role || "") === "user") {
+        flush();
+        segmentResultId = null;
+        segmentHasRunningTool = false;
+        continue;
+      }
+      if (isAgentResultMessage(m)) {
+        const id = String(m.id || "").trim();
+        if (id) segmentResultId = id;
+      }
+      if (String(m.msg_type || "") === "tool_call") {
+        const content = m.content && typeof m.content === "object" ? m.content : {};
+        if (toolContentLooksRunning(content)) segmentHasRunningTool = true;
+      }
+    }
+    flush();
+  }
+
+  const isWithheld = (id: string, content?: Record<string, unknown>): boolean => {
+    if (streaming.has(id)) return true;
+    if (openSegmentIds.has(id)) return true;
+    if (inflightToolSegmentEndIds.has(id)) return true;
+    if (content) {
+      const sid = String(content.stream_id || "").trim();
+      if (sid && (streaming.has(sid) || openSegmentIds.has(sid))) return true;
+      const mid = String(content.message_id || "").trim();
+      if (mid && (streaming.has(mid) || openSegmentIds.has(mid))) return true;
+    }
+    return false;
+  };
+
   const stampedBurstIds = new Set<string>();
 
-  // 1) Prefer server-stamped anchors on agent result rows
+  // 1) Prefer server-stamped anchors on agent result rows (skip open/streaming)
   for (const m of messages) {
     const id = String(m.id || "").trim();
     if (!id || !isAgentResultMessage(m)) continue;
     const content = m.content && typeof m.content === "object" ? m.content : {};
+    if (isWithheld(id, content)) continue;
     const secs = resultAnchorWorkSeconds(content);
     if (secs != null) {
       out[id] = secs;
@@ -172,16 +276,20 @@ export function selectResultAnchorMessageIds(
 
   let fi = pendingFinalized.length - 1;
   for (let si = segmentEnds.length - 1; si >= 0 && fi >= 0; si--) {
-    const id = segmentEnds[si];
+    const id = segmentEnds[si]!;
     if (out[id] != null) continue;
-    out[id] = pendingFinalized[fi][1];
+    // Still open turn / streaming this reply — wait until output + settle finish.
+    if (isWithheld(id)) continue;
+    out[id] = pendingFinalized[fi]![1];
     fi -= 1;
   }
 
   // 4) No turn segmentation but we have ledger seconds: last agent result
   if (Object.keys(out).length === 0 && pendingFinalized.length > 0) {
     const last = segmentEnds[segmentEnds.length - 1];
-    if (last) out[last] = pendingFinalized[pendingFinalized.length - 1][1];
+    if (last && !isWithheld(last)) {
+      out[last] = pendingFinalized[pendingFinalized.length - 1]![1];
+    }
   }
 
   return out;

@@ -118,10 +118,21 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
         aborted: result.aborted,
         output_archive: governed.archived_path,
       });
+      // Field order matters: platform/node wire clips result_text (~4–12k).
+      // Streams + exit first so long commands never starve stdout/stderr on the wire.
+      // Full command still last for legacy recovery; Main row prefers args/content.command.
       return jsonResult({
         ok: result.exitCode === 0 && !result.timedOut && !result.aborted,
+        exitCode: modelResult.exitCode,
+        timedOut: modelResult.timedOut,
+        aborted: modelResult.aborted,
+        output_truncated: modelResult.output_truncated,
+        output_archive: modelResult.output_archive,
+        output_original_chars: modelResult.output_original_chars,
+        stdout: modelResult.stdout,
+        stderr: modelResult.stderr,
         timeout_seconds: timeoutSec,
-        ...modelResult,
+        command,
       });
     },
   };

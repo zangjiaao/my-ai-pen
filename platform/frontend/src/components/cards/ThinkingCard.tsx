@@ -1,23 +1,29 @@
-import { useState } from "react";
-import { Brain } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Brain, ChevronDown } from "lucide-react";
 import {
   PROCESS_LEADING_ICON_SIZE,
   PROCESS_LEADING_ICON_STROKE,
   PROCESS_LEADING_SLOT_CLASS,
 } from "../../lib/processChromeIcon";
-import { resolveThinkingUiStatusForSession, thinkingCardProjection } from "../../lib/status";
+import {
+  resolveThinkingUiStatusForSession,
+  thinkingCardProjection,
+  thinkingLifecycleTitle,
+} from "../../lib/status";
 import MarkdownText from "../MarkdownText";
 import { ProcessStatusLight } from "../ProcessStatusLight";
 
 /** Thinking body density: secondary chrome + soft-break for streamed short lines (Spec #327 / #329). */
 const THINKING_MARKDOWN_CLASS =
-  "min-w-0 max-w-full space-y-1 py-1 text-xs leading-relaxed text-ink-muted [overflow-wrap:anywhere]";
+  "min-w-0 w-full max-w-full space-y-1 py-1 text-xs leading-relaxed text-ink-muted [overflow-wrap:anywhere]";
 
 /**
- * Thinking row — same shell language as ToolCallCard (light bar, no heavy border box).
- * Leading: pulse status light while running; Brain icon when done.
- * Spec #305: lifecycle title (思考中… / 思考完成), default expanded, no header truncation.
- * Spec #329: body uses shared dialog Markdown renderer with soft-break + muted density.
+ * Thinking process chrome — sibling group to 「工具调用」:
+ *
+ *   【Brain|状态灯】思考中… / 思考 N 秒 ⌄
+ *   -- reasoning body (left rail)
+ *
+ * No card bg/border; width follows content. Duration from content fields or live clock.
  */
 export default function ThinkingCard({
   content,
@@ -30,38 +36,115 @@ export default function ThinkingCard({
   const projection = thinkingCardProjection(content, { sessionActive });
   const uiStatus = resolveThinkingUiStatusForSession(content.status, { sessionActive });
   const [expanded, setExpanded] = useState<boolean>(projection.defaultExpanded);
-  const leading =
-    uiStatus === "running" ? (
-      <ProcessStatusLight status="running" pulse testId="thinking-status-light" />
-    ) : (
-      <span title="Thinking" className={PROCESS_LEADING_SLOT_CLASS}>
-        <Brain size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
-      </span>
-    );
+  const working = uiStatus === "running";
+
+  // Live elapsed while thinking; settle to final seconds for 「思考 N 秒」.
+  const startedAtRef = useRef<number | null>(null);
+  const [liveSeconds, setLiveSeconds] = useState<number | null>(null);
+  const stampedSeconds = readThinkingDurationSeconds(content);
+
+  useEffect(() => {
+    if (working) {
+      if (startedAtRef.current == null) startedAtRef.current = Date.now();
+      const tick = () => {
+        const start = startedAtRef.current;
+        if (start == null) return;
+        setLiveSeconds(Math.max(0, Math.floor((Date.now() - start) / 1000)));
+      };
+      tick();
+      const id = window.setInterval(tick, 1000);
+      return () => window.clearInterval(id);
+    }
+    // Capture final duration when status settles (if not stamped on content).
+    if (startedAtRef.current != null && stampedSeconds == null) {
+      setLiveSeconds(Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000)));
+    }
+    return undefined;
+  }, [working, stampedSeconds]);
+
+  // Empty done / orphan empty: hide (no empty thinking chrome).
+  if (!projection.visible) return null;
+
+  const durationSeconds = stampedSeconds ?? (!working ? liveSeconds : null);
+  const title = thinkingLifecycleTitle(content.status, {
+    sessionActive,
+    durationSeconds: working ? null : durationSeconds,
+  });
+  // While running, title is 思考中… (shimmer); optional live seconds stay off header
+  // to match reference active label.
+  const showBody = expanded && projection.showBodyWhenExpanded;
+  const leading = working ? (
+    <ProcessStatusLight status="running" pulse testId="thinking-status-light" />
+  ) : (
+    <span title="Thinking" className={PROCESS_LEADING_SLOT_CLASS}>
+      <Brain size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
+    </span>
+  );
 
   return (
-    <div data-testid="thinking-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
+    <div data-testid="thinking-card" className="my-1.5 w-full min-w-0 max-w-full">
       <button
         type="button"
         data-testid="thinking-card-toggle"
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
+        className="-mx-1 flex h-7 w-fit max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left transition-colors hover:bg-canvas-inset"
       >
         <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
         <span
           data-testid="thinking-card-title"
-          className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"
+          className={
+            working
+              ? "shimmer-label shrink-0 font-sans text-[13px] font-medium"
+              : "shrink-0 font-sans text-[13px] font-medium text-ink-secondary"
+          }
         >
-          {projection.title}
+          {title}
         </span>
-        <span className="min-w-6 flex-1" aria-hidden="true" />
+        <ChevronDown
+          size={14}
+          strokeWidth={2.2}
+          aria-hidden
+          className={`shrink-0 text-ink-muted transition-transform duration-300 ${
+            expanded ? "rotate-180" : "rotate-0"
+          }`}
+        />
       </button>
-      {expanded && projection.showBodyWhenExpanded ? (
-        <div className="space-y-0.5" data-testid="thinking-card-body">
-          <MarkdownText text={projection.body} breaks className={THINKING_MARKDOWN_CLASS} />
+
+      <div
+        className="grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]"
+        style={{
+          gridTemplateRows: showBody ? "1fr" : "0fr",
+          opacity: showBody ? 1 : 0,
+        }}
+      >
+        <div className="min-h-0 overflow-hidden">
+          {projection.showBodyWhenExpanded ? (
+            <div
+              className="relative ml-2.5 w-full min-w-0 border-l border-hairline pl-3"
+              data-testid="thinking-card-body"
+            >
+              <MarkdownText text={projection.body} breaks className={THINKING_MARKDOWN_CLASS} />
+            </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
     </div>
   );
+}
+
+/** Prefer stamped duration fields on thinking content when present. */
+function readThinkingDurationSeconds(content: Record<string, unknown>): number | null {
+  for (const key of ["thinking_seconds", "duration_seconds", "duration_s"]) {
+    const n = Number(content[key]);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  const ms = Number(content.duration_ms ?? content.thinking_ms);
+  if (Number.isFinite(ms) && ms >= 0) return Math.floor(ms / 1000);
+  const start = Date.parse(String(content.started_at || content.startedAt || ""));
+  const end = Date.parse(String(content.ended_at || content.endedAt || content.completed_at || ""));
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+    return Math.floor((end - start) / 1000);
+  }
+  return null;
 }

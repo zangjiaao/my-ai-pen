@@ -367,6 +367,53 @@ select {
   }
 }
 
+/* —— Working chrome pixel grid + label shimmer (LoadingState) —— */
+@keyframes pixel-on {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  40%,
+  60% {
+    opacity: 0.95;
+  }
+}
+
+@keyframes shimmer-text {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Shared shimmer label (Working chrome + Thinking running title) */
+.shimmer-label {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-ink-muted) 35%,
+    var(--color-ink) 50%,
+    var(--color-ink-muted) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text 1.4s linear infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .login-hero-scan,
   .login-hero-grid,
@@ -383,5 +430,12 @@ select {
   }
   .login-radar-sweep {
     opacity: 0.25;
+  }
+  .shimmer-label {
+    animation: none !important;
+    background: none !important;
+    -webkit-background-clip: unset !important;
+    background-clip: unset !important;
+    color: var(--color-ink-secondary) !important;
   }
 }

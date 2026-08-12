@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts",
-    "standalone": "tsx src/standalone.ts",
+    "dev": "tsx --import ./src/load-env.ts src/main.ts",
+    "standalone": "tsx --import ./src/load-env.ts src/standalone.ts",
     "smoke": "tsx src/node4-smoke.ts",
     "platform:smoke": "tsx src/platform-smoke.ts",
     "experts": "tsx src/expert-cli.ts",

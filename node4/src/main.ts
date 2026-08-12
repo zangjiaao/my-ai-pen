@@ -178,23 +178,31 @@ client.on("case_session_release", async (message) => {
     cancelApprovalsForConversation(conversationId);
     prev.abort();
   }
-  const idle = await waitConversationIdle(conversationId);
-  const result = await disposeWorkingSessionsForCase(conversationId);
-  // Only clear pending when idle (finally already ran). If still busy, keep pending
-  // so a late finally force-disposes instead of re-parking (Spec #354 L1).
-  if (idle) {
-    clearPendingCaseDispose(conversationId);
-  }
-  console.log(
-    `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle}`,
-  );
+  // Ack = accepted only (Platform does not wait). Cleanup is async; do not invent
+  // disposed/keys counts before work finishes (Spec #354 deferred release).
   await client.send({
     type: "case_session_release_ack",
     conversation_id: conversationId,
-    disposed: result.disposed,
-    keys: result.keys,
-    pending: !idle,
+    accepted: true,
+    deferred: true,
   });
+  void (async () => {
+    try {
+      const idle = await waitConversationIdle(conversationId);
+      const result = await disposeWorkingSessionsForCase(conversationId);
+      if (idle) {
+        clearPendingCaseDispose(conversationId);
+      }
+      console.log(
+        `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle} deferred=true`,
+      );
+    } catch (err) {
+      console.error(
+        `[node4] case_session_release background dispose failed conv=${conversationId.slice(0, 8)}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  })();
 });
 
 /**

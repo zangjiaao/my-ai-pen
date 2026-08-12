@@ -10,13 +10,13 @@ Operators watching a Case conversation cannot always tell what the Agent is doin
 
 ## Solution
 
-Keep Spec #276’s narrow pending chrome (post-send only; no tool-gap reseed). Make the **three existing timeline surfaces** faithfully project Agent activity:
+Keep Spec #276’s non-Message Working chrome (list-tail). **Amendment:** Working stays for the **whole active turn** (not only until first progressive frame). Mid-task tool→LLM gaps are covered by Working — **not** by inventing empty thinking Messages (mid-task empty T1 shells retired). Make the **three existing timeline surfaces** faithfully project Agent activity:
 
-1. **Pending chrome** — still only after successful send until the first progressive activity; **reuse the existing expert speaker row rules** (show on first speaker / expert switch; collapse while the same expert continues). No new display language.
-2. **Thinking card** — explicit `status` on thinking messages (`running` | `done`); title is the lifecycle itself (`思考中…` / `思考完成`); full body when expanded; **default expanded** (including done); allow **empty body while `running`** so mid-task “thinking again” is visible before tokens (T1).
+1. **Working chrome** — after successful send through tools/thinking; list-tail only; **reuse expert speaker row rules**. Hide when **final reply text** starts progressive streaming, or on **task terminal / clear**. Tools never invent Working alone.
+2. **Thinking card** — explicit `status` on thinking messages (`running` | `done`); title is the lifecycle itself (`思考中…` / `思考完成`); full body when expanded; **default expanded** (including done). **Do not** emit empty-body running thinking solely for mid-task wait (FE Working owns that gap).
 3. **Tool card** — while a tool is executing, the card must show **执行中**; if long-running tools incorrectly look **已完成**, fix that path in the same delivery (S+).
 
-Users always see either pending (first wait), thinking-in-progress, tool-in-progress, or a completed state—not a frozen timeline of only finished tools.
+Users always see Working at the list bottom while the turn is active, plus real thinking/tool/text cards as they stream—not a frozen timeline of only finished tools, and not fake empty thinking shells.
 
 ## User Stories
 
@@ -77,11 +77,15 @@ Users always see either pending (first wait), thinking-in-progress, tool-in-prog
 - **Delta:** clear pending chrome on first progressive **activity** for the turn: thinking/text with stream_id, including empty running thinking—not only non-empty body.
 - First post-send wait remains pending until that activity; mid-task re-entry into thinking uses T1 thinking cards, not pending.
 
-### T1 empty running thinking
+### Mid-task wait (Working, not empty thinking T1)
 
-- When the thinking channel opens for an assistant turn (or equivalent llm_waiting after tools), Node may emit a running thinking frame with empty body and stable `stream_id` before first token.
-- Do not rely on pending reseed for mid-task gaps.
-- First wait after user send still prefers pending + speaker; once any progressive thinking/text activity starts, pending is gone for that send window.
+- **Retired:** Node empty-body running thinking solely for tool→LLM wait (`announceThinkingWaitAfterTools` / empty `ensureRunningStart`). That path invented fake 「思考中…」 Messages.
+- **Current:** list-tail **Working** chrome remains for the whole active turn; covers post-send and mid-task llm_waiting without durable fake thinking rows.
+- Real thinking frames still stream when the model emits thinking body (`status: running|done`).
+- On `tool_execution_start`, stamp any **open real** thinking done so titles are not stuck on 「思考中…」 across tools.
+- **Empty hide (residual):** if a historical empty thinking row exists, ThinkingCard shows empty body only while `status=running` and session active; empty `done` / orphan empty render nothing.
+- **Mid-run user_steer:** platform persists steer text as a user message; FE may mark optimistic rows `delivery=queued` with shared copy (`STEER_QUEUED_HINT`) until non-empty progressive agent body arrives (FE chrome only — not a delivery protocol).
+- **Case WS gate:** FE applies Case-scoped frames through `gateCaseWsHandlers(activeId, handlers)` once (`caseWsGate.ts`). Blank home / wrong Case id drop plan_tree, panel, tools, progressive text, etc. Room-level `conversation_working` / `work_status` bypass the gate (they filter by `conversation_id` themselves for store + UI).
 
 ### ThinkingCard UI
 
@@ -135,6 +139,7 @@ Users always see either pending (first wait), thinking-in-progress, tool-in-prog
 | **S3 ThinkingCard projection** | Title from status; default expanded; no header truncation; empty running renders without fake body copy |
 | **S4 Pending speaker** | Same attribution + same-speaker collapse as agent messages; pending still non-Message |
 | **S5 Tool running (S+)** | In-flight tool_call shows 执行中; completion shows 已完成/fail; no premature done on active run |
+| **S6 Interrupt settle** | Mid-tool user interrupt (or burst settle) terminalizes open running tool/thinking rows so the next turn does not re-light both the old tool pulse and Working chrome (Case e8a62c56; see Spec #350 interrupt settle) |
 
 ### Prior art
 

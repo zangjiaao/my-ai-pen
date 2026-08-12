@@ -81,7 +81,8 @@ docker pull "$PEN_SANDBOX_IMAGE"
 | `NODE4_BROWSER_SANDBOX_HEARTBEAT_MS` | Lease renewal interval while Session box is held/running (default ~90s); retarget from parent-task hold |
 | `NODE4_BROWSER_SANDBOX_LEASE_MS` | Lease TTL without renewal (default ~12 min); expired → janitor may **rm** orphans only when policy allows |
 | `NODE4_BROWSER_SANDBOX_JANITOR_MS` | Periodic reap interval (default ~120s); startup also runs one pass |
-| `PEN_SANDBOX_IDLE_STOP_MS` | Idle **stop** clock: no pen-sandbox tool traffic for this seat (default **4h**); **stop**, never product idle **rm**. `0` disables |
+| `PEN_SANDBOX_IDLE_STOP_MS` | Idle **stop** clock: no pen-sandbox tool traffic for this seat (default **4h**); **stop**, never product idle **rm**. `0` disables. After Node restart, idle also uses container `StartedAt` + Docker seat labels so host sticky boxes are reclaimed even when the process map is empty. Prefer `npm run dev` (`tsx --import ./src/load-env.ts …`) so env loads before the sandbox runtime singleton. `getLeaseConfig()` and background job schedules re-read knobs each cycle (not frozen at job start). Node logs `pen-sandbox idle stop: …` at boot — must show your value (e.g. `300000ms (~5m)`), not `14400000ms (~240m)` if `.env` sets 5m. First idle pass runs at boot. |
+| `HOME` / Playwright path | Sticky + ephemeral boxes set `HOME=/root` and `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` (`PEN_SANDBOX_HOME_ENV`) so AF_UNIX sockets are not on the `/workspace` bind. |
 
 **Browser resolution (strict):** `node4/src/runtime/browser-sandbox.ts` → `resolveBrowserSandboxImage` — explicit env only; no ambient local-tag discovery; no Strix default.  
 **Shell resolution:** `node4/src/runtime/pentest-sandbox-image.ts` / `pen-tools-shell.ts` — may still discover local first-party tags for lab convenience; sticky model uses **exec into Session box**.
@@ -102,6 +103,8 @@ docker pull "$PEN_SANDBOX_IMAGE"
 **Attach:** seat live + running → reuse; stopped → `start` same container; none → create. Hard cutover from #320 (no dual-mode task\|session flag).
 
 **Workspace SoT:** host path `{NODE4_WORKSPACE}/sessions/{conversationId}/{expertId}/` mounted at `/workspace` (rw). Durable subdirs include `scripts/`, `evidence/`, `findings/`, `credentials/`, `exports/`, `notes/`. Login **primary** = in-box browser profile + stickiness; optional cookie/profile packs under `credentials/` for agent import (v1 file slot; dedicated captcha UI is **future**).
+
+**HOME / browser sockets:** container `HOME=/root` and `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` (rootfs), **not** `/workspace`. Session workspace binds (esp. WSL/`/mnt/d`/9p) often cannot host `AF_UNIX` sockets under `$HOME/.agent-browser/*.sock` — that failure looks like `Daemon failed to start (socket: /workspace/.agent-browser/…)`. Durable agent files stay on `/workspace`; browser daemon/socket + Playwright cache stay on rootfs. Sticky `docker exec` also forces these env vars so legacy boxes created with `HOME=/workspace` keep working without a manual `rm`.
 
 **Multi-seat:** one box per seat; never rebind/inherit box across experts; cross-seat only explicit file export/import; multiple seat boxes may coexist on one Case.
 

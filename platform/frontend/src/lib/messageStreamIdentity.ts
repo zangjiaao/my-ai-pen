@@ -5,8 +5,9 @@
  * No live-slot Message dual identity.
  * Spec #305: thinking may carry content.status; empty running thinking upserts; Working may carry speaker attribution.
  *
- * Working chrome: show after send until first agent output (thinking/text/tool);
- * then hide. Thinking/tool cards use light while running, icon when done.
+ * Working chrome: list-tail after send through tools/thinking. Hide when the
+ * agent starts streaming the **final reply text** (first progressive `text`
+ * frame), or on turn terminal / clear. tool_output does not invent Working.
  * Toggle off for A/B: localStorage `my-ai-pen.workingChrome` = `0` | `off` | `false`.
  */
 
@@ -84,17 +85,25 @@ export type PendingChromeEvent =
       expert_display_name?: string;
       agent_source?: string;
     }
-  /** First progressive thinking/text — hide Working (content is now on the timeline). */
-  | { type: "stream_started" }
+  /**
+   * Progressive thinking/text started.
+   * Attribution-only: never hides Working (Spec #325 work-burst owns hide).
+   * Kept for call-site compatibility / future stream hints.
+   */
+  | { type: "stream_started"; channel?: "text" | "thinking" }
   | { type: "terminal" }
   | { type: "clear" }
   /**
-   * Tool progressive frame: hide Working if present; never invent Working from tools alone.
+   * Tool progressive frame — **does not** hide or invent Working.
+   * Tools never invent chrome alone.
    */
   | { type: "tool_output" };
 
 /** Default list-tail Working label (indicator light + this title). */
 export const DEFAULT_PENDING_LABEL = "工作中...";
+
+/** Authorize wait — same burst still open; clock may be paused (composer C1). */
+export const AUTHORIZE_PENDING_LABEL = "等待授权...";
 
 function optionalTrimmed(value: unknown): string | undefined {
   const s = String(value ?? "").trim();
@@ -102,8 +111,9 @@ function optionalTrimmed(value: unknown): string | undefined {
 }
 
 /**
- * Pure state machine for list-tail Working chrome.
- * Show after send until first agent output (thinking/text/tool) or turn terminal.
+ * Attribution + optimistic list-tail Working state (send_success).
+ * **Visibility** is work-burst aligned (see `listTailWorkingVisible`) — not this
+ * reducer's stream_started path. Hide attribution only on terminal / clear / idle.
  */
 export function reducePendingChrome(
   current: PendingChrome,
@@ -125,9 +135,12 @@ export function reducePendingChrome(
       if (agentSource) chrome.agent_source = agentSource;
       return chrome;
     }
-    // First progressive content (thinking/text/tool) or settle — hide Working.
     case "stream_started":
+      // Text/thinking progressive must not drop Working — continuous tool+think loops
+      // share one work-burst; list-tail chrome stays until Case idle / burst settle.
+      return current;
     case "tool_output":
+      return current;
     case "terminal":
     case "clear":
       return null;
@@ -136,14 +149,51 @@ export function reducePendingChrome(
   }
 }
 
-/** Whether Working chrome should render for the active conversation. */
+/**
+ * Whether list-tail Working chrome should render for the active conversation.
+ * Prefer work-burst (same lifecycle as composer-work-timer); optimistic pending
+ * covers the gap after send before the first work_burst projection.
+ */
+export function listTailWorkingVisible(input: {
+  workBurst?: {
+    active_burst_id?: string | null;
+    live_work_seconds?: number | null;
+    accruing?: boolean;
+  } | null;
+  working: boolean;
+  pending: PendingChrome;
+  conversationId: string | null | undefined;
+}): boolean {
+  if (!isWorkingChromeEnabled()) return false;
+  const cid = String(input.conversationId || "").trim();
+  if (!cid) return false;
+  // Spec #325: open burst / authorize-paused / accruing → same as composer C1.
+  if (input.workBurst?.active_burst_id) return true;
+  if (
+    input.working
+    && input.workBurst
+    && (input.workBurst.live_work_seconds != null || input.workBurst.accruing === true)
+  ) {
+    return true;
+  }
+  // Optimistic: user just sent; pending attribution for this Case.
+  if (input.pending && input.pending.conversationId === cid) return true;
+  // Session working without pending/burst yet (reload mid-run before burst lands).
+  if (input.working) return true;
+  return false;
+}
+
+/** @deprecated use listTailWorkingVisible — kept for older tests/imports */
 export function pendingChromeVisible(
   pending: PendingChrome,
   conversationId: string | null | undefined,
 ): boolean {
-  if (!isWorkingChromeEnabled()) return false;
-  if (!pending || !conversationId) return false;
-  return pending.conversationId === conversationId;
+  return listTailWorkingVisible({
+    workBurst: null,
+    working: false,
+    pending,
+    conversationId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +477,7 @@ export function pendingChromeSpeakerContent(
 }
 
 /**
- * Pure operator path: progressive frame → live upsert + hide Working on first output.
+ * Pure operator path: progressive frame → live upsert; Working stays until terminal.
  * Mirrors ConversationPage upsertStreamedAgentText accept gate without React.
  */
 export function applyProgressiveActivity(
@@ -469,8 +519,11 @@ export function applyProgressiveActivity(
     conversationId: input.conversationId,
     content,
   });
-  // First progressive output hides Working (stream_started → clear).
-  const pending = reducePendingChrome(state.pending, { type: "stream_started" });
+  // Attribution only — Working visibility is work-burst / Case idle (not text start).
+  const pending = reducePendingChrome(state.pending, {
+    type: "stream_started",
+    channel: input.msgType === "text" ? "text" : "thinking",
+  });
   return { live, pending, accepted: true };
 }
 

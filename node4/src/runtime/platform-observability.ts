@@ -165,14 +165,13 @@ class ProgressiveContentStream {
   }
 
   /**
-   * Spec #305 T1: when the thinking channel opens, emit an empty running frame
-   * with a stable stream_id so the timeline is not silent before first tokens.
+   * Spec #305 T1 (historical): empty running frames before tokens.
+   * Product now covers mid-turn wait with list-tail Working chrome — do **not**
+   * invent empty thinking Messages. Real body still streams via maybeFlush/finalFlush.
+   * Kept as a no-op so callers (thinking_* open) need no branch churn.
    */
   async ensureRunningStart(): Promise<void> {
-    if (this.channel !== "thinking") return;
-    this.ensureStream();
-    if (this.lastSentStatus) return;
-    await this.flush({ status: "running", allowEmpty: true });
+    return;
   }
 
   async maybeFlush(): Promise<void> {
@@ -187,7 +186,14 @@ class ProgressiveContentStream {
     }
     if (message !== undefined) this.applySnapshot(message);
     if (this.channel === "thinking") {
-      // Only stamp done if this channel was opened / had progressive activity.
+      // Only stamp done when real progressive body (or prior empty running T1) was sent.
+      // Do not invent empty done Messages when ensureStream ran but never flushed body
+      // (empty T1 shells retired — FE Working covers wait).
+      if (!this.text && !this.lastSentStatus) {
+        this.reset();
+        this.channelClosed = true;
+        return;
+      }
       if (!this.streamId && !this.text) {
         this.reset();
         this.channelClosed = true;
@@ -322,6 +328,12 @@ class ProgressiveContentStream {
 export class PlatformTextStream {
   private readonly text: ProgressiveContentStream;
   private readonly thinking: ProgressiveContentStream;
+  /**
+   * In-flight tool executions. T1 empty running opens only when this hits 0 after a
+   * tool ends — avoids one empty 思考中 shell per tool in multi-tool batches
+   * (Case c3a73476: browser×N each opened an empty shell that never stamped done).
+   */
+  private toolsInFlight = 0;
 
   constructor(
     platform: PlatformSink,
@@ -332,12 +344,11 @@ export class PlatformTextStream {
   }
 
   /**
-   * Spec #305 mid-task T1: after tools finish (llm_waiting), open empty running thinking
-   * so the chat timeline is not silent until the first thinking token.
-   * Does not reseed pending chrome (frontend #276) — progressive thinking frames only.
+   * After tools finish (llm_waiting): FE list-tail Working covers the gap.
+   * Do not open empty thinking Messages (retired mid-task T1 shell).
    */
   async announceThinkingWaitAfterTools(): Promise<void> {
-    await this.thinking.ensureRunningStart();
+    return;
   }
 
   async handle(event: {
@@ -345,9 +356,17 @@ export class PlatformTextStream {
     message?: unknown;
     assistantMessageEvent?: { type?: string; delta?: string; partial?: unknown };
   }): Promise<void> {
-    // Spec #305 residual: tool → llm_waiting gap owns mid-task liveness (not bare message_start).
-    // Prefer tool_execution_end so pure text-only turns never get empty 思考完成 spam.
+    // Tool start: close any open real thinking so title is not stuck on 思考中…
+    // across a multi-tool batch. Count in-flight tools (legacy T1 gate; empty T1 retired).
+    if (event.type === "tool_execution_start") {
+      this.toolsInFlight += 1;
+      await this.thinking.finalFlush(event.message);
+      return;
+    }
+
+    // Tool end: no empty thinking shell — Working chrome owns mid-task wait on FE.
     if (event.type === "tool_execution_end") {
+      this.toolsInFlight = Math.max(0, this.toolsInFlight - 1);
       await this.announceThinkingWaitAfterTools();
       return;
     }
@@ -422,6 +441,8 @@ export class PlatformTextStream {
     }
 
     if (event.type === "message_end" && msg?.role === "assistant") {
+      // Do not zero toolsInFlight here: pi often runs tool_execution_* after
+      // message_end. Counter is owned only by start/end (+ dispose on stream teardown).
       await Promise.all([
         this.text.finalFlush(event.message),
         this.thinking.finalFlush(event.message),
@@ -437,6 +458,8 @@ export class PlatformTextStream {
   }
 
   async dispose(): Promise<void> {
+    // Teardown only — clear counter so a reused stream object cannot leak T1 gate.
+    this.toolsInFlight = 0;
     await Promise.all([this.text.dispose(), this.thinking.dispose()]);
   }
 }

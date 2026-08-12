@@ -15,6 +15,7 @@ import {
   mergeMessagesWithLiveStreams,
   mergeProgressiveText,
   messageListKey,
+  listTailWorkingVisible,
   pendingChromeSpeakerContent,
   pendingChromeVisible,
   pruneLiveCatchUp,
@@ -250,7 +251,7 @@ import {
   console.log("ok: S2 isProgressiveActivityFrame gates");
 }
 
-// Working: send → first progressive output hides; tools clear if still showing; never invent
+// Working attribution: send → stays through thinking/tool/text; hide on terminal only
 {
   let pending = reducePendingChrome(
     null,
@@ -264,7 +265,7 @@ import {
   assert.equal(pending!.expert_name, "渗透大师");
   assert.equal(pending!.label, "工作中...");
 
-  const step = applyProgressiveActivity(
+  const stepThink = applyProgressiveActivity(
     { live: {}, pending },
     {
       streamId: "n4-thinking-compose-1",
@@ -275,22 +276,35 @@ import {
       content: { status: "running" },
     },
   );
-  assert.equal(step.accepted, true);
-  assert.equal(step.pending, null, "Working hides on first progressive output");
-  assert.ok(step.live["n4-thinking-compose-1"]);
-  assert.equal(step.live["n4-thinking-compose-1"]!.content?.status, "running");
+  assert.equal(stepThink.accepted, true);
+  assert.ok(stepThink.pending, "Working stays on thinking progressive");
+  assert.equal(stepThink.pending!.conversationId, "conv-compose");
+
+  const stepText = applyProgressiveActivity(
+    { live: stepThink.live, pending: stepThink.pending },
+    {
+      streamId: "n4-text-compose-1",
+      msgType: "text",
+      text: "你好",
+      conversationId: "conv-compose",
+      content: {},
+    },
+  );
+  assert.equal(stepText.accepted, true);
+  assert.ok(stepText.pending, "text progressive does not drop Working attribution");
+  assert.equal(stepText.pending!.conversationId, "conv-compose");
 
   // tool_output alone never invents Working
   const afterTool = reducePendingChrome(null, { type: "tool_output" });
   assert.equal(afterTool, null);
-  // tool_output clears pre-output Working
   pending = reducePendingChrome(
     null,
     buildPendingSendSuccessEvent({ conversationId: "conv-tool-first" }),
   );
   pending = reducePendingChrome(pending, { type: "tool_output" });
-  assert.equal(pending, null, "first tool output also hides Working");
-  console.log("ok: Working until first output (thinking or tool)");
+  assert.ok(pending, "tool output keeps Working");
+  assert.equal(pending!.conversationId, "conv-tool-first");
+  console.log("ok: Working stays through thinking/tool/text; terminal clears attribution");
 }
 
 // Issue 7: pending content shape for speaker
@@ -314,7 +328,7 @@ import {
 }
 
 // ---------------------------------------------------------------------------
-// S2: Working chrome lifecycle — until first agent output only
+// S2: Working chrome — tools/thinking/text keep; terminal/work-burst hide
 // ---------------------------------------------------------------------------
 {
   let pending: PendingChrome = null;
@@ -332,14 +346,66 @@ import {
   assert.equal(pendingChromeVisible(pending, "conv-1"), true);
   assert.equal(pendingChromeVisible(pending, "conv-other"), false);
 
-  // first stream hides Working
-  pending = reducePendingChrome(pending, { type: "stream_started" });
-  assert.equal(pending, null);
+  // thinking stream keeps Working
+  pending = reducePendingChrome(pending, { type: "stream_started", channel: "thinking" });
+  assert.ok(pending);
+  assert.equal(pending!.conversationId, "conv-1");
 
-  // tools never reseed after clear
+  // tools never invent Working; do not clear mid-turn
   pending = reducePendingChrome(pending, { type: "tool_output" });
-  assert.equal(pending, null);
-  console.log("ok: Working after send, hide on first stream, not invented by tool alone");
+  assert.ok(pending);
+  assert.equal(pending!.conversationId, "conv-1");
+
+  // final reply text keeps attribution (visibility owned by work-burst / Case idle)
+  pending = reducePendingChrome(pending, { type: "stream_started", channel: "text" });
+  assert.ok(pending);
+  assert.equal(pending!.conversationId, "conv-1");
+  console.log("ok: Working after send, keeps through text, not invented by tool alone");
+}
+
+// list-tail visibility follows work-burst / working (composer timer lifecycle)
+{
+  assert.equal(
+    listTailWorkingVisible({
+      workBurst: { active_burst_id: "wb1", live_work_seconds: 10, accruing: true },
+      working: true,
+      pending: null,
+      conversationId: "c1",
+    }),
+    true,
+    "open burst shows Working even without pending attribution",
+  );
+  assert.equal(
+    listTailWorkingVisible({
+      workBurst: { active_burst_id: null },
+      working: false,
+      pending: null,
+      conversationId: "c1",
+    }),
+    false,
+    "idle settles hide Working",
+  );
+  assert.equal(
+    listTailWorkingVisible({
+      workBurst: null,
+      working: true,
+      pending: null,
+      conversationId: "c1",
+    }),
+    true,
+    "Case working alone still shows list-tail Working",
+  );
+  assert.equal(
+    listTailWorkingVisible({
+      workBurst: null,
+      working: false,
+      pending: { conversationId: "c1", label: "工作中..." },
+      conversationId: "c1",
+    }),
+    true,
+    "optimistic pending covers send→burst gap",
+  );
+  console.log("ok: listTailWorkingVisible work-burst aligned");
 }
 
 // Spec #305 S4: Working chrome may carry speaker attribution

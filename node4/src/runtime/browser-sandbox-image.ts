@@ -4,6 +4,16 @@
  */
 import { createHash } from "node:crypto";
 
+/**
+ * Sticky + ephemeral pen-sandbox process env: HOME must stay on the container
+ * rootfs (not /workspace bind). WSL/9p and some remote mounts cannot host
+ * AF_UNIX sockets under $HOME/.agent-browser/*.sock.
+ */
+export const PEN_SANDBOX_HOME_ENV = [
+  "HOME=/root",
+  "PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright",
+] as const;
+
 /** Shared explicit env pins for pen-sandbox family (browser + shell). */
 export function readExplicitSandboxImageEnv(opts?: {
   /** Browser path: NODE4_BROWSER override wins. Shell path: unified pin first. */

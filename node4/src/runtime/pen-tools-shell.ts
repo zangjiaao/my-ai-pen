@@ -16,7 +16,7 @@ import {
   pentestSandboxImagePresent,
   resolvePentestSandboxImage,
 } from "./pentest-sandbox-image.js";
-import type { BrowserSandboxSeat } from "./browser-sandbox-image.js";
+import { PEN_SANDBOX_HOME_ENV, type BrowserSandboxSeat } from "./browser-sandbox-image.js";
 import { getDefaultBrowserSandboxRuntime } from "./browser-sandbox-runtime.js";
 import { ensureSessionWorkspace } from "./session-workspace.js";
 
@@ -174,9 +174,11 @@ export function runShellEphemeralPenTools(
     `${absCwd}:/workspace:rw`,
     "-w",
     "/workspace",
-    "-e",
-    "HOME=/workspace",
   ];
+  // Same as sticky pen-sandbox: HOME off bind mount (AF_UNIX / tool caches).
+  for (const pair of PEN_SANDBOX_HOME_ENV) {
+    args.push("-e", pair);
+  }
   if (existsSync(tplHost)) {
     args.push("-v", `${tplHost}:/root/nuclei-templates:ro`);
   }

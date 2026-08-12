@@ -30,6 +30,16 @@ from app.services.expert_instances import match_expert_by_mention_token
 from app.services.case_engagement import focus_fields_from_message
 from app.services.agent_language import merge_worker_limits_into_message
 from app.models.node import PLATFORM_AGENT_NODE_ID
+from app.ws.tool_lifecycle import (
+    _append_tool_stdout,
+    _command_from_result_blob,
+    _merge_saved_message_content,
+    _merge_thinking_status,
+    _merge_tool_items,
+    _merge_tool_lifecycle_status,
+    _surface_from_tool_args,
+    _tool_item_from_content,
+)
 
 router = APIRouter()
 
@@ -1041,6 +1051,136 @@ async def _settle_running_conversations_for_node(node_id: str, reason: str = "no
     return settled
 
 
+async def _settle_inflight_execution_chrome(
+    conv_id: str,
+    *,
+    tool_status: str = "canceled",
+    thinking_status: str = "done",
+    reason: str = "burst_settled",
+) -> int:
+    """Terminalize orphan running tool_call / thinking rows after interrupt or task settle.
+
+    Case e8a62c56: interrupt mid-tool left content.status=running; next user turn set
+    sessionActive again so the old tool pulse light and Working chrome both lit.
+    Platform safety net when Node does not emit tool_execution_end on abort.
+    Broadcasts tool_output / thinking frames so live FE upserts without reload.
+    """
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return 0
+    tool_terminal = str(tool_status or "canceled").strip() or "canceled"
+    think_terminal = str(thinking_status or "done").strip() or "done"
+    patched = 0
+    broadcasts: list[dict] = []
+    try:
+        from app.db.base import async_session
+        from app.models.message import Message
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Message).where(
+                    Message.conversation_id == uuid.UUID(cid),
+                    Message.msg_type.in_(("tool_call", "thinking")),
+                    Message.content["status"].astext == "running",
+                )
+            )
+            rows = list(result.scalars().all())
+            for row in rows:
+                content = dict(row.content or {})
+                if str(content.get("status") or "").strip().lower() != "running":
+                    continue
+                if row.msg_type == "tool_call":
+                    content["status"] = tool_terminal
+                    items = content.get("tool_items")
+                    if isinstance(items, list):
+                        new_items = []
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            item_copy = dict(item)
+                            item_st = str(item_copy.get("status") or "").strip().lower()
+                            if not item_st or item_st == "running":
+                                item_copy["status"] = tool_terminal
+                            item_sum = str(item_copy.get("summary") or "").strip()
+                            if not item_sum or item_sum.endswith(" running"):
+                                item_copy["summary"] = "interrupted"
+                            new_items.append(item_copy)
+                        content["tool_items"] = new_items
+                    elif content.get("tool_name") or content.get("tool_run_id"):
+                        # Ensure FE merge has at least one terminal item.
+                        content["tool_items"] = [
+                            {
+                                "tool_name": content.get("tool_name") or "",
+                                "tool_run_id": content.get("tool_run_id"),
+                                "status": tool_terminal,
+                                "command": content.get("command") or "",
+                                "stdout": content.get("stdout") or "",
+                                "summary": "interrupted",
+                                "evidence_id": content.get("evidence_id"),
+                            }
+                        ]
+                    summary = str(content.get("summary") or "").strip()
+                    if not summary or summary.endswith(" running"):
+                        content["summary"] = "interrupted"
+                    row.content = content
+                    patched += 1
+                    broadcasts.append(
+                        {
+                            "type": "tool_output",
+                            "conversation_id": cid,
+                            "tool_name": content.get("tool_name") or "",
+                            "tool_run_id": content.get("tool_run_id"),
+                            "status": tool_terminal,
+                            "summary": content.get("summary") or "interrupted",
+                            "stdout": content.get("stdout") or "",
+                            "command": content.get("command") or "",
+                            # Full terminalized items so FE does not keep progressive
+                            # running rows when only top-level status is patched.
+                            "tool_items": content.get("tool_items") or [],
+                            "message_id": str(row.id),
+                            "agent_source": content.get("agent_source"),
+                            "expert_id": content.get("expert_id"),
+                            "expert_name": content.get("expert_name"),
+                        }
+                    )
+                elif row.msg_type == "thinking":
+                    content["status"] = think_terminal
+                    row.content = content
+                    patched += 1
+                    body = str(content.get("text") or content.get("reasoning") or "")
+                    broadcasts.append(
+                        {
+                            "type": "thinking",
+                            "conversation_id": cid,
+                            "content": {
+                                "text": body,
+                                "reasoning": body,
+                                "status": think_terminal,
+                                "stream_id": content.get("stream_id"),
+                                "message_id": str(row.id),
+                            },
+                            "stream_id": content.get("stream_id"),
+                            "message_id": str(row.id),
+                            "status": think_terminal,
+                        }
+                    )
+            if patched:
+                await db.commit()
+        for frame in broadcasts:
+            try:
+                await _broadcast_to_conversation(cid, json.dumps(frame, ensure_ascii=False))
+            except Exception as be:
+                print(f"[WS] settle inflight chrome broadcast: {be}")
+        if patched:
+            print(
+                f"[WS] settled {patched} inflight execution row(s) "
+                f"conv={cid[:8]} reason={reason} tool={tool_terminal}"
+            )
+    except Exception as e:
+        print(f"[WS] settle inflight execution chrome error: {e}")
+    return patched
+
+
 def _session_lifecycle_ack_key(msg_type: str, conversation_id: object, expert_id: object = None) -> str:
     cid = str(conversation_id or "").strip()
     eid = str(expert_id or "").strip()
@@ -1250,6 +1390,22 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             reason=msg.get("reason"),
         )
         await _broadcast_conversation_working(payload)
+        # Burst idle: terminalize orphan running tool/thinking chrome (interrupt path).
+        if not working and not payload.get("working"):
+            reason_text = str(msg.get("reason") or "work_status_idle").strip().lower()
+            tool_st = (
+                "canceled"
+                if reason_text in {"interrupted", "not_busy", "pause", "paused"}
+                else "error"
+                if reason_text in {"error", "failed"}
+                else "canceled"
+            )
+            await _settle_inflight_execution_chrome(
+                conv_id,
+                tool_status=tool_st,
+                thinking_status="done",
+                reason=f"work_status:{reason_text or 'idle'}",
+            )
         return
 
     # Settle conversation status before heavy persistence so a large checkpoint
@@ -1270,7 +1426,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             if client_id:
                 await _incr_sessions(client_id, -1)
             if conv_id:
-                await _set_conversation_status(conv_id, _terminal_status_from_task_message(msg))
+                terminal = _terminal_status_from_task_message(msg)
+                await _set_conversation_status(conv_id, terminal)
                 await _clear_active_task_id(conv_id, msg.get("task_id"))
                 # Mirror Node idle: clear this node from workers even if work_status was missed.
                 payload = await _apply_worker_state(
@@ -1282,6 +1439,20 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                     interrupt_pending=False,
                 )
                 await _broadcast_conversation_working(payload)
+                # Safety net: orphan mid-tool running cards must not re-light on next turn.
+                tool_st = (
+                    "canceled"
+                    if terminal in {"incomplete", "canceled"}
+                    else "error"
+                    if terminal in {"failed"} or msg.get("type") == "task_error"
+                    else "done"
+                )
+                await _settle_inflight_execution_chrome(
+                    conv_id,
+                    tool_status=tool_st,
+                    thinking_status="done",
+                    reason=f"{msg.get('type')}:{terminal}",
+                )
             # Usage billing hook (no payment): record expert pack used on settlement.
             if msg.get("type") == "task_complete":
                 await _record_expert_usage_billing(msg, node_id=client_id, conv_id=conv_id)
@@ -2145,14 +2316,6 @@ def _is_pentest_runtime_status(msg: dict) -> bool:
     return msg.get("workflow_kind") == "pentest" or kanban.get("workflow_kind") == "pentest"
 
 
-def _append_tool_stdout(current: object, incoming: object) -> str:
-    current_stdout = str(current or "")
-    incoming_stdout = str(incoming or "")
-    if incoming_stdout and incoming_stdout not in current_stdout:
-        separator = "" if current_stdout.endswith("\n") or not current_stdout else "\n"
-        return f"{current_stdout}{separator}{incoming_stdout}"
-    return current_stdout or incoming_stdout
-
 
 def _proof_properties_from_summary(summary: object) -> dict:
     if not isinstance(summary, str) or not summary.strip().startswith(("{", "[")):
@@ -2246,108 +2409,6 @@ def _backfill_evidence_from_proof_excerpts(evidence_rows: list, proof_excerpts: 
         row.properties = props
 
 
-def _tool_item_from_content(content: dict) -> dict:
-    item = {
-        "tool_name": content.get("tool_name", ""),
-        "tool_run_id": content.get("tool_run_id"),
-        "command": content.get("command", ""),
-        "status": content.get("status", "running"),
-        "stdout": content.get("stdout", ""),
-        "evidence_id": content.get("evidence_id"),
-    }
-    for key in ("summary", "display_title", "category", "target", "args", "result", "result_text"):
-        if content.get(key) is not None:
-            item[key] = content.get(key)
-    return item
-
-
-def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
-    current = existing.get("tool_items") if isinstance(existing.get("tool_items"), list) else [_tool_item_from_content(existing)]
-    incoming_item = _tool_item_from_content(incoming)
-    incoming_run_id = str(incoming_item.get("tool_run_id") or "")
-    merged: list[dict] = []
-    updated = False
-
-    for item in current:
-        if not isinstance(item, dict):
-            continue
-        item_run_id = str(item.get("tool_run_id") or "")
-        if incoming_run_id and item_run_id == incoming_run_id:
-            merged_item = {
-                **item,
-                **incoming_item,
-                "command": incoming_item.get("command") or item.get("command") or "",
-                "stdout": _append_tool_stdout(item.get("stdout"), incoming_item.get("stdout")),
-                "status": incoming_item.get("status") or item.get("status") or "running",
-                "evidence_id": incoming_item.get("evidence_id") or item.get("evidence_id"),
-            }
-            for key in ("summary", "display_title", "category", "target", "args", "result", "result_text"):
-                merged_item[key] = incoming_item.get(key) if incoming_item.get(key) is not None else item.get(key)
-            merged.append(merged_item)
-            updated = True
-        else:
-            merged.append(item)
-
-    if not updated:
-        merged.append(incoming_item)
-    return merged
-
-
-def _merge_thinking_status(existing: object, incoming: object) -> str | None:
-    """Prefer terminal done over stale running; never drop done (Spec #305).
-
-    Done synonyms MUST stay aligned with frontend normalizeExecutionStatus
-    (platform/frontend/src/lib/status.ts):
-      done | ok | success | completed | complete | saved | loaded
-    Fail synonyms (for reference; thinking rarely uses them):
-      fail | failed | error | blocked | canceled | cancelled
-    Empty / unknown → not done (caller keeps raw running etc.).
-    """
-    done_vals = {"done", "ok", "success", "completed", "complete", "saved", "loaded"}
-    e = str(existing or "").strip().lower()
-    i = str(incoming or "").strip().lower()
-    if e in done_vals or i in done_vals:
-        return "done"
-    if i:
-        return i
-    if e:
-        return e
-    return None
-
-
-def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) -> dict:
-    if msg_type != "tool_call":
-        # Streaming text/thinking: always keep the longer body so partial frames
-        # cannot regress a fuller snapshot that arrived out of order.
-        merged = {**existing, **incoming}
-        if msg_type in {"text", "thinking"}:
-            prev = str(existing.get("text") or existing.get("reasoning") or "")
-            nxt = str(incoming.get("text") or incoming.get("reasoning") or "")
-            if len(prev) > len(nxt):
-                merged["text"] = prev
-                if msg_type == "thinking":
-                    merged["reasoning"] = prev
-            elif nxt:
-                merged["text"] = nxt
-                if msg_type == "thinking":
-                    merged["reasoning"] = nxt
-            if msg_type == "thinking":
-                status = _merge_thinking_status(existing.get("status"), incoming.get("status"))
-                if status is not None:
-                    merged["status"] = status
-                elif "status" in merged and merged.get("status") in (None, ""):
-                    merged.pop("status", None)
-        return merged
-    stdout = _append_tool_stdout(existing.get("stdout"), incoming.get("stdout"))
-    return {
-        **existing,
-        **incoming,
-        "command": incoming.get("command") or existing.get("command") or "",
-        "evidence_id": incoming.get("evidence_id") or existing.get("evidence_id"),
-        "stdout": stdout,
-        "status": incoming.get("status") or existing.get("status") or "running",
-        "tool_items": _merge_tool_items(existing, incoming),
-    }
 
 
 def _stamp_worker_audit_scope(content: dict, msg: dict) -> None:
@@ -2530,18 +2591,36 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             _stamp_worker_audit_scope(content, msg)
         elif msg_type == "tool_output":
             msg_type = "tool_call"
+            command = str(msg.get("command") or "").strip()
+            target = str(msg.get("target") or "").strip()
+            args_obj = msg.get("args") if isinstance(msg.get("args"), dict) else {}
+            if not command or not target:
+                surf_cmd, surf_tgt = _surface_from_tool_args(msg.get("tool_name"), args_obj or msg.get("args"))
+                if not command:
+                    command = surf_cmd
+                if not target:
+                    target = surf_tgt
+            # Shell command often only appears inside result_text jsonResult.
+            if not command:
+                command = (
+                    _command_from_result_blob(msg.get("result"))
+                    or _command_from_result_blob(msg.get("result_text"))
+                    or _command_from_result_blob(msg.get("summary"))
+                )
+            if command and isinstance(args_obj, dict) and not str(args_obj.get("command") or "").strip():
+                args_obj = {**args_obj, "command": command}
             content = {
                 "tool_name": msg.get("tool_name", ""),
                 "tool_run_id": msg.get("tool_run_id"),
-                "command": msg.get("command", ""),
+                "command": command,
                 "status": msg.get("status", "running"),
                 "stdout": msg.get("stdout") or msg.get("line", ""),
                 "evidence_id": msg.get("evidence_id"),
                 "summary": msg.get("summary") or msg.get("line", ""),
                 "display_title": msg.get("display_title"),
                 "category": msg.get("category"),
-                "target": msg.get("target"),
-                "args": msg.get("args"),
+                "target": target,
+                "args": args_obj or msg.get("args"),
                 "result": msg.get("result"),
                 "result_text": msg.get("result_text"),
             }
@@ -6632,8 +6711,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                 if conv_id:
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
-                    # Do not persist control frames as empty user text (interrupt/steer).
-                    if msg.get("type") not in ("user_interrupt", "user_steer", "subscribe"):
+                    # Persist user text including mid-run steers (timeline honesty).
+                    # Interrupt/subscribe are control-only — no empty user bubbles.
+                    msg_type_in = str(msg.get("type") or "")
+                    if msg_type_in in ("user_interrupt", "subscribe"):
+                        pass
+                    elif msg_type_in == "user_steer":
+                        if str(msg.get("text") or msg.get("display_text") or "").strip():
+                            await _save_message(msg, "user")
+                    else:
                         await _save_message(msg, "user")
 
                 if msg.get("type") == "user_message" and conv_id:
@@ -7072,6 +7158,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             working_payload["status"] = settle_status
                             working_payload["working"] = False
                             working_payload["interrupting"] = False
+                            # Idle interrupt: no online workers — still clear stuck running tools.
+                            await _settle_inflight_execution_chrome(
+                                conv_id,
+                                tool_status="canceled",
+                                thinking_status="done",
+                                reason=f"interrupt_idle:{settle_status}",
+                            )
 
                         await _broadcast_conversation_working(working_payload)
                         if wind_down:

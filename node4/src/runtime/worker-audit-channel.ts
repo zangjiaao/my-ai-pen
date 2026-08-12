@@ -422,6 +422,10 @@ export async function emitWorkerToolFrame(options: {
   summary?: string;
   resultText?: string;
   args?: Record<string, unknown>;
+  /** Optional shell/script command for process audit detail (mirrors Main chip). */
+  command?: string;
+  /** Optional URL/path/op detail for non-shell tools. */
+  target?: string;
 }): Promise<boolean> {
   const scope = readWorkerAuditScope(options.runtime);
   if (!scope) return false;
@@ -433,6 +437,8 @@ export async function emitWorkerToolFrame(options: {
     tool_run_id: options.toolCallId,
     status: options.status,
     summary: String(options.summary || "").slice(0, 500),
+    command: options.command || undefined,
+    target: options.target || undefined,
     result_text: options.resultText != null ? String(options.resultText).slice(0, 4000) : undefined,
     args: options.args || {},
   } as any);

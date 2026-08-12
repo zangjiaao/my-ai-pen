@@ -22,6 +22,7 @@ import {
   agentBrowserSessionName,
   containerNameForSeat,
   formatBrowserSandboxSeatKey,
+  PEN_SANDBOX_HOME_ENV,
   resolveBrowserSandboxImage,
   type BrowserSandboxSeat,
 } from "./browser-sandbox-image.js";
@@ -94,7 +95,12 @@ export class BrowserSandboxRuntime {
   private readonly nodeId: string;
   private readonly instanceId: string;
   private readonly now: () => number;
-  private readonly leaseConfig: BrowserSandboxLeaseConfig;
+  /**
+   * Constructor overrides only. Live knobs re-read from process.env on each
+   * getLeaseConfig(). Prefer `tsx --import ./src/load-env.ts` + lazy singleton
+   * so env is ready before first construct; re-read is belt-and-suspenders.
+   */
+  private readonly leaseConfigOverrides: Partial<BrowserSandboxLeaseConfig>;
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly locks = new Map<string, Promise<unknown>>();
   /** Seats with an in-flight work-burst (lease heartbeat priority). */
@@ -108,17 +114,22 @@ export class BrowserSandboxRuntime {
     this.nodeId = opts.nodeId?.trim() || process.env.NODE_NAME?.trim() || "pentest-node4-01";
     this.instanceId = opts.instanceId?.trim() || BROWSER_SANDBOX_INSTANCE_ID;
     this.now = opts.now ?? (() => Date.now());
-    const base = loadBrowserSandboxLeaseConfig();
-    this.leaseConfig = {
-      heartbeatMs: opts.leaseConfig?.heartbeatMs ?? base.heartbeatMs,
-      leaseMs: opts.leaseConfig?.leaseMs ?? base.leaseMs,
-      janitorMs: opts.leaseConfig?.janitorMs ?? base.janitorMs,
-      idleStopMs: opts.leaseConfig?.idleStopMs ?? base.idleStopMs,
-    };
+    this.leaseConfigOverrides = { ...(opts.leaseConfig || {}) };
   }
 
+  /**
+   * Env is source of truth at call time; constructor leaseConfig is test/prod override.
+   * Must not snapshot env at construct — main imports this module before loadDotEnv().
+   */
   getLeaseConfig(): BrowserSandboxLeaseConfig {
-    return { ...this.leaseConfig };
+    const base = loadBrowserSandboxLeaseConfig();
+    const o = this.leaseConfigOverrides;
+    return {
+      heartbeatMs: o.heartbeatMs ?? base.heartbeatMs,
+      leaseMs: o.leaseMs ?? base.leaseMs,
+      janitorMs: o.janitorMs ?? base.janitorMs,
+      idleStopMs: o.idleStopMs ?? base.idleStopMs,
+    };
   }
 
   getInstanceId(): string {
@@ -139,23 +150,8 @@ export class BrowserSandboxRuntime {
     if (key) this.heldSeats.delete(key);
   }
 
-  /** @deprecated Use holdSeat — seat key, not parent task id. */
-  holdParentTask(seatKey: string): void {
-    this.holdSeat(seatKey);
-  }
-
-  /** @deprecated Use releaseSeat */
-  releaseParentTask(seatKey: string): void {
-    this.releaseSeat(seatKey);
-  }
-
   listHeldSeats(): string[] {
     return [...this.heldSeats];
-  }
-
-  /** @deprecated Use listHeldSeats */
-  listHeldParentTasks(): string[] {
-    return this.listHeldSeats();
   }
 
   private async withSeatLock<T>(seatKey: string, fn: () => Promise<T>): Promise<T> {
@@ -183,7 +179,7 @@ export class BrowserSandboxRuntime {
   }
 
   private leaseUntilFromNow(): number {
-    return Math.floor((this.now() + this.leaseConfig.leaseMs) / 1000);
+    return Math.floor((this.now() + this.getLeaseConfig().leaseMs) / 1000);
   }
 
   async ensure(
@@ -313,10 +309,8 @@ export class BrowserSandboxRuntime {
       "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
       "no_proxy=localhost,127.0.0.1,host.docker.internal",
       `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
+      ...PEN_SANDBOX_HOME_ENV,
     ];
-    if (workspaceHostPath) {
-      env.push("HOME=/workspace");
-    }
 
     await this.docker.rmForce(name, 30_000);
 
@@ -397,23 +391,106 @@ export class BrowserSandboxRuntime {
   }
 
   /**
-   * Spec #430: stop seats with no tool traffic for idleStopMs (never rm).
+   * Spec #430: stop seats with no pen-sandbox tool traffic for idleStopMs (never rm).
    * Skips currently held seats (mid-burst).
+   *
+   * Also scans Docker labels so sticky boxes survive a Node restart with an empty
+   * process map — previously idle stop only walked `sessions` + required
+   * lastTrafficMs, so host boxes stayed Up forever after restart (lab: 5m idle
+   * env looked "ignored").
    */
   async stopIdleSeats(nowMs?: number): Promise<string[]> {
-    const idleMs = this.leaseConfig.idleStopMs;
+    const idleMs = this.getLeaseConfig().idleStopMs;
     if (!idleMs || idleMs <= 0) return [];
     const now = nowMs ?? this.now();
     const stopped: string[] = [];
+    const considered = new Set<string>();
+
+    const lastActivityMs = async (key: string, containerName: string): Promise<number | null> => {
+      const t = this.lastTrafficMs.get(key);
+      if (t != null) return t;
+      if (this.docker.inspectStartedAtMs) {
+        return this.docker.inspectStartedAtMs(containerName, 15_000);
+      }
+      return null;
+    };
+
     for (const [key, rec] of this.sessions) {
       if (!rec.started) continue;
       if (this.heldSeats.has(key)) continue;
-      const lastMs = this.lastTrafficMs.get(key);
+      considered.add(key);
+      const lastMs = await lastActivityMs(key, rec.containerName);
+      // No traffic clock and no StartedAt → do not stop map-known seats (avoid
+      // killing a box mid first-ensure). Host orphans handled below.
       if (lastMs == null) continue;
       if (now - lastMs < idleMs) continue;
       await this.stop(key);
       stopped.push(key);
     }
+
+    // Host scan: process restart left sticky boxes running with empty map.
+    try {
+      const items = await this.docker.listBrowserSandboxes();
+      const candidates = items.filter((item) => {
+        const seatKey = String(
+          item.labels?.[BROWSER_SANDBOX_LABEL.seatKey] ||
+            item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId] ||
+            "",
+        ).trim();
+        return Boolean(seatKey) && !considered.has(seatKey) && !this.heldSeats.has(seatKey);
+      });
+      // Parallel inspect — avoid serial docker RPC per box.
+      // Clock policy matches map seats: no lastTraffic and no StartedAt → skip
+      // (do not fail-open into stop on inspect jitter / unknown age).
+      const decisions = await Promise.all(
+        candidates.map(async (item) => {
+          const seatKey = String(
+            item.labels?.[BROWSER_SANDBOX_LABEL.seatKey] ||
+              item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId] ||
+              "",
+          ).trim();
+          const state = await this.docker.inspectState(item.name, 15_000);
+          if (state !== "running") return null;
+          const lastMs = await lastActivityMs(seatKey, item.name);
+          if (lastMs == null) {
+            console.warn(
+              `[node4] pen-sandbox idle skip (no clock): seat=${seatKey} name=${item.name}`,
+            );
+            return null;
+          }
+          if (now - lastMs < idleMs) return null;
+          return { seatKey, item };
+        }),
+      );
+      for (const d of decisions) {
+        if (!d) continue;
+        const { seatKey, item } = d;
+        if (considered.has(seatKey)) continue;
+        // Stop by Docker name; remember stopped sticky for later ensure/start.
+        await this.docker.stop(item.name, 60_000).catch(() => {});
+        const conv = String(item.labels?.[BROWSER_SANDBOX_LABEL.conversationId] || "").trim();
+        const expert = String(item.labels?.[BROWSER_SANDBOX_LABEL.expertId] || "").trim();
+        const existing = this.sessions.get(seatKey);
+        if (existing) {
+          existing.started = false;
+          existing.containerName = item.name;
+        } else {
+          this.sessions.set(seatKey, {
+            containerName: item.name,
+            image: "",
+            conversationId: conv,
+            expertId: expert,
+            seatKey,
+            started: false,
+          });
+        }
+        stopped.push(seatKey);
+        considered.add(seatKey);
+      }
+    } catch {
+      /* best-effort label scan */
+    }
+
     return stopped;
   }
 
@@ -431,9 +508,8 @@ export class BrowserSandboxRuntime {
       const session = this.sessions.get(key);
       const name = session?.containerName ?? containerNameForSeat(key);
 
-      if (session) {
-        await this.docker.exec(name, ["agent-browser", "close", "--all"], 30_000).catch(() => {});
-      }
+      // Skip agent-browser close (up to 30s): docker rm -f tears down the box
+      // and kills the browser process. Prefer fast Case/Session Delete paths.
       await this.docker.rmForce(name, 30_000);
       this.sessions.delete(key);
     });
@@ -547,28 +623,24 @@ export class BrowserSandboxRuntime {
   }
 }
 
-const defaultRuntime = new BrowserSandboxRuntime();
+/**
+ * Lazy singleton — construct only after loadDotEnv / --import load-env so
+ * process.env knobs (e.g. PEN_SANDBOX_IDLE_STOP_MS) are visible. getLeaseConfig
+ * still re-reads env at call time as belt-and-suspenders.
+ */
+let defaultRuntime: BrowserSandboxRuntime | null = null;
 
 export function getDefaultBrowserSandboxRuntime(): BrowserSandboxRuntime {
+  if (!defaultRuntime) defaultRuntime = new BrowserSandboxRuntime();
   return defaultRuntime;
 }
 
 export function holdBrowserSandboxSeat(seat: BrowserSandboxSeat | string): void {
-  defaultRuntime.holdSeat(seat);
+  getDefaultBrowserSandboxRuntime().holdSeat(seat);
 }
 
 export function releaseBrowserSandboxSeat(seat: BrowserSandboxSeat | string): void {
-  defaultRuntime.releaseSeat(seat);
-}
-
-/** @deprecated Use holdBrowserSandboxSeat */
-export function holdBrowserSandboxTask(seatKey: string): void {
-  holdBrowserSandboxSeat(seatKey);
-}
-
-/** @deprecated Use releaseBrowserSandboxSeat */
-export function releaseBrowserSandboxTask(seatKey: string): void {
-  releaseBrowserSandboxSeat(seatKey);
+  getDefaultBrowserSandboxRuntime().releaseSeat(seat);
 }
 
 export type BrowserSandboxBackgroundHandles = {
@@ -576,10 +648,18 @@ export type BrowserSandboxBackgroundHandles = {
 };
 
 export function startBrowserSandboxBackgroundJobs(
-  runtime: BrowserSandboxRuntime = defaultRuntime,
+  runtime: BrowserSandboxRuntime = getDefaultBrowserSandboxRuntime(),
 ): BrowserSandboxBackgroundHandles {
-  const { heartbeatMs, janitorMs, idleStopMs } = runtime.getLeaseConfig();
   let stopped = false;
+  // Boot log from live config (getLeaseConfig re-reads env).
+  const boot = runtime.getLeaseConfig();
+  console.log(
+    `[node4] pen-sandbox idle stop: ${
+      boot.idleStopMs > 0
+        ? `${boot.idleStopMs}ms (~${Math.round(boot.idleStopMs / 60_000)}m)`
+        : "disabled"
+    }`,
+  );
 
   const runJanitor = () => {
     if (stopped) return;
@@ -606,6 +686,7 @@ export function startBrowserSandboxBackgroundJobs(
 
   const runIdleStop = () => {
     if (stopped) return;
+    // Always use live getLeaseConfig().idleStopMs inside stopIdleSeats.
     void runtime
       .stopIdleSeats()
       .then((keys) => {
@@ -616,31 +697,70 @@ export function startBrowserSandboxBackgroundJobs(
       .catch(() => {});
   };
 
-  runJanitor();
+  /** Idle poll period from current knobs — min(idle/4, 5m), floor 60s when enabled. */
+  const idlePeriodMs = (): number => {
+    const idleStopMs = runtime.getLeaseConfig().idleStopMs;
+    if (!idleStopMs || idleStopMs <= 0) return 0;
+    return Math.min(Math.max(Math.floor(idleStopMs / 4), 60_000), 5 * 60_000);
+  };
 
-  const janitorTimer = setInterval(runJanitor, janitorMs);
-  const heartbeatTimer = setInterval(runHeartbeat, heartbeatMs);
-  // Idle check at most every min(idleStop/4, 5m) or 60s floor when idle enabled.
-  const idlePeriod =
-    idleStopMs > 0 ? Math.min(Math.max(Math.floor(idleStopMs / 4), 60_000), 5 * 60_000) : 0;
-  const idleTimer = idlePeriod > 0 ? setInterval(runIdleStop, idlePeriod) : null;
-  janitorTimer.unref?.();
-  heartbeatTimer.unref?.();
-  idleTimer?.unref?.();
+  runJanitor();
+  // First idle pass at boot (same as janitor) so restart reclaims aged host boxes
+  // without waiting for the first interval.
+  if (idlePeriodMs() > 0) runIdleStop();
+
+  // Heartbeat / janitor periods: re-read on each fire via nested setTimeout so
+  // env changes after boot are not frozen (idle threshold already live in stopIdleSeats).
+  let janitorTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleJanitor = () => {
+    if (stopped) return;
+    const ms = runtime.getLeaseConfig().janitorMs;
+    janitorTimer = setTimeout(() => {
+      runJanitor();
+      scheduleJanitor();
+    }, ms);
+    janitorTimer.unref?.();
+  };
+  const scheduleHeartbeat = () => {
+    if (stopped) return;
+    const ms = runtime.getLeaseConfig().heartbeatMs;
+    heartbeatTimer = setTimeout(() => {
+      runHeartbeat();
+      scheduleHeartbeat();
+    }, ms);
+    heartbeatTimer.unref?.();
+  };
+  const scheduleIdle = () => {
+    if (stopped) return;
+    const ms = idlePeriodMs();
+    if (ms <= 0) return;
+    idleTimer = setTimeout(() => {
+      runIdleStop();
+      scheduleIdle();
+    }, ms);
+    idleTimer.unref?.();
+  };
+
+  scheduleJanitor();
+  scheduleHeartbeat();
+  scheduleIdle();
 
   return {
     stop: () => {
       stopped = true;
-      clearInterval(janitorTimer);
-      clearInterval(heartbeatTimer);
-      if (idleTimer) clearInterval(idleTimer);
+      if (janitorTimer) clearTimeout(janitorTimer);
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      if (idleTimer) clearTimeout(idleTimer);
     },
   };
 }
 
 /** Process-default dispose for one seat (Session delete / inject — not task-end). */
 export async function disposeBrowserSandbox(seatKey: string): Promise<void> {
-  return defaultRuntime.dispose(seatKey);
+  return getDefaultBrowserSandboxRuntime().dispose(seatKey);
 }
 
 /** Spec #429: rm sticky box for one Participant Session seat. */
@@ -652,22 +772,22 @@ export async function disposeBrowserSandboxForSeat(
   const e = String(expertId || "").trim();
   if (!c || !e) return;
   const seatKey = formatBrowserSandboxSeatKey(c, e);
-  return defaultRuntime.dispose({ conversationId: c, expertId: e, seatKey });
+  return getDefaultBrowserSandboxRuntime().dispose({ conversationId: c, expertId: e, seatKey });
 }
 
 /** Spec #429: rm all sticky boxes under a Case. */
 export async function disposeBrowserSandboxForCase(conversationId: string): Promise<number> {
-  return defaultRuntime.disposeForConversation(conversationId);
+  return getDefaultBrowserSandboxRuntime().disposeForConversation(conversationId);
 }
 
 /** Process-default dispose of all sandboxes on this instance (prefer stopAll on graceful shutdown). */
 export async function disposeAllBrowserSandboxes(): Promise<void> {
-  return defaultRuntime.disposeAll();
+  return getDefaultBrowserSandboxRuntime().disposeAll();
 }
 
 /** Spec #430: stop all sticky boxes (Node graceful shutdown). */
 export async function stopAllBrowserSandboxes(): Promise<number> {
-  return defaultRuntime.stopAll();
+  return getDefaultBrowserSandboxRuntime().stopAll();
 }
 
 export type { BrowserSandboxDockerPort, BrowserSandboxListItem, SandboxExecResult } from "./browser-sandbox-docker.js";

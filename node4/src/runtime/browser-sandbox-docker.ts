@@ -9,6 +9,7 @@ import {
   BROWSER_SANDBOX_LEASE_PATH,
   parseLeaseUntilUnix,
 } from "./browser-sandbox-labels.js";
+import { PEN_SANDBOX_HOME_ENV } from "./browser-sandbox-image.js";
 
 export type SandboxExecResult = {
   exitCode: number | null;
@@ -61,6 +62,11 @@ export type BrowserSandboxDockerPort = {
    * missing | running | stopped | unknown
    */
   inspectState(name: string, timeoutMs?: number): Promise<"missing" | "running" | "stopped" | "unknown">;
+  /**
+   * Container start time in epoch ms (for idle stop after Node restart when
+   * process-local lastTrafficMs is empty). null when unknown / missing.
+   */
+  inspectStartedAtMs?(name: string, timeoutMs?: number): Promise<number | null>;
 };
 
 export function dockerBin(): string {
@@ -156,10 +162,15 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
     },
     async exec(name, argv, timeoutMs = 120_000) {
       // Run argv as-is (no outer bash -lc). Callers pass ["bash","-lc",script] when shell is needed.
+      // Force HOME off /workspace on every exec so legacy sticky boxes still get AF_UNIX.
       if (!argv.length) {
         return { exitCode: 1, stdout: "", stderr: "exec argv empty" };
       }
-      return runProcess(bin, ["exec", name, ...argv], timeoutMs);
+      const envArgs: string[] = [];
+      for (const pair of PEN_SANDBOX_HOME_ENV) {
+        envArgs.push("-e", pair);
+      }
+      return runProcess(bin, ["exec", ...envArgs, name, ...argv], timeoutMs);
     },
     async listBrowserSandboxes() {
       const listed = await runProcess(
@@ -255,6 +266,18 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
       if (raw === "true") return "running";
       if (raw === "false") return "stopped";
       return "unknown";
+    },
+    async inspectStartedAtMs(name, timeoutMs = 15_000) {
+      const r = await runProcess(
+        bin,
+        ["inspect", "--format", "{{.State.StartedAt}}", name],
+        timeoutMs,
+      );
+      if (r.unavailable || r.exitCode !== 0) return null;
+      const raw = r.stdout.trim();
+      if (!raw || raw.startsWith("0001-01-01")) return null;
+      const ms = Date.parse(raw);
+      return Number.isFinite(ms) ? ms : null;
     },
     async writeLease(name, leaseUntilUnix, timeoutMs = 15_000) {
       const body = String(Math.floor(leaseUntilUnix));

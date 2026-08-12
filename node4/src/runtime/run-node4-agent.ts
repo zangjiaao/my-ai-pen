@@ -22,6 +22,14 @@ import {
   createMidRunTodoTracker,
   noteToolForMidRunTodoNudge,
 } from "./todo-harness.js";
+import {
+  TOOL_RESULT_TEXT_WIRE_MAX,
+  clipToolResultTextForWire,
+  commandFromToolArgs,
+  commandFromResultText,
+  enrichArgsWithCommand,
+  surfaceFieldsFromToolArgs,
+} from "./tool-result-wire.js";
 
 export type Node4AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -383,6 +391,11 @@ export function namedToolInvocationsFromPartial(message: unknown): NamedToolInvo
  * Segment counters still bump only on tool_execution_start (actual execution).
  * At most one progressive `running` frame per toolCallId (no execute re-emit after name-known).
  *
+ * **Interrupt settle:** user_interrupt aborts the session; pi often does not emit
+ * tool_execution_end for in-flight tools. Without a terminal frame, platform keeps
+ * status=running and the next turn re-lights both the old tool card and Working chrome
+ * (Case e8a62c56). Bridge wraps session.abort/dispose to emit error for open ids.
+ *
  * Product policy (A) + Spec #308: **subagent package sessions do not emit Main chat tool_output.**
  * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement; if Worker audit
  * scope is set (`lifecycle.workerAudit`), emit parallel Worker-channel frames instead.
@@ -393,8 +406,10 @@ export function attachProductToolEventBridge(
   runtime: ToolRuntime,
   segmentCounter?: { tools: number },
 ): () => void {
-  /** toolCallIds that already received a progressive running frame (name-known or execute). */
-  const runningEmitted = new Set<string>();
+  /** Open progressive tools: id → name + last args (for command chip + interrupt settle). */
+  const openRunning = new Map<string, { toolName: string; args?: Record<string, unknown> }>();
+  /** In-flight settle promise — coalesces concurrent abort+dispose; resets after. */
+  let settling: Promise<void> | null = null;
 
   async function emitToolFrame(opts: {
     toolName: string;
@@ -405,12 +420,22 @@ export function attachProductToolEventBridge(
     resultText?: string;
   }): Promise<void> {
     const toolName = opts.toolName || "tool";
+    // Ensure shell/script command is always on args for Main row (request line).
+    const args = enrichArgsWithCommand(opts.args, opts.resultText);
     const summary =
       opts.summary != null
         ? String(opts.summary).slice(0, 500)
         : opts.status === "running"
           ? `${toolName} running`
           : "";
+    // Surface user-facing detail fields for Main chip (all tools, not only shell).
+    const surface = surfaceFieldsFromToolArgs(toolName, args);
+    const command =
+      surface.command
+      || commandFromToolArgs(args)
+      || commandFromResultText(opts.resultText)
+      || undefined;
+    const target = surface.target || undefined;
     if (isSubagentPackageSession(runtime)) {
       const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
       await emitWorkerToolFrame({
@@ -419,8 +444,10 @@ export function attachProductToolEventBridge(
         toolCallId: opts.toolCallId,
         status: opts.status,
         summary,
-        args: opts.args,
+        args,
         resultText: opts.resultText,
+        command,
+        target,
       });
       return;
     }
@@ -436,10 +463,50 @@ export function attachProductToolEventBridge(
       tool_run_id: opts.toolCallId,
       status: opts.status,
       summary,
-      args: opts.args,
-      result_text: opts.resultText != null ? String(opts.resultText).slice(0, 4000) : undefined,
+      command,
+      target,
+      args,
+      result_text:
+        opts.resultText != null
+          ? clipToolResultTextForWire(String(opts.resultText), TOOL_RESULT_TEXT_WIRE_MAX)
+          : undefined,
       ...speaker,
     });
+  }
+
+  /**
+   * Terminalize open progressive tools when the burst is aborted/disposed.
+   * Concurrent abort+dispose coalesce on one pass. After the pass completes,
+   * a later turn on a parked session can open new tools and abort again
+   * (do not permanently latch "settled").
+   * Uses status=error (FE fail chrome) + summary=interrupted so cards stop
+   * pulsing even if pi never fires tool_execution_end. Re-sends last args so
+   * the command chip still shows what was running.
+   */
+  async function settleOpenTools(summary = "interrupted"): Promise<void> {
+    if (settling) return settling;
+    settling = (async () => {
+      const open = [...openRunning.entries()];
+      openRunning.clear();
+      for (const [toolCallId, meta] of open) {
+        try {
+          await emitToolFrame({
+            toolName: meta.toolName,
+            toolCallId,
+            status: "error",
+            summary,
+            args: meta.args,
+          });
+        } catch {
+          /* best-effort — platform safety net also settles durable rows */
+        }
+      }
+    })();
+    try {
+      await settling;
+    } finally {
+      settling = null;
+    }
   }
 
   async function emitRunningOnce(
@@ -447,18 +514,56 @@ export function attachProductToolEventBridge(
     toolCallId: string,
     args?: Record<string, unknown>,
   ): Promise<void> {
-    if (runningEmitted.has(toolCallId)) return;
-    runningEmitted.add(toolCallId);
+    if (!toolCallId) return;
+    const prev = openRunning.get(toolCallId);
+    const nextArgs =
+      args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length > 0
+        ? args
+        : prev?.args;
+    if (prev) {
+      // Name-known often fires first with empty args — always store execute args so
+      // end/settle can show the shell command / filters. Re-emit running only when
+      // the **request line** appears (command/target), not on every arg blob
+      // (keeps Spec #350: at most one progressive running unless request text grows).
+      const prevKeys = Object.keys(prev.args || {}).length;
+      const nextKeys = Object.keys(nextArgs || {}).length;
+      const argsEnriched =
+        Boolean(nextArgs && nextKeys > 0)
+        && (nextKeys > prevKeys
+          || JSON.stringify(nextArgs) !== JSON.stringify(prev.args || {}));
+      const name = prev.toolName || toolName || "tool";
+      if (argsEnriched) {
+        openRunning.set(toolCallId, { toolName: name, args: nextArgs });
+        const prevLine =
+          surfaceFieldsFromToolArgs(name, prev.args).command
+          || surfaceFieldsFromToolArgs(name, prev.args).target
+          || commandFromToolArgs(prev.args);
+        const nextLine =
+          surfaceFieldsFromToolArgs(name, nextArgs).command
+          || surfaceFieldsFromToolArgs(name, nextArgs).target
+          || commandFromToolArgs(nextArgs);
+        if (nextLine && nextLine !== prevLine) {
+          await emitToolFrame({
+            toolName: name,
+            toolCallId,
+            status: "running",
+            args: nextArgs,
+          });
+        }
+      }
+      return;
+    }
+    openRunning.set(toolCallId, { toolName: toolName || "tool", args: nextArgs });
     // Args may be incomplete at name-known — do not dump streaming bodies (story 30).
     await emitToolFrame({
       toolName,
       toolCallId,
       status: "running",
-      args: args || {},
+      args: nextArgs || {},
     });
   }
 
-  return session.subscribe(async (event: AgentEvent) => {
+  const unsub = session.subscribe(async (event: AgentEvent) => {
     // Spec #350 D1: project running as soon as name+id known while args may still stream.
     if (event.type === "message_update") {
       const msg = event.message;
@@ -490,30 +595,51 @@ export function attachProductToolEventBridge(
     }
 
     if (event.type === "tool_execution_end") {
-      const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
+      const openMeta = openRunning.get(toolCallId);
+      const toolName = String(event.toolName || openMeta?.toolName || "tool");
       const result = event.result;
       const content =
         result && typeof result === "object" && Array.isArray(result.content)
           ? (result.content as Array<{ type?: string; text?: string }>)
           : [];
-      const text = content
-        .filter((item) => item?.type === "text")
-        .map((item) => item.text || "")
-        .join("\n")
-        .slice(0, 4000);
+      const text = clipToolResultTextForWire(
+        content
+          .filter((item) => item?.type === "text")
+          .map((item) => item.text || "")
+          .join("\n"),
+        TOOL_RESULT_TEXT_WIRE_MAX,
+      );
       // Prefer pi event.isError (after afterToolCall promotion of details.isError).
       const isError = resolveToolExecutionEndIsError(event);
-      runningEmitted.delete(toolCallId);
+      openRunning.delete(toolCallId);
       await emitToolFrame({
         toolName,
         toolCallId,
         status: isError ? "error" : "done",
         summary: text.slice(0, 500),
         resultText: text,
+        args: openMeta?.args,
       });
     }
   });
+
+  // User interrupt / session dispose: pi often skips tool_execution_end for in-flight tools.
+  const prevAbort = session.abort.bind(session);
+  session.abort = () => {
+    void settleOpenTools("interrupted");
+    prevAbort();
+  };
+  const prevDispose = session.dispose.bind(session);
+  session.dispose = () => {
+    void settleOpenTools("interrupted");
+    return prevDispose();
+  };
+
+  return () => {
+    void settleOpenTools("interrupted");
+    unsub();
+  };
 }
 
 /** True for Agent Graph package workers (not Hard Graph stage Main). */
@@ -524,3 +650,14 @@ export function isSubagentPackageSession(runtime: ToolRuntime): boolean {
   const tid = String(runtime.task?.taskId || "");
   return /\/sub\//.test(tid);
 }
+
+export {
+  TOOL_RESULT_TEXT_WIRE_MAX,
+  SHELL_COMMAND_WIRE_MAX,
+  isShellToolResultPayload,
+  clipToolResultTextForWire,
+  commandFromToolArgs,
+  commandFromResultText,
+  enrichArgsWithCommand,
+  surfaceFieldsFromToolArgs,
+} from "./tool-result-wire.js";

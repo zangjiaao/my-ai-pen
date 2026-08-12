@@ -25,6 +25,7 @@ export {
   containerNameForSeat,
   formatBrowserSandboxSeatKey,
   isBrowserSandboxPreferred,
+  PEN_SANDBOX_HOME_ENV,
   readExplicitSandboxImageEnv,
   resolveBrowserSandboxImage,
   resolveBrowserSandboxParentTaskId,
@@ -46,9 +47,7 @@ export {
   disposeBrowserSandboxForSeat,
   getDefaultBrowserSandboxRuntime,
   holdBrowserSandboxSeat,
-  holdBrowserSandboxTask,
   releaseBrowserSandboxSeat,
-  releaseBrowserSandboxTask,
   startBrowserSandboxBackgroundJobs,
   stopAllBrowserSandboxes,
 } from "./browser-sandbox-runtime.js";

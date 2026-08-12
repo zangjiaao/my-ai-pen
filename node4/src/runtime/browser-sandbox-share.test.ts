@@ -93,6 +93,12 @@ try {
           opts.env.some((e) => e === `AGENT_BROWSER_SESSION=${agentBrowserSessionName(seat.seatKey)}`),
           "shared AGENT_BROWSER_SESSION for seat",
         );
+        assert(opts.env.some((e) => e.startsWith("HOME=")), "HOME set for rootfs");
+        assert(opts.env.includes("HOME=/root"), "HOME on rootfs not workspace bind");
+        assert(
+          opts.env.includes("PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright"),
+          "Playwright browsers under /root cache",
+        );
         return { exitCode: 0, stdout: opts.name, stderr: "" };
       },
       async exec() {

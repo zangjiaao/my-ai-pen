@@ -264,13 +264,19 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           parent_id: n.parent_id || null,
         }));
       const open_count = runtime.todo.openCount();
+      // Request identity first (task/phase/completed_tasks) so Main tool rows and 4k
+      // result_text truncation still know *which* item was start/done — not only "op".
       return jsonResult({
         ok: true,
         op,
-        summary: formatTodoSummary(result.phases, [], result.readOnly),
-        work_items,
-        open_count,
+        task: input.task || undefined,
+        phase: input.phase || undefined,
+        note: input.note != null ? String(params.note || "").trim() || undefined : undefined,
         completed_tasks: result.completedTasks,
+        open_count,
+        summary: formatTodoSummary(result.phases, [], result.readOnly),
+        // Bulky fields last — wire truncates result_text (~4k); keep identity above.
+        work_items,
         phases: result.phases,
         plan_nodes,
         // Spec #116 I0.10: Expert Graph always requires plan_node_id (dispatch = ownership).

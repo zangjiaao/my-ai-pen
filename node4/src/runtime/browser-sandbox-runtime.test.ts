@@ -33,12 +33,15 @@ function makeFakeDocker() {
   const running = new Set<string>();
   const known = new Set<string>();
   const imagesUsed: string[] = [];
+  const startedAtMs = new Map<string, number>();
+  let clock = 1_000_000;
 
   const docker: BrowserSandboxDockerPort = {
     async rmForce(name: string) {
       rms.push(name);
       running.delete(name);
       known.delete(name);
+      startedAtMs.delete(name);
       return ok();
     },
     async runDetached(opts) {
@@ -46,6 +49,7 @@ function makeFakeDocker() {
       imagesUsed.push(opts.image);
       running.add(opts.name);
       known.add(opts.name);
+      startedAtMs.set(opts.name, clock);
       void opts.volumes;
       return { exitCode: 0, stdout: opts.name, stderr: "" };
     },
@@ -71,6 +75,7 @@ function makeFakeDocker() {
         return { exitCode: 1, stdout: "", stderr: "no such container" };
       }
       running.add(name);
+      startedAtMs.set(name, clock);
       return ok();
     },
     async inspectState(name) {
@@ -78,9 +83,12 @@ function makeFakeDocker() {
       if (known.has(name)) return "stopped";
       return "missing";
     },
+    async inspectStartedAtMs(name) {
+      return startedAtMs.get(name) ?? null;
+    },
   } satisfies BrowserSandboxDockerPort;
 
-  return { docker, creates, rms, execs, running, known, imagesUsed };
+  return { docker, creates, rms, execs, running, known, imagesUsed, startedAtMs, setClock: (n: number) => { clock = n; } };
 }
 
 const saved = { ...process.env };
@@ -351,6 +359,97 @@ try {
     assert(stoppedKeys.includes(s1.seatKey), "idle stopped");
     assert(fake.rms.length === createRms, "idle stop never rm");
     assert(rt.activeSessionCount() === 1, "map kept after idle stop");
+  }
+
+  // --- idle stop reclaims host boxes after "process restart" (empty map) ---
+  {
+    const fake = makeFakeDocker();
+    fake.setClock(1_000);
+    const rt1 = new BrowserSandboxRuntime({
+      docker: fake.docker,
+      now: () => 1_000,
+      leaseConfig: { idleStopMs: 100 },
+    });
+    const a = await rt1.ensure(seat("case-idle-restart", "e1"));
+    // Simulate Node restart: new runtime, map empty; container still running on host.
+    const rt2 = new BrowserSandboxRuntime({
+      docker: fake.docker,
+      instanceId: "restarted-idle",
+      now: () => 1_000 + 500,
+      leaseConfig: { idleStopMs: 100 },
+    });
+    fake.docker.listBrowserSandboxes = async () => [
+      {
+        name: a.containerName,
+        labels: {
+          "myaipen.component": "browser-sandbox",
+          "myaipen.conversation_id": "case-idle-restart",
+          "myaipen.expert_id": "e1",
+          "myaipen.seat_key": formatBrowserSandboxSeatKey("case-idle-restart", "e1"),
+        },
+        leaseUntilUnix: 9999999999,
+        leaseTrusted: true,
+      },
+    ];
+    fake.known.add(a.containerName);
+    fake.running.add(a.containerName);
+    fake.startedAtMs.set(a.containerName, 1_000);
+    const rmsBefore = fake.rms.length; // ensure may rmForce before create
+    const stopped = await rt2.stopIdleSeats(1_000 + 500);
+    assert(stopped.some((k) => k.includes("case-idle-restart")), `host idle stop, got ${stopped}`);
+    assert(!fake.running.has(a.containerName), "docker stop orphan sticky box");
+    assert(fake.rms.length === rmsBefore, "idle still never rm");
+  }
+
+  // --- host orphan with no clock (StartedAt missing) is skipped, not fail-open stop ---
+  {
+    const fake = makeFakeDocker();
+    const name = "node4-browser-noclock";
+    fake.known.add(name);
+    fake.running.add(name);
+    // deliberately no startedAtMs entry
+    fake.docker.listBrowserSandboxes = async () => [
+      {
+        name,
+        labels: {
+          "myaipen.component": "browser-sandbox",
+          "myaipen.conversation_id": "case-noclock",
+          "myaipen.expert_id": "e1",
+          "myaipen.seat_key": formatBrowserSandboxSeatKey("case-noclock", "e1"),
+        },
+        leaseUntilUnix: 9999999999,
+        leaseTrusted: true,
+      },
+    ];
+    const rt = new BrowserSandboxRuntime({
+      docker: fake.docker,
+      now: () => 1_000_000,
+      leaseConfig: { idleStopMs: 100 },
+    });
+    // Force inspectStartedAtMs to return null (unknown age)
+    fake.docker.inspectStartedAtMs = async () => null;
+    const stopped = await rt.stopIdleSeats(1_000_000);
+    assert(stopped.length === 0, `no-clock orphan must skip stop, got ${stopped}`);
+    assert(fake.running.has(name), "no-clock orphan left running");
+  }
+
+  // --- getLeaseConfig re-reads env after construct (ESM / loadDotEnv order) ---
+  {
+    const prev = process.env.PEN_SANDBOX_IDLE_STOP_MS;
+    delete process.env.PEN_SANDBOX_IDLE_STOP_MS;
+    const rt = new BrowserSandboxRuntime({ docker: makeFakeDocker().docker });
+    // Constructed with default 4h (no env).
+    assert(
+      rt.getLeaseConfig().idleStopMs === 4 * 60 * 60_000,
+      "default 4h without env",
+    );
+    process.env.PEN_SANDBOX_IDLE_STOP_MS = "300000";
+    assert(
+      rt.getLeaseConfig().idleStopMs === 300_000,
+      "re-reads .env after construct",
+    );
+    if (prev === undefined) delete process.env.PEN_SANDBOX_IDLE_STOP_MS;
+    else process.env.PEN_SANDBOX_IDLE_STOP_MS = prev;
   }
 
   console.log(JSON.stringify({ ok: true, cases: "seat-key ensure/reuse/dispose/stop" }, null, 2));
