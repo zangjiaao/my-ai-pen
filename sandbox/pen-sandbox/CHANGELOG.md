@@ -1,5 +1,9 @@
 # pen-sandbox changelog
 
+## Unreleased
+
+- Kali rolling: install `libasound2t64` (virtual `libasound2` no longer has a candidate).
+
 ## 0.2.0 — 2026-07-18
 
 - **Unified** pentest expert image: Kali scanners (nuclei, nmap, sqlmap, ffuf, redis-cli, …) + Node/agent-browser.

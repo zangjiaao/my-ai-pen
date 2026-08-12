@@ -49,7 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdamage1 \
     libxrandr2 \
     libxkbcommon0 \
-    libasound2 \
+    libasound2t64 \
     xdg-utils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
