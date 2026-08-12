@@ -25,8 +25,7 @@ GitHub Actions: [`.github/workflows/pen-sandbox.yml`](../../.github/workflows/pe
 
 | Secret | Purpose |
 |--------|---------|
-| `DOCKERHUB_USERNAME` | Hub user / org (image namespace) |
-| `DOCKERHUB_TOKEN` | Hub **access token** (not password) |
+| `DOCKERHUB_TOKEN` | Hub **access token** (not password). Optional — only for CI push to `zangjiaao/pen-sandbox`. Namespace is hardcoded `zangjiaao`. |
 
 On push to `main` touching `sandbox/pen-sandbox/**` (or manual **workflow_dispatch**):
 

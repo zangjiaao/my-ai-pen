@@ -1,10 +1,10 @@
 # Build and push unified pentest sandbox to Docker Hub.
 #
-# Required repository secrets:
-#   DOCKERHUB_USERNAME  — Docker Hub username (also used as image namespace)
+# Optional repository secret (only needed to push from CI on main):
 #   DOCKERHUB_TOKEN     — Docker Hub access token (not account password)
+# Username / namespace is the product Hub account `zangjiaao` (not a secret).
 #
-# Image: docker.io/<DOCKERHUB_USERNAME>/pen-sandbox
+# Image: docker.io/zangjiaao/pen-sandbox
 # Tags:  latest, dev, v<VERSION>, <git-sha>, <VERSION>
 
 name: pen-sandbox
@@ -44,17 +44,17 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: zangjiaao
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          images: zangjiaao/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
@@ -68,7 +68,7 @@ jobs:
         with:
           context: sandbox/pen-sandbox
           file: sandbox/pen-sandbox/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_TOKEN != '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Layer cache speeds rebuilds of apt/npm layers
@@ -82,6 +82,6 @@ jobs:
         run: |
           echo "### pen-sandbox pushed" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`docker pull ${{ secrets.DOCKERHUB_USERNAME }}/pen-sandbox:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`docker pull zangjiaao/pen-sandbox:latest\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Node4: \`export PEN_SANDBOX_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/pen-sandbox:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Node4: \`export PEN_SANDBOX_IMAGE=zangjiaao/pen-sandbox:latest\`" >> "$GITHUB_STEP_SUMMARY"
