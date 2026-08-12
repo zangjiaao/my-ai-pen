@@ -30,7 +30,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # Token lives on this Environment (not a repo-level secret).
-    environment: Docker Hub
+    environment: "Docker Hub"
     permissions:
       contents: read
     steps:
@@ -60,11 +60,26 @@ jobs:
             echo "namespace=${NS}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Decide whether to push
+        id: pub
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          NS: ${{ steps.ns.outputs.namespace }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "${TOKEN}" ] && [ -n "${NS}" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Hub push (need Environment Docker Hub / DOCKERHUB_TOKEN + variable DOCKERHUB_NAMESPACE)"
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_TOKEN != '' && vars.DOCKERHUB_NAMESPACE != ''
+        if: steps.pub.outputs.push == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_NAMESPACE }}
@@ -88,7 +103,7 @@ jobs:
         with:
           context: sandbox/pen-sandbox
           file: sandbox/pen-sandbox/Dockerfile
-          push: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_TOKEN != '' && vars.DOCKERHUB_NAMESPACE != '' }}
+          push: ${{ steps.pub.outputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Layer cache speeds rebuilds of apt/npm layers
