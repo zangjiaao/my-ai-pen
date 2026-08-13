@@ -141,6 +141,24 @@ class OwnerLedgerAssemblyTests(unittest.TestCase):
         host = _host(_group(tree, "项目A"), "1.1.1.1")
         self.assertEqual(_ports(host), [])
 
+    def test_empty_group_appears_without_hosts(self):
+        tree = project_owner_ledger(
+            hosts=[],
+            groups=[{"id": "g1", "name": "XXX公司"}],
+            assemblies=[],
+        )
+        self.assertEqual([g["name"] for g in tree], ["XXX公司"])
+        self.assertEqual(_group(tree, "XXX公司")["hosts"], [])
+
+    def test_tag_filter_hides_empty_group(self):
+        tree = project_owner_ledger(
+            hosts=[],
+            groups=[{"id": "g1", "name": "XXX公司"}],
+            assemblies=[],
+            tags=["部门1"],
+        )
+        self.assertEqual(tree, [])
+
     def test_ungrouped_hosts_appear_under_ungrouped(self):
         tree = project_owner_ledger(
             hosts=[

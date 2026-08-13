@@ -1508,8 +1508,8 @@ def project_owner_ledger(
 ) -> list[dict[str, Any]]:
     """Project Group × Host × Service tree. Search is condition AND; operator searches Hosts.
 
-    Empty assembly ports = bare Host in that Group. Hosts in no assembly go under 未分组
-    unless a group_ids filter is set.
+    Empty assembly ports = bare Host in that Group. Empty Groups still appear
+    (create-group-first). Hosts in no assembly go under 未分组 unless a group_ids filter is set.
     """
     host_rows = [h for h in (hosts or []) if isinstance(h, dict) and h.get("id") is not None]
     by_id: dict[str, dict[str, Any]] = {str(h["id"]): h for h in host_rows}
@@ -1557,10 +1557,13 @@ def project_owner_ledger(
             if projected:
                 visible_hosts.append(projected)
         visible_hosts.sort(key=lambda h: (str(h.get("address") or ""), str(h.get("id") or "")))
-        if visible_hosts:
+        group_name = str(group.get("name") or "")
+        kw_hits_group = bool(keyword_norm) and keyword_norm.lower() in group_name.lower()
+        keep_empty = (not keyword_norm and not selected_tags) or (kw_hits_group and not selected_tags)
+        if visible_hosts or keep_empty:
             tree.append({
                 "id": gid,
-                "name": str(group.get("name") or ""),
+                "name": group_name,
                 "hosts": visible_hosts,
             })
 

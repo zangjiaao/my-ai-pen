@@ -65,7 +65,7 @@ type AssetGroup = {
   members: { asset_id: string; ports: string[] }[];
 };
 
-const EMPTY_FORM = { address: "", tags: "" };
+const EMPTY_FORM = { address: "", tags: "", groupIds: [] as string[] };
 
 export default function AssetPage() {
   const [search, setSearch] = useState("");
@@ -142,7 +142,7 @@ export default function AssetPage() {
     setSaving(true);
     setFormError("");
     try {
-      await authFetch("/api/assets", {
+      const created = await authFetch<Asset>("/api/assets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -153,6 +153,13 @@ export default function AssetPage() {
             .filter(Boolean),
         }),
       });
+      for (const gid of form.groupIds) {
+        await authFetch(`/api/asset-groups/${gid}/hosts/${created.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ports: [] }),
+        });
+      }
       setShowForm(false);
       setForm(EMPTY_FORM);
       await load();
@@ -172,7 +179,7 @@ export default function AssetPage() {
     setSavingGroup(true);
     setGroupFormError("");
     try {
-      const created = await authFetch<AssetGroup>("/api/asset-groups", {
+      await authFetch<AssetGroup>("/api/asset-groups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -180,7 +187,6 @@ export default function AssetPage() {
       setShowGroupForm(false);
       setGroupFormName("");
       await load();
-      setGroupId(created.id);
     } catch (err) {
       setGroupFormError(err instanceof Error ? err.message : "创建失败");
     } finally {
@@ -287,6 +293,11 @@ export default function AssetPage() {
                   </div>
                   {isOpen ? (
                     <div className="space-y-4">
+                      {!section.hosts.length ? (
+                        <p className="rounded-lg border border-dashed border-hairline px-6 py-8 text-sm text-ink-muted">
+                          组是空的。添加主机时选进这个组即可。
+                        </p>
+                      ) : null}
                       {section.hosts.map((host) => {
                         const aliases = host.aliases?.length
                           ? host.aliases
@@ -440,6 +451,37 @@ export default function AssetPage() {
               className="w-full rounded-md border border-hairline px-3 py-2 text-sm"
             />
           </Field>
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-ink-secondary">放入组（可选）</span>
+            {allGroups.length ? (
+              <div className="flex flex-wrap gap-2">
+                {allGroups.map((g) => {
+                  const on = form.groupIds.includes(g.id);
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          groupIds: on
+                            ? prev.groupIds.filter((id) => id !== g.id)
+                            : [...prev.groupIds, g.id],
+                        }))
+                      }
+                      className={`rounded-full border px-3 py-1 text-xs ${
+                        on ? "border-ink bg-ink text-on-ink" : "border-hairline text-ink-secondary hover:border-ink"
+                      }`}
+                    >
+                      {g.name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-muted">还没有组。可以先新建组，再回来选。</p>
+            )}
+          </div>
           {formError ? <p className="text-xs text-severity-critical">{formError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" disabled={saving} onClick={() => setShowForm(false)} className="rounded-md border px-3 py-1.5 text-xs">
