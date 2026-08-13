@@ -1679,4 +1679,172 @@ def _public_service(svc: dict[str, Any]) -> dict[str, Any]:
     tags = normalize_tags(svc.get("tags"))
     if tags:
         out["tags"] = tags
+    paths = svc.get("paths")
+    if isinstance(paths, list) and paths:
+        out["paths"] = [
+            {"path": str(p.get("path")), "source": str(p.get("source") or "")}
+            if isinstance(p, dict) and p.get("path")
+            else {"path": str(p), "source": ""}
+            for p in paths
+            if (isinstance(p, dict) and p.get("path")) or (not isinstance(p, dict) and p)
+        ]
+    return out
+
+
+SERVICE_ADMIT_SOURCES = frozenset({"user", "book", "http_settle"})
+OWNER_PATH_ADMIT_SOURCES = frozenset({"book", "http_settle"})
+_HTTP_SCHEMES = frozenset({"http", "https"})
+
+
+def service_source_admits(source: object) -> bool:
+    """True only for user add, finding book, or accepted HTTP(S) settle."""
+    return str(source or "").strip().lower() in SERVICE_ADMIT_SOURCES
+
+
+def merge_official_service(existing: object, incoming: object) -> dict[str, Any]:
+    """Same host+port merges; later non-empty fields win. Tags only replace when set."""
+    base = dict(existing) if isinstance(existing, dict) else {}
+    add = dict(incoming) if isinstance(incoming, dict) else {}
+    port = normalize_port(add.get("port") or base.get("port"))
+    if not port:
+        raise ValueError("service requires a port")
+    out = dict(base)
+    out["port"] = port
+    for field in ("name", "protocol", "product", "version", "url", "note", "source"):
+        if add.get(field):
+            out[field] = add[field]
+        elif field not in out and base.get(field):
+            out[field] = base[field]
+    if "tags" in add:
+        tags = normalize_tags(add.get("tags"))
+        if tags:
+            out["tags"] = tags
+        else:
+            out.pop("tags", None)
+    elif base.get("tags"):
+        out["tags"] = normalize_tags(base.get("tags"))
+    paths = add.get("paths") if "paths" in add else base.get("paths")
+    if paths:
+        out["paths"] = list(paths)
+    return _public_service(out) if "name" in out or out.get("port") else out
+
+
+def read_host_services(properties: object, service_rows: object = None) -> list[dict[str, Any]]:
+    """Dual-read: JSON services until rows exist; overlay so JSON-only ports are not lost."""
+    json_svcs = extract_services(properties)
+    rows = [s for s in (service_rows or []) if isinstance(s, dict) and normalize_port(s.get("port"))]
+    if not rows:
+        return [_public_service(s) for s in json_svcs]
+    by_port: dict[str, dict[str, Any]] = {}
+    for svc in json_svcs:
+        port = normalize_port(svc.get("port"))
+        if port:
+            by_port[port] = dict(svc)
+            by_port[port]["port"] = port
+    for row in rows:
+        port = normalize_port(row.get("port"))
+        if not port:
+            continue
+        by_port[port] = merge_official_service(by_port.get(port), row)
+    order = sorted(by_port, key=lambda p: (0, int(p)) if p.isdigit() else (1, p))
+    return [_public_service(by_port[p]) for p in order]
+
+
+def normalize_owner_path(value: object) -> str | None:
+    """Path under a Service. Query/fragment stripped. Scan-tool leftovers rejected."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "${" in raw or "{{" in raw:
+        return None
+    if "://" in raw:
+        try:
+            parsed = urlparse(raw)
+        except ValueError:
+            return None
+        raw = parsed.path or "/"
+    if "?" in raw:
+        raw = raw.split("?", 1)[0]
+    if "#" in raw:
+        raw = raw.split("#", 1)[0]
+    raw = raw.strip()
+    if not raw:
+        return None
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    if len(raw) > 1000:
+        raw = raw[:1000]
+    return raw
+
+
+def owner_target_from_location(value: object) -> dict[str, Any] | None:
+    """HTTP(S) host+port+path. None for non-HTTP or unparseable. Does not create a Host."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    url_token = raw
+    if "://" not in url_token:
+        return None
+    try:
+        parsed = urlparse(url_token)
+    except ValueError:
+        return None
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _HTTP_SCHEMES:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host or not is_valid_ledger_address(host):
+        return None
+    if parsed.port:
+        port = normalize_port(parsed.port)
+    else:
+        port = "443" if scheme == "https" else "80"
+    if not port:
+        return None
+    path = normalize_owner_path(parsed.path or "/")
+    if not path:
+        path = "/"
+    return {"host": host, "port": port, "path": path, "scheme": scheme}
+
+
+def owner_target_from_surface_row(row: object) -> dict[str, Any] | None:
+    """Map a settled HTTP(S) Surface row to owner host/port/path. Does not mutate the row."""
+    if not isinstance(row, dict):
+        return None
+    origin = str(row.get("origin_key") or row.get("location") or "").strip()
+    target = owner_target_from_location(origin)
+    if not target:
+        return None
+    path = normalize_owner_path(row.get("path_key") or target.get("path"))
+    if path:
+        target = dict(target)
+        target["path"] = path
+    return target
+
+
+def admit_owner_path(
+    existing: object,
+    *,
+    path: object,
+    source: object,
+) -> list[dict[str, Any]] | None:
+    """Append/merge a durable path. Only book / http_settle. No Surface / inventory fields."""
+    if str(source or "").strip().lower() not in OWNER_PATH_ADMIT_SOURCES:
+        return None
+    norm = normalize_owner_path(path)
+    if not norm:
+        return None
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in existing or []:
+        if not isinstance(item, dict):
+            continue
+        p = normalize_owner_path(item.get("path"))
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append({"path": p, "source": str(item.get("source") or source)})
+    if norm in seen:
+        return out
+    out.append({"path": norm, "source": str(source).strip().lower()})
     return out

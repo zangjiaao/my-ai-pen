@@ -3097,6 +3097,17 @@ async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None
                 # Hard-cap reject of all new identities — no broadcast payload.
                 return None
             c.context = next_ctx
+            if c.user_id:
+                try:
+                    from app.services.owner_services import attach_http_surfaces_to_owner_ledger
+
+                    await attach_http_surfaces_to_owner_ledger(
+                        db,
+                        user_id=c.user_id,
+                        surfaces=landed,
+                    )
+                except Exception as owner_exc:
+                    print(f"[WS] owner-ledger HTTP settle attach error (non-fatal): {owner_exc}")
             await db.commit()
             ledger = next_ctx.get("surface_ledger") if isinstance(next_ctx, dict) else {}
             updated_at = (
@@ -3718,6 +3729,20 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         merged_hist.append(item)
                 vuln.history = merged_hist[-50:]
                 await db.delete(duplicate)
+
+            try:
+                from app.services.owner_services import attach_book_to_owner_ledger
+
+                await attach_book_to_owner_ledger(
+                    db,
+                    user_id=user_id,
+                    host=host,
+                    port=port or getattr(vuln, "port", None),
+                    location=str(location or msg.get("url") or "") or None,
+                    service_name=str(service_name or "") or None,
+                )
+            except Exception as owner_exc:
+                print(f"[WS] owner-ledger book attach error (non-fatal): {owner_exc}")
 
             await db.commit()
             await _audit(

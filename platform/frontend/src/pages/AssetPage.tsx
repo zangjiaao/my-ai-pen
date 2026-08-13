@@ -33,6 +33,7 @@ type Service = {
   url?: string | null;
   note?: string | null;
   tags?: string[];
+  paths?: { path: string; source?: string }[];
 };
 
 type Asset = {

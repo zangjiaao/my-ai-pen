@@ -41,6 +41,7 @@ from app.services.asset_ledger import (
     normalize_tags,
     ports_summary,
     project_owner_ledger,
+    read_host_services,
     render_remediation_html,
     render_remediation_markdown,
     risk_summary_from_vulns,
@@ -48,6 +49,11 @@ from app.services.asset_ledger import (
     split_host_port,
     tech_summary,
     type_label,
+)
+from app.services.owner_services import (
+    delete_official_services,
+    load_official_services,
+    upsert_official_service,
 )
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
@@ -101,6 +107,7 @@ class ServiceOut(BaseModel):
     # User/agent notes about this port — helps agents understand service context.
     note: str | None = None
     tags: list[str] = Field(default_factory=list)
+    paths: list[dict] = Field(default_factory=list)
 
 
 class ApiEndpointOut(BaseModel):
@@ -202,7 +209,8 @@ async def list_assets(
     assets = assets[offset : offset + limit]
     # related may be broader; re-key for page slice
     page_related = {a.id: related.get(a.id, []) for a in assets}
-    return [_out(a, page_related.get(a.id, [])) for a in assets]
+    official = await load_official_services(db, [a.id for a in assets])
+    return [_out(a, page_related.get(a.id, []), official.get(a.id)) for a in assets]
 
 
 class TreeServiceOut(BaseModel):
@@ -211,6 +219,7 @@ class TreeServiceOut(BaseModel):
     protocol: str | None = None
     tags: list[str] = Field(default_factory=list)
     note: str | None = None
+    paths: list[dict] = Field(default_factory=list)
 
 
 class TreeHostOut(BaseModel):
@@ -282,17 +291,21 @@ async def list_asset_tree(
 
     related = await _related_vulns(db, user_id, [a.id for a in assets])
     await _hydrate_asset_ports(db, assets, related)
+    official = await load_official_services(db, [a.id for a in assets])
 
-    host_dicts = [
-        {
-            "id": str(a.id),
-            "address": a.address,
-            "name": a.name,
-            "tags": list(a.tags or []),
-            "properties": a.properties or {},
-        }
-        for a in assets
-    ]
+    host_dicts = []
+    for a in assets:
+        props = dict(a.properties or {})
+        props["services"] = read_host_services(props, official.get(a.id))
+        host_dicts.append(
+            {
+                "id": str(a.id),
+                "address": a.address,
+                "name": a.name,
+                "tags": list(a.tags or []),
+                "properties": props,
+            }
+        )
     projected = project_owner_ledger(
         hosts=host_dicts,
         groups=[{"id": str(g.id), "name": g.name} for g in group_rows],
@@ -348,6 +361,7 @@ async def list_asset_tree(
                             protocol=str(s["protocol"]) if s.get("protocol") else None,
                             tags=list(s.get("tags") or []),
                             note=str(s["note"]) if s.get("note") else None,
+                            paths=list(s.get("paths") or []),
                         )
                         for s in (host.get("services") or [])
                         if s.get("port")
@@ -478,10 +492,13 @@ async def create_asset(
         db.add(a)
         await db.flush()
         await _audit(db, user_id, "asset.create", "asset", a.id, {"address": a.address})
+    for p in ports:
+        await upsert_official_service(db, asset_id=a.id, port=p, source="user")
     await db.commit()
     await db.refresh(a)
     related = await _related_vulns(db, user_id, [a.id])
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
 
 
 @router.get("/{asset_id}/export")
@@ -543,7 +560,8 @@ async def get_asset(
     a = await _get(asset_id, current_user, db)
     related = await _related_vulns(db, user_id, [a.id], include_detail=True)
     await _hydrate_asset_ports(db, [a], related)
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
 
 
 @router.patch("/{asset_id}", response_model=AssetOut)
@@ -591,8 +609,32 @@ async def update_asset(
             services=body["services"],
             open_ports=[s.get("port") for s in body["services"] if isinstance(s, dict)],
         )
+        for raw in body["services"]:
+            if not isinstance(raw, dict):
+                continue
+            await upsert_official_service(
+                db,
+                asset_id=a.id,
+                port=raw.get("port"),
+                source="user",
+                name=str(raw.get("name") or raw.get("service") or "") or None,
+                protocol=str(raw["protocol"]) if raw.get("protocol") else None,
+                product=str(raw["product"]) if raw.get("product") else None,
+                version=str(raw["version"]) if raw.get("version") else None,
+                url=str(raw["url"]) if raw.get("url") else None,
+                note=str(raw["note"]) if "note" in raw else None,
+                tags=raw.get("tags") if "tags" in raw else None,
+            )
     if "service_tags" in body and isinstance(body["service_tags"], dict):
         a.properties = apply_service_tags(a.properties, body["service_tags"])
+        for raw_port, raw_tags in body["service_tags"].items():
+            await upsert_official_service(
+                db,
+                asset_id=a.id,
+                port=raw_port,
+                source="user",
+                tags=raw_tags,
+            )
     elif "port_notes" in body and isinstance(body["port_notes"], dict):
         # Partial update: { "52799": "CTF web, 9 levels", "22": "SSH bastion" }
         props = dict(a.properties or {})
@@ -635,6 +677,7 @@ async def update_asset(
                 ]
             a.properties = props
             await _drop_ports_from_assemblies(db, a.id, drop)
+            await delete_official_services(db, a.id, drop)
     elif (
         "properties" in body
         and isinstance(body["properties"], dict)
@@ -654,7 +697,8 @@ async def update_asset(
     await db.commit()
     await db.refresh(a)
     related = await _related_vulns(db, user_id, [a.id])
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
 
 
 @router.delete("/{asset_id}")
@@ -973,7 +1017,11 @@ async def _hydrate_asset_ports(
                 a.properties = enriched
 
 
-def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
+def _out(
+    a: Asset,
+    related: list[RelatedVulnOut] | None = None,
+    official_services: list[dict] | None = None,
+) -> AssetOut:
     related = related or []
     props = a.properties or {}
     # Display-time merge (even if hydrate could not persist).
@@ -999,7 +1047,7 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
         for v in related
     ]
     risk = risk_summary_from_vulns(vuln_dicts)
-    services_raw = extract_services(props)
+    services_raw = read_host_services(props, official_services)
     services = [
         ServiceOut(
             port=str(s.get("port") or ""),
@@ -1010,6 +1058,7 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
             url=_service_url(s, a.address),
             note=(str(s.get("note") or s.get("remark") or "").strip() or None),
             tags=normalize_tags(s.get("tags")),
+            paths=list(s.get("paths") or []),
         )
         for s in services_raw
         if s.get("port")

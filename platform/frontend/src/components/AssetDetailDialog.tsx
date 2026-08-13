@@ -26,6 +26,7 @@ type ServiceRow = {
   url?: string | null;
   note?: string | null;
   tags?: string[];
+  paths?: { path: string; source?: string }[];
 };
 
 type GroupOption = {
@@ -164,7 +165,7 @@ export default function AssetDetailDialog({
       const note = (s.note || "").trim();
       // Display/edit body: user note if set, otherwise default to URL as the starting remark.
       const remark = note || url || "";
-      return { port, serviceName, url, note, remark, tags: s.tags || [] };
+      return { port, serviceName, url, note, remark, tags: s.tags || [], paths: s.paths || [] };
     });
   }, [services, host]);
 
@@ -689,6 +690,16 @@ export default function AssetDetailDialog({
                               ))}
                             </div>
                           ) : null}
+                          {(card.paths || []).length ? (
+                            <div className="mt-2 space-y-0.5">
+                              <p className="text-[11px] text-ink-muted">攻击面</p>
+                              {(card.paths || []).map((p) => (
+                                <div key={p.path} className="font-mono text-[11px] text-ink-secondary">
+                                  {p.path}
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
                           <div className="mt-2.5 border-t border-hairline-soft pt-2.5">
                             {card.remark ? (
                               <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-ink-secondary">
@@ -989,6 +1000,21 @@ function normalizeServices(value: unknown): ServiceRow[] {
       note: typeof noteRaw === "string" && noteRaw.trim() ? noteRaw.trim() : null,
       tags: Array.isArray(rec.tags)
         ? rec.tags.map((t) => String(t).trim()).filter(Boolean)
+        : [],
+      paths: Array.isArray(rec.paths)
+        ? rec.paths
+            .map((item) => {
+              if (typeof item === "string") return { path: item };
+              if (item && typeof item === "object" && "path" in item) {
+                const recPath = item as { path?: unknown; source?: unknown };
+                return {
+                  path: String(recPath.path || "").trim(),
+                  source: recPath.source ? String(recPath.source) : undefined,
+                };
+              }
+              return { path: "" };
+            })
+            .filter((p) => p.path)
         : [],
     });
   }

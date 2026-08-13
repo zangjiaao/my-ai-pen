@@ -15,11 +15,18 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.services.asset_ledger import (  # noqa: E402
+    SERVICE_ADMIT_SOURCES,
+    admit_owner_path,
     apply_service_tags,
     build_scope_allow,
     extract_services,
     merge_discover_properties,
+    merge_official_service,
+    owner_target_from_location,
+    owner_target_from_surface_row,
     project_owner_ledger,
+    read_host_services,
+    service_source_admits,
 )
 
 
@@ -308,5 +315,93 @@ class OwnerLedgerScopeTests(unittest.TestCase):
         self.assertEqual(after, before)
 
 
+class OwnerLedgerServiceRowTests(unittest.TestCase):
+    def test_same_host_port_merges_and_ports_stay_distinct(self):
+        first = merge_official_service(None, {"port": "80", "name": "http", "tags": ["系统1"]})
+        again = merge_official_service(first, {"port": "80", "product": "nginx"})
+        other = merge_official_service(None, {"port": "443", "name": "https", "tags": ["系统2"]})
+        self.assertEqual(again["port"], "80")
+        self.assertEqual(again["name"], "http")
+        self.assertEqual(again["product"], "nginx")
+        self.assertEqual(again["tags"], ["系统1"])
+        self.assertEqual(other["tags"], ["系统2"])
+        self.assertNotEqual(again["port"], other["port"])
+
+    def test_scan_sized_enrich_does_not_admit_service_row(self):
+        self.assertFalse(service_source_admits("scan"))
+        self.assertFalse(service_source_admits("syn"))
+        self.assertFalse(service_source_admits("agent_discovered"))
+        self.assertFalse(service_source_admits("discover"))
+        self.assertTrue(service_source_admits("user"))
+        self.assertTrue(service_source_admits("book"))
+        self.assertTrue(service_source_admits("http_settle"))
+        self.assertEqual(SERVICE_ADMIT_SOURCES, frozenset({"user", "book", "http_settle"}))
+
+    def test_dual_read_uses_json_until_rows_exist(self):
+        props = {"services": [{"port": "80", "name": "http", "tags": ["系统1"]}]}
+        listed = read_host_services(props, None)
+        self.assertEqual([s["port"] for s in listed], ["80"])
+        self.assertEqual(listed[0]["tags"], ["系统1"])
+
+    def test_dual_read_keeps_json_ports_when_rows_partial(self):
+        props = {
+            "services": [
+                {"port": "80", "name": "http"},
+                {"port": "443", "name": "https", "tags": ["旧"]},
+            ]
+        }
+        rows = [{"port": "443", "name": "https", "tags": ["系统2"]}]
+        listed = read_host_services(props, rows)
+        by_port = {s["port"]: s for s in listed}
+        self.assertEqual(sorted(by_port), ["443", "80"])
+        self.assertEqual(by_port["443"]["tags"], ["系统2"])
+        self.assertEqual(by_port["80"]["name"], "http")
+
+
+class OwnerLedgerPathBookTests(unittest.TestCase):
+    def test_book_and_http_settle_admit_path_scan_does_not(self):
+        booked = admit_owner_path([], path="/login", source="book")
+        settled = admit_owner_path(booked, path="/admin", source="http_settle")
+        self.assertEqual([p["path"] for p in booked], ["/login"])
+        self.assertEqual([p["path"] for p in settled], ["/login", "/admin"])
+        self.assertIsNone(admit_owner_path([], path="/scan", source="scan"))
+        self.assertIsNone(admit_owner_path([], path="/syn", source="syn"))
+
+    def test_same_path_merges_and_does_not_rewrite_surface_fields(self):
+        first = admit_owner_path([], path="/login", source="book")
+        again = admit_owner_path(first, path="/login", source="http_settle")
+        self.assertEqual(len(again), 1)
+        self.assertEqual(again[0]["path"], "/login")
+        self.assertNotIn("origin_key", again[0])
+        self.assertNotIn("status", again[0])
+        self.assertNotIn("case_tested", again[0])
+        self.assertNotIn("is_new", again[0])
+
+    def test_http_location_yields_host_port_path_without_creating_host(self):
+        target = owner_target_from_location("https://1.1.1.1:8443/admin/login?x=1")
+        self.assertEqual(target["host"], "1.1.1.1")
+        self.assertEqual(target["port"], "8443")
+        self.assertEqual(target["path"], "/admin/login")
+        self.assertEqual(target["scheme"], "https")
+        self.assertIsNone(owner_target_from_location("ssh://1.1.1.1:22"))
+        self.assertIsNone(owner_target_from_location("/only/path"))
+
+    def test_surface_row_http_settle_maps_without_mutating_row(self):
+        row = {
+            "origin_key": "https://pay.example.com:443",
+            "path_key": "/checkout",
+            "status": "touched",
+            "case_tested": True,
+            "is_new": True,
+        }
+        snapshot = dict(row)
+        target = owner_target_from_surface_row(row)
+        self.assertEqual(target["host"], "pay.example.com")
+        self.assertEqual(target["port"], "443")
+        self.assertEqual(target["path"], "/checkout")
+        self.assertEqual(row, snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,6 +1,6 @@
 # Spec: Owner ledger (Group × Host × Service assembly)
 
-**Status:** Living Spec — **locked model**. **#454a shipped** (Group + assembly + Host/Service tags + scheme B tree). #454b Service row and #454c path book are not shipped.  
+**Status:** Living Spec — **locked model**. **#454a / #454b / #454c shipped**. Intel is not this Spec.  
 **Tracker:** [#454](https://github.com/zangjiaao/my-ai-pen/issues/454)  
 **Supersedes:** [#322](https://github.com/zangjiaao/my-ai-pen/issues/322) and implementation tickets [#340](https://github.com/zangjiaao/my-ai-pen/issues/340)–[#345](https://github.com/zangjiaao/my-ai-pen/issues/345). Do **not** amend or revive `docs/specs/asset-inventory.md` (deleted with the #322 revert).  
 **Related:** Case Surface [`case-surface-ledger.md`](case-surface-ledger.md) / [#368](https://github.com/zangjiaao/my-ai-pen/issues/368); NEW precipitation [#410](https://github.com/zangjiaao/my-ai-pen/issues/410) / [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md); product-state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); finding identity [#275](https://github.com/zangjiaao/my-ai-pen/issues/275).
@@ -167,8 +167,8 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 ## Implementation slices
 
 1. **#454a** — Group + assembly + tags on existing Host / `properties.services`. Asset page scheme B. No new path ledger. **Shipped** (`0012_owner_ledger`, `/api/asset-groups`, `/api/assets/tree`).  
-2. **#454b** — First-class Service row (Host+port) + dual-read `properties.services`. Book / accepted HTTP(S) may upsert the port row (not the path).  
-3. **#454c** — Service 攻击面: persist admitted paths on Service from book / accepted HTTP(S) only.  
+2. **#454b** — First-class Service row (Host+port) + dual-read `properties.services`. Book / accepted HTTP(S) may upsert the port row (not the path). **Shipped** (`0013_owner_service_rows`, `asset_services`).  
+3. **#454c** — Service 攻击面: persist admitted paths on Service from book / accepted HTTP(S) only. **Shipped** (`asset_service_paths`; attach on book + Surface HTTP settle, no #368/#410 rewrite).  
 4. **Intel** — later, not numbered here.
 
 #341 (tls Observation) stays deferred and is **not** a child of this Spec.
@@ -181,3 +181,4 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 |------|------|
 | 2026-08-13 | New Spec #454. Retire #322 Host→Service+Cluster. Lock assembly, aliases vs vhost, scheme B UI, Wave 2 path admit. |
 | 2026-08-13 | #454a: Group + assembly tables, tree API (AND search), scheme B `/assets`. Service stays in `properties.services`. |
+| 2026-08-13 | #454b/#454c: official Service row + dual-read; book / accepted HTTP(S) admit port and path. Scan does not. |
