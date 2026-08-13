@@ -375,7 +375,7 @@ export default function AssetPage() {
                             .join(" · ")}
                         </p>
                       </button>
-                      <div className="min-w-0 self-center">
+                      <div className="min-w-0 self-center border-t border-hairline-soft pt-3 min-[520px]:border-t-0 min-[520px]:border-l min-[520px]:pt-0 min-[520px]:pl-6">
                         {ports.length ? (
                           ports.map((svc) => {
                             const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
