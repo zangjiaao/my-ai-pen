@@ -70,8 +70,7 @@ const EMPTY_FORM = { address: "", tags: "", groupIds: [] as string[] };
 export default function AssetPage() {
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
-  const [openMenu, setOpenMenu] = useState<"tag" | "group" | null>(null);
+  const [openMenu, setOpenMenu] = useState<"tag" | null>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [tree, setTree] = useState<TreeGroup[]>([]);
@@ -87,7 +86,7 @@ export default function AssetPage() {
   const [groupFormName, setGroupFormName] = useState("");
   const [groupFormError, setGroupFormError] = useState("");
   const [savingGroup, setSavingGroup] = useState(false);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [activeSectionId, setActiveSectionId] = useState<string>("");
   const [hostId, setHostId] = useState<string | null>(null);
   const [groupId, setGroupId] = useState<string | null>(null);
   const [serviceKey, setServiceKey] = useState<{ assetId: string; port: string } | null>(null);
@@ -96,9 +95,8 @@ export default function AssetPage() {
     const p = new URLSearchParams();
     if (search.trim()) p.set("search", search.trim());
     for (const t of selectedTags) p.append("tag", t);
-    for (const g of selectedGroups) p.append("group", g);
     return p;
-  }, [search, selectedTags, selectedGroups]);
+  }, [search, selectedTags]);
 
   const load = async () => {
     setError("");
@@ -108,11 +106,18 @@ export default function AssetPage() {
         authFetch<Asset[]>("/api/assets?limit=200"),
         authFetch<AssetGroup[]>("/api/asset-groups").catch(() => [] as AssetGroup[]),
       ]);
-      setTree(treeRes.groups || []);
-      setAllGroups(treeRes.all_groups || []);
+      const nextTree = treeRes.groups || [];
+      const nextGroups = treeRes.all_groups || [];
+      setTree(nextTree);
+      setAllGroups(nextGroups);
       setAllTags(treeRes.all_tags || []);
       setAssets(catalog);
       setGroupRows(groups);
+      const navIds = [
+        ...nextGroups.map((g) => g.id),
+        ...(nextTree.some((s) => !s.id) ? [""] : []),
+      ];
+      setActiveSectionId((prev) => (navIds.includes(prev) ? prev : navIds[0] ?? ""));
     } catch (err) {
       setError(err instanceof Error ? err.message : "资产加载失败");
     }
@@ -133,6 +138,23 @@ export default function AssetPage() {
   const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const selectedHost = hostId ? assetById.get(hostId) || null : null;
   const selectedGroup = groupId ? groupRows.find((g) => g.id === groupId) || null : null;
+  const navItems = useMemo(() => {
+    const byId = new Map(tree.map((s) => [s.id, s]));
+    const items = allGroups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      count: byId.get(g.id)?.hosts.length ?? 0,
+    }));
+    const ungrouped = byId.get("");
+    if (ungrouped) items.push({ id: "", name: "未分组", count: ungrouped.hosts.length });
+    return items;
+  }, [tree, allGroups]);
+  const activeSection = tree.find((s) => s.id === activeSectionId) || {
+    id: activeSectionId,
+    name: navItems.find((n) => n.id === activeSectionId)?.name || "未分组",
+    hosts: [] as TreeHost[],
+  };
+  const isUngrouped = !activeSection.id;
 
   const createAsset = async () => {
     if (!form.address.trim()) {
@@ -179,13 +201,14 @@ export default function AssetPage() {
     setSavingGroup(true);
     setGroupFormError("");
     try {
-      await authFetch<AssetGroup>("/api/asset-groups", {
+      const created = await authFetch<AssetGroup>("/api/asset-groups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
       setShowGroupForm(false);
       setGroupFormName("");
+      setActiveSectionId(created.id);
       await load();
     } catch (err) {
       setGroupFormError(err instanceof Error ? err.message : "创建失败");
@@ -199,24 +222,13 @@ export default function AssetPage() {
       <Sidebar activeId={null} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
-        <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-8 py-6">
-          <div className="mb-6 flex shrink-0 flex-wrap items-center gap-3" ref={filterBarRef}>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 py-5">
+          <div className="mb-4 flex shrink-0 flex-wrap items-center gap-3" ref={filterBarRef}>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="关键词：地址 / 别名 / 端口 / 标签 / 组名"
-              className="min-w-[20rem] flex-1 rounded-md border border-hairline bg-canvas px-4 py-2.5 text-[15px] focus:border-ink focus:outline-none"
-            />
-            <MultiFilter
-              label="组"
-              buttonText={multiLabel(selectedGroups, "全部", allGroups.map((g) => ({ value: g.id, label: g.name })))}
-              open={openMenu === "group"}
-              onToggle={() => setOpenMenu((m) => (m === "group" ? null : "group"))}
-              onClear={() => setSelectedGroups([])}
-              options={allGroups.map((g) => ({ value: g.id, label: g.name }))}
-              selected={selectedGroups}
-              onToggleValue={(v) => toggleInList(selectedGroups, v, setSelectedGroups)}
-              emptyText="暂无组"
+              placeholder="关键词：地址 / 别名 / 端口 / 标签"
+              className="min-w-[16rem] flex-1 rounded-md border border-hairline bg-canvas px-4 py-2.5 text-[15px] focus:border-ink focus:outline-none"
             />
             <MultiFilter
               label="标签"
@@ -229,161 +241,163 @@ export default function AssetPage() {
               onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
               emptyText="暂无标签"
             />
-            <div className="ml-auto flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setForm(EMPTY_FORM);
-                  setFormError("");
-                  setShowForm(true);
-                }}
-                className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-on-ink"
-              >
-                添加主机
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setGroupFormName("");
-                  setGroupFormError("");
-                  setShowGroupForm(true);
-                }}
-                className="rounded-full border border-hairline px-5 py-2.5 text-sm"
-              >
-                新建组
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setForm({
+                  ...EMPTY_FORM,
+                  groupIds: activeSectionId ? [activeSectionId] : [],
+                });
+                setFormError("");
+                setShowForm(true);
+              }}
+              className="ml-auto rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-on-ink"
+            >
+              添加主机
+            </button>
           </div>
 
           {error ? (
-            <div className="mb-4 shrink-0 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
+            <div className="mb-3 shrink-0 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
               {error}
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 space-y-8 overflow-y-auto pb-10">
-            {tree.map((section) => {
-              const key = section.id || "ungrouped";
-              const isOpen = !collapsed[key];
-              const isUngrouped = !section.id;
-              return (
-                <section key={key}>
-                  <div className="mb-3 flex items-center gap-3">
+          <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-hairline">
+            <aside className="flex w-56 shrink-0 flex-col border-r border-hairline bg-surface">
+              <div className="px-4 py-3 text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+                档案
+              </div>
+              <nav className="min-h-0 flex-1 overflow-y-auto">
+                {navItems.map((item) => {
+                  const active = item.id === activeSectionId;
+                  return (
                     <button
+                      key={item.id || "ungrouped"}
                       type="button"
-                      className="flex items-center gap-2 text-ink"
-                      onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}
-                      aria-expanded={isOpen}
-                      aria-label={isOpen ? "收起组" : "展开组"}
+                      onClick={() => setActiveSectionId(item.id)}
+                      className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm ${
+                        active ? "bg-canvas font-medium text-ink" : "text-ink-secondary hover:bg-canvas/70 hover:text-ink"
+                      }`}
                     >
-                      <span className="text-sm text-ink-muted">{isOpen ? "▾" : "▸"}</span>
+                      <span className="truncate">{item.name}</span>
+                      <span className="shrink-0 text-[11px] text-ink-muted">{item.count}</span>
                     </button>
-                    {isUngrouped ? (
-                      <span className="text-xl font-medium tracking-tight">{section.name}</span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="text-xl font-medium tracking-tight hover:underline"
-                        onClick={() => setGroupId(section.id)}
+                  );
+                })}
+                {!navItems.length ? (
+                  <p className="px-4 py-6 text-xs text-ink-muted">还没有组。</p>
+                ) : null}
+              </nav>
+              <div className="border-t border-hairline p-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGroupFormName("");
+                    setGroupFormError("");
+                    setShowGroupForm(true);
+                  }}
+                  className="w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm hover:border-ink"
+                >
+                  新建组
+                </button>
+              </div>
+            </aside>
+
+            <section className="flex min-w-0 flex-1 flex-col bg-canvas">
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-hairline px-5 py-3">
+                <div>
+                  <h2 className="text-lg font-medium tracking-tight">{activeSection.name}</h2>
+                  <p className="text-xs text-ink-muted">{activeSection.hosts.length} 台主机</p>
+                </div>
+                {!isUngrouped ? (
+                  <button
+                    type="button"
+                    onClick={() => setGroupId(activeSection.id)}
+                    className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:border-ink"
+                  >
+                    编辑组
+                  </button>
+                ) : null}
+              </div>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+                {!activeSection.hosts.length ? (
+                  <p className="rounded-lg border border-dashed border-hairline px-6 py-16 text-center text-sm text-ink-muted">
+                    {navItems.length
+                      ? "这一组还没有主机。添加主机时选进这个组即可。"
+                      : "先新建组，再添加主机。"}
+                  </p>
+                ) : (
+                  activeSection.hosts.map((host) => {
+                    const aliases = host.aliases?.length
+                      ? host.aliases
+                      : aliasesFromAsset(assetById.get(host.id));
+                    const ports = host.services || [];
+                    return (
+                      <article
+                        key={host.id}
+                        className="flex overflow-hidden rounded-lg border border-hairline"
                       >
-                        {section.name}
-                      </button>
-                    )}
-                    <span className="text-sm text-ink-muted">{section.hosts.length} 台</span>
-                  </div>
-                  {isOpen ? (
-                    <div className="space-y-4">
-                      {!section.hosts.length ? (
-                        <p className="rounded-lg border border-dashed border-hairline px-6 py-8 text-sm text-ink-muted">
-                          组是空的。添加主机时选进这个组即可。
-                        </p>
-                      ) : null}
-                      {section.hosts.map((host) => {
-                        const aliases = host.aliases?.length
-                          ? host.aliases
-                          : aliasesFromAsset(assetById.get(host.id));
-                        const ports = host.services || [];
-                        return (
-                          <article
-                            key={`${section.id}:${host.id}`}
-                            className="flex overflow-hidden rounded-lg border border-hairline bg-canvas"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => setHostId(host.id)}
-                              className="flex w-[38%] min-w-[16rem] flex-col items-start justify-between border-r border-hairline px-6 py-5 text-left hover:bg-surface"
-                            >
-                              <div className="w-full">
-                                <div className="truncate font-mono text-[22px] font-medium leading-tight tracking-tight text-ink">
-                                  {host.address}
-                                </div>
-                                {aliases.map((alias) => (
-                                  <div
-                                    key={alias}
-                                    className="mt-1.5 truncate font-mono text-[13px] text-ink-secondary"
-                                  >
-                                    {alias}
-                                  </div>
-                                ))}
+                        <button
+                          type="button"
+                          onClick={() => setHostId(host.id)}
+                          className="flex w-[38%] min-w-[14rem] flex-col items-start justify-between border-r border-hairline px-5 py-4 text-left hover:bg-surface"
+                        >
+                          <div className="w-full">
+                            <div className="truncate font-mono text-[20px] font-medium leading-tight tracking-tight text-ink">
+                              {host.address}
+                            </div>
+                            {aliases.map((alias) => (
+                              <div key={alias} className="mt-1 truncate font-mono text-[13px] text-ink-secondary">
+                                {alias}
                               </div>
-                              {host.tags?.length ? (
-                                <div className="mt-5 flex flex-wrap gap-1.5">
-                                  {host.tags.map((tag) => (
-                                    <span
-                                      key={tag}
-                                      className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary"
-                                    >
+                            ))}
+                          </div>
+                          {host.tags?.length ? (
+                            <div className="mt-4 flex flex-wrap gap-1.5">
+                              {host.tags.map((tag) => (
+                                <span key={tag} className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="mt-4 text-[12px] text-ink-muted">无标签</span>
+                          )}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          {ports.length ? (
+                            ports.map((svc) => (
+                              <button
+                                key={svc.port}
+                                type="button"
+                                onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
+                                className="flex w-full items-center justify-between gap-4 border-b border-hairline-soft px-5 py-3 last:border-b-0 hover:bg-surface"
+                              >
+                                <span className="font-mono text-[14px] text-ink">
+                                  {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
+                                </span>
+                                <span className="flex flex-wrap justify-end gap-1.5">
+                                  {(svc.tags || []).map((tag) => (
+                                    <span key={tag} className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary">
                                       {tag}
                                     </span>
                                   ))}
-                                </div>
-                              ) : (
-                                <span className="mt-5 text-[12px] text-ink-muted">无标签</span>
-                              )}
-                            </button>
-                            <div className="min-w-0 flex-1">
-                              {ports.length ? (
-                                ports.map((svc) => (
-                                  <button
-                                    key={svc.port}
-                                    type="button"
-                                    onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
-                                    className="flex w-full items-center justify-between gap-4 border-b border-hairline-soft px-6 py-3.5 last:border-b-0 hover:bg-surface"
-                                  >
-                                    <span className="font-mono text-[15px] text-ink">
-                                      {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
-                                    </span>
-                                    <span className="flex flex-wrap justify-end gap-1.5">
-                                      {(svc.tags || []).map((tag) => (
-                                        <span
-                                          key={tag}
-                                          className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary"
-                                        >
-                                          {tag}
-                                        </span>
-                                      ))}
-                                    </span>
-                                  </button>
-                                ))
-                              ) : (
-                                <div className="px-6 py-8 text-sm text-ink-muted">
-                                  {isUngrouped ? "还没有端口" : "裸主机 · 本组未选端口"}
-                                </div>
-                              )}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-5 py-6 text-sm text-ink-muted">
+                              {isUngrouped ? "还没有端口" : "裸主机 · 本组未选端口"}
                             </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </section>
-              );
-            })}
-            {!tree.length ? (
-              <p className="px-2 py-20 text-center text-sm text-ink-muted">
-                {assets.length ? "没有匹配的主机。" : "还没有资产。添加主机，再建组组装。"}
-              </p>
-            ) : null}
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })
+                )}
+              </div>
+            </section>
           </div>
         </main>
       </div>
@@ -410,7 +424,7 @@ export default function AssetPage() {
         onSaved={() => void load()}
         onDeleted={() => {
           setGroupId(null);
-          setSelectedGroups((prev) => prev.filter((id) => id !== groupId));
+          setActiveSectionId("");
           void load();
         }}
         onOpenHost={(id) => {
