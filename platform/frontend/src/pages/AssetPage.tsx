@@ -336,17 +336,6 @@ export default function AssetPage() {
                     ? host.related_vulnerabilities
                     : catalog?.related_vulnerabilities || [];
                   const pathTotal = ports.reduce((n, s) => n + (s.paths?.length || 0), 0);
-                  const riskChips = buildRiskChips(
-                    vulns.map((v) => ({
-                      id: v.id,
-                      title: v.title,
-                      severity: v.severity,
-                      status: v.status,
-                      confidence: v.confidence,
-                      port: v.port,
-                      description: v.description,
-                    })),
-                  );
                   const displayName = host.name && host.name !== host.address ? host.name : "";
                   return (
                     <article
@@ -376,17 +365,6 @@ export default function AssetPage() {
                             ))}
                           </div>
                         ) : null}
-                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                          {riskChips.slice(0, 4).map((c) => (
-                            <span
-                              key={c.key}
-                              className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${c.badgeClass}`}
-                            >
-                              {c.label}
-                              <span className="opacity-80">{c.count}</span>
-                            </span>
-                          ))}
-                        </div>
                         <p className="mt-2 text-[11px] text-ink-muted">
                           {[
                             ports.length ? `${ports.length} 个端口` : "无端口",
@@ -402,6 +380,17 @@ export default function AssetPage() {
                           ports.map((svc) => {
                             const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
                             const paths = svc.paths || [];
+                            const portRisk = buildRiskChips(
+                              portVulns.map((v) => ({
+                                id: v.id,
+                                title: v.title,
+                                severity: v.severity,
+                                status: v.status,
+                                confidence: v.confidence,
+                                port: v.port,
+                                description: v.description,
+                              })),
+                            );
                             return (
                               <button
                                 key={svc.port}
@@ -432,6 +421,19 @@ export default function AssetPage() {
                                   ) : null}
                                 </span>
                                 <span className="flex shrink-0 flex-col items-end gap-1">
+                                  {portRisk.length ? (
+                                    <span className="flex flex-wrap justify-end gap-1">
+                                      {portRisk.slice(0, 4).map((c) => (
+                                        <span
+                                          key={c.key}
+                                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${c.badgeClass}`}
+                                        >
+                                          {c.label}
+                                          <span className="opacity-80">{c.count}</span>
+                                        </span>
+                                      ))}
+                                    </span>
+                                  ) : null}
                                   <span className="flex flex-wrap justify-end gap-1">
                                     {(svc.tags || []).map((tag) => (
                                       <span
