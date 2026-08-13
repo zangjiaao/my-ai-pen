@@ -109,10 +109,10 @@ XXX系统1   0  │  │ example.com    │ 443 / https 系统2 │
 + 新建组      │
 ```
 
-1. Top: keyword + tag. Group lives in the left rail — no stacked drawers.  
-2. Left **档案**: one Group per row. Select it; the right pane shows only that Group’s cards.  
-3. Right: Host **asset cards**. Left of card: primary address, aliases, Host tags. Right: one port per row (port left, Service tags right).  
-4. 「编辑组」opens the Group dialog (assemble). Click Host / port → that object’s dialog. No checkbox, no「创建任务」.
+1. Same chrome as 漏洞/专家：TopBar + filter row + in-page sections. No nested frames.  
+2. Left **档案** rail is a page column (one hairline, like the app sidebar). Select a Group.  
+3. Right is a section list: Host identity left, ports right. Hosts separated by a hairline, not boxed cards.  
+4. 「编辑组」opens the Group dialog. Click Host / port → that object’s dialog. No checkbox, no「创建任务」.
 
 A Host can still belong to many Groups; switching the left rail shows that Group’s port subset. Surface tab stays #368. No Service-cluster chrome.
 
