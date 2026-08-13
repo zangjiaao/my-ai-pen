@@ -6,7 +6,6 @@ import { authFetch } from "../lib/api";
 import { casePath } from "../lib/caseRoutes";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { buildRiskChips } from "../components/cards/FindingCard";
 
 type RelatedVuln = {
   id: string;
@@ -33,6 +32,7 @@ type Service = {
   version?: string | null;
   url?: string | null;
   note?: string | null;
+  tags?: string[];
 };
 
 type Asset = {
@@ -49,12 +49,45 @@ type Asset = {
   source_label?: string;
   open_ports?: string[];
   services?: Service[];
+  aliases?: string[];
   ports_summary?: string;
   tech_summary?: string;
   risk?: RiskSummary;
   related_vulnerabilities: RelatedVuln[];
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+type TreeHost = {
+  id: string;
+  address: string;
+  name: string;
+  tags: string[];
+  aliases: string[];
+  services: Service[];
+  source?: string;
+  source_label?: string;
+  risk?: RiskSummary;
+  related_vulnerabilities?: RelatedVuln[];
+  updated_at?: string | null;
+};
+
+type TreeGroup = {
+  id: string;
+  name: string;
+  hosts: TreeHost[];
+};
+
+type AssetTree = {
+  groups: TreeGroup[];
+  all_groups: { id: string; name: string }[];
+  all_tags: string[];
+};
+
+type AssetGroup = {
+  id: string;
+  name: string;
+  members: { asset_id: string; ports: string[] }[];
 };
 
 type Conversation = { id: string; title?: string };
@@ -85,15 +118,15 @@ export default function AssetPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedPorts, setSelectedPorts] = useState<string[]>([]);
-  const [selectedServices, setSelectedServices] = useState<string[]>([]);
-  const [openMenu, setOpenMenu] = useState<"tag" | "port" | "service" | null>(null);
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [openMenu, setOpenMenu] = useState<"tag" | "group" | null>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [tree, setTree] = useState<TreeGroup[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
-  const [allPorts, setAllPorts] = useState<string[]>([]);
-  const [allServices, setAllServices] = useState<string[]>([]);
+  const [allGroups, setAllGroups] = useState<{ id: string; name: string }[]>([]);
+  const [groupRows, setGroupRows] = useState<AssetGroup[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -104,28 +137,45 @@ export default function AssetPage() {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [bulkDeleteError, setBulkDeleteError] = useState("");
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupFormName, setGroupFormName] = useState("");
+  const [groupFormError, setGroupFormError] = useState("");
+  const [savingGroup, setSavingGroup] = useState(false);
+  const [renamingGroup, setRenamingGroup] = useState<{ id: string; name: string } | null>(null);
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<AssetGroup | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState(false);
+  const [showAssemble, setShowAssemble] = useState(false);
+  const [assembleGroupId, setAssembleGroupId] = useState("");
+  const [assemblePorts, setAssemblePorts] = useState<Record<string, string[]>>({});
+  const [assembleError, setAssembleError] = useState("");
+  const [savingAssemble, setSavingAssemble] = useState(false);
 
   /** assetId → selected ports (or HOST_ONLY). */
   const [checkedPorts, setCheckedPorts] = useState<Record<string, string[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const params = useMemo(() => {
     const p = new URLSearchParams();
     if (search.trim()) p.set("search", search.trim());
     for (const t of selectedTags) p.append("tag", t);
-    for (const port of selectedPorts) p.append("port", port);
-    for (const svc of selectedServices) p.append("service", svc);
-    p.set("limit", "100");
+    for (const g of selectedGroups) p.append("group", g);
     return p;
-  }, [search, selectedTags, selectedPorts, selectedServices]);
+  }, [search, selectedTags, selectedGroups]);
 
   const load = async () => {
     setError("");
     try {
-      const res = await authFetch<Asset[]>(`/api/assets?${params}`);
-      setAssets(res);
+      const [treeRes, catalog] = await Promise.all([
+        authFetch<AssetTree>(`/api/assets/tree?${params}`),
+        authFetch<Asset[]>("/api/assets?limit=200"),
+      ]);
+      setTree(treeRes.groups || []);
+      setAllGroups(treeRes.all_groups || []);
+      setAllTags(treeRes.all_tags || []);
+      setAssets(catalog);
       if (selected) {
-        const fresh = res.find((item) => item.id === selected.id);
+        const fresh = catalog.find((item) => item.id === selected.id);
         if (fresh) setSelected(fresh);
       }
     } catch (err) {
@@ -135,16 +185,10 @@ export default function AssetPage() {
 
   const loadFilterOptions = async () => {
     try {
-      const [tags, ports, services] = await Promise.all([
-        authFetch<string[]>("/api/assets/tags").catch(() => [] as string[]),
-        authFetch<string[]>("/api/assets/ports").catch(() => [] as string[]),
-        authFetch<string[]>("/api/assets/services").catch(() => [] as string[]),
-      ]);
-      setAllTags(tags);
-      setAllPorts(ports);
-      setAllServices(services);
+      const groups = await authFetch<AssetGroup[]>("/api/asset-groups").catch(() => [] as AssetGroup[]);
+      setGroupRows(groups);
     } catch {
-      /* optional filter source */
+      /* optional */
     }
   };
 
@@ -245,12 +289,22 @@ export default function AssetPage() {
     return { assetsCount, portsCount, ids };
   }, [checkedPorts]);
 
+  const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
+  const visibleHosts = useMemo(() => {
+    const seen = new Map<string, TreeHost>();
+    for (const section of tree) {
+      for (const host of section.hosts) {
+        if (!seen.has(host.id)) seen.set(host.id, host);
+      }
+    }
+    return [...seen.values()];
+  }, [tree]);
+
   const bulkDeleteTargets = useMemo(() => {
-    const byId = new Map(assets.map((a) => [a.id, a]));
     return selectedSummary.ids
-      .map((id) => byId.get(id))
+      .map((id) => assetById.get(id))
       .filter((a): a is Asset => Boolean(a));
-  }, [assets, selectedSummary.ids]);
+  }, [assetById, selectedSummary.ids]);
 
   const bulkDeleteDescription = useMemo(() => {
     const n = bulkDeleteTargets.length;
@@ -321,11 +375,22 @@ export default function AssetPage() {
     setExpanded((prev) => ({ ...prev, [asset.id]: true }));
   };
 
+  const catalogForHost = (host: TreeHost): Asset =>
+    assetById.get(host.id) || {
+      id: host.id,
+      name: host.name,
+      address: host.address,
+      type: "host",
+      tags: host.tags,
+      properties: {},
+      source: host.source || "manual",
+      services: host.services,
+      related_vulnerabilities: host.related_vulnerabilities || [],
+    };
+
   const allFullySelected =
-    assets.length > 0 && assets.every((a) => isAssetFullySelected(a));
-  const someSelected = assets.some(
-    (a) => (checkedPorts[a.id] || []).length > 0,
-  );
+    visibleHosts.length > 0 && visibleHosts.every((h) => isAssetFullySelected(catalogForHost(h)));
+  const someSelected = visibleHosts.some((h) => (checkedPorts[h.id] || []).length > 0);
 
   const toggleAllAssets = () => {
     if (allFullySelected) {
@@ -333,10 +398,119 @@ export default function AssetPage() {
       return;
     }
     const next: Record<string, string[]> = {};
-    for (const a of assets) {
-      next[a.id] = selectAllPortsForAsset(a);
+    for (const h of visibleHosts) {
+      next[h.id] = selectAllPortsForAsset(catalogForHost(h));
     }
     setCheckedPorts(next);
+  };
+
+  const toggleGroupExpand = (groupId: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [groupId]: prev[groupId] === false }));
+  };
+
+  const createGroup = async () => {
+    const name = groupFormName.trim();
+    if (!name) {
+      setGroupFormError("请填写组名");
+      return;
+    }
+    setSavingGroup(true);
+    setGroupFormError("");
+    try {
+      await authFetch("/api/asset-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      setShowGroupForm(false);
+      setGroupFormName("");
+      await load();
+      void loadFilterOptions();
+    } catch (err) {
+      setGroupFormError(err instanceof Error ? err.message : "创建失败");
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const renameGroup = async () => {
+    if (!renamingGroup) return;
+    const name = renamingGroup.name.trim();
+    if (!name) {
+      setGroupFormError("请填写组名");
+      return;
+    }
+    setSavingGroup(true);
+    setGroupFormError("");
+    try {
+      await authFetch(`/api/asset-groups/${renamingGroup.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      setRenamingGroup(null);
+      await load();
+      void loadFilterOptions();
+    } catch (err) {
+      setGroupFormError(err instanceof Error ? err.message : "重命名失败");
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
+  const deleteGroup = async () => {
+    if (!confirmDeleteGroup) return;
+    setDeletingGroup(true);
+    try {
+      await authFetch(`/api/asset-groups/${confirmDeleteGroup.id}`, { method: "DELETE" });
+      setConfirmDeleteGroup(null);
+      setSelectedGroups((prev) => prev.filter((id) => id !== confirmDeleteGroup.id));
+      await load();
+      void loadFilterOptions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除组失败");
+    } finally {
+      setDeletingGroup(false);
+    }
+  };
+
+  const openAssemble = () => {
+    const first = allGroups[0]?.id || "";
+    setAssembleGroupId(first);
+    const next: Record<string, string[]> = {};
+    for (const id of selectedSummary.ids) {
+      const sel = (checkedPorts[id] || []).filter((p) => p !== HOST_ONLY);
+      next[id] = sel;
+    }
+    setAssemblePorts(next);
+    setAssembleError("");
+    setShowAssemble(true);
+  };
+
+  const saveAssemble = async () => {
+    if (!assembleGroupId) {
+      setAssembleError("请选择组");
+      return;
+    }
+    setSavingAssemble(true);
+    setAssembleError("");
+    try {
+      for (const id of selectedSummary.ids) {
+        await authFetch(`/api/asset-groups/${assembleGroupId}/hosts/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ports: assemblePorts[id] || [] }),
+        });
+      }
+      setShowAssemble(false);
+      setNotice("已写入组装");
+      await load();
+      void loadFilterOptions();
+    } catch (err) {
+      setAssembleError(err instanceof Error ? err.message : "组装失败");
+    } finally {
+      setSavingAssemble(false);
+    }
   };
 
   const clearSelection = () => setCheckedPorts({});
@@ -522,8 +696,24 @@ export default function AssetPage() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索 IP / 域名 / 名称"
-                className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+                placeholder="关键词：地址 / 别名 / 端口 / 标签 / 组名"
+                className="min-w-[16rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+              />
+
+              <MultiFilter
+                label="组"
+                buttonText={multiLabel(
+                  selectedGroups,
+                  "全部组",
+                  allGroups.map((g) => ({ value: g.id, label: g.name })),
+                )}
+                open={openMenu === "group"}
+                onToggle={() => setOpenMenu((m) => (m === "group" ? null : "group"))}
+                onClear={() => setSelectedGroups([])}
+                options={allGroups.map((g) => ({ value: g.id, label: g.name }))}
+                selected={selectedGroups}
+                onToggleValue={(v) => toggleInList(selectedGroups, v, setSelectedGroups)}
+                emptyText="暂无组"
               />
 
               <MultiFilter
@@ -542,44 +732,23 @@ export default function AssetPage() {
                 emptyText="暂无标签"
               />
 
-              <MultiFilter
-                label="端口"
-                buttonText={multiLabel(
-                  selectedPorts,
-                  "全部端口",
-                  allPorts.map((p) => ({ value: p, label: p })),
-                )}
-                open={openMenu === "port"}
-                onToggle={() => setOpenMenu((m) => (m === "port" ? null : "port"))}
-                onClear={() => setSelectedPorts([])}
-                options={allPorts.map((p) => ({ value: p, label: p, mono: true }))}
-                selected={selectedPorts}
-                onToggleValue={(v) => toggleInList(selectedPorts, v, setSelectedPorts)}
-                emptyText="暂无端口"
-              />
-
-              <MultiFilter
-                label="服务"
-                buttonText={multiLabel(
-                  selectedServices,
-                  "全部服务",
-                  allServices.map((s) => ({ value: s, label: s })),
-                )}
-                open={openMenu === "service"}
-                onToggle={() => setOpenMenu((m) => (m === "service" ? null : "service"))}
-                onClear={() => setSelectedServices([])}
-                options={allServices.map((s) => ({ value: s, label: s, mono: true }))}
-                selected={selectedServices}
-                onToggleValue={(v) => toggleInList(selectedServices, v, setSelectedServices)}
-                emptyText="暂无服务"
-              />
-
               <button
                 type="button"
                 onClick={openCreateDialog}
                 className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink hover:opacity-90"
               >
                 添加资产
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupFormName("");
+                  setGroupFormError("");
+                  setShowGroupForm(true);
+                }}
+                className="rounded-md border border-hairline px-3 py-2 text-sm hover:bg-surface-default"
+              >
+                新建组
               </button>
             </div>
 
@@ -596,6 +765,14 @@ export default function AssetPage() {
                   className="rounded-md bg-ink px-3 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
                 >
                   {launching ? "创建中…" : "创建任务"}
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkDeleting || launching || !allGroups.length}
+                  onClick={openAssemble}
+                  className="rounded-md border border-hairline px-2.5 py-1 text-[11px] font-medium hover:bg-canvas disabled:opacity-50"
+                >
+                  装入组
                 </button>
                 <button
                   type="button"
@@ -627,150 +804,156 @@ export default function AssetPage() {
               </div>
             )}
 
-            <div className="overflow-x-auto rounded-md border border-hairline-soft bg-surface-raised">
-              <table className="w-full min-w-[880px] table-fixed">
-                <thead>
-                  <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
-                    <th className="w-10 px-2 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={allFullySelected}
-                        ref={(el) => {
-                          if (el) el.indeterminate = someSelected && !allFullySelected;
-                        }}
-                        onChange={toggleAllAssets}
-                        className="rounded border-hairline"
-                        aria-label="全选资产"
-                      />
-                    </th>
-                    <th className="w-8 px-1 py-2.5" />
-                    <th className="min-w-0 px-3 py-2.5">IP / 域名</th>
-                    <th className="w-36 px-3 py-2.5">标签</th>
-                    <th className="w-44 px-3 py-2.5">端口 / 服务</th>
-                    <th className="w-48 px-3 py-2.5">风险</th>
-                    <th className="w-20 px-3 py-2.5">来源</th>
-                    <th className="w-24 px-3 py-2.5">更新</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {assets.map((a) => {
-                    const ports = listPorts(a);
-                    const isOpen = Boolean(expanded[a.id]);
-                    const full = isAssetFullySelected(a);
-                    const partial = isAssetPartiallySelected(a);
-                    const sel = checkedPorts[a.id] || [];
-                    return (
-                      <Fragment key={a.id}>
-                        <tr
-                          onClick={() => void openAsset(a.id)}
-                          className="cursor-pointer border-b border-hairline-soft text-sm hover:bg-surface-default"
+            <div className="rounded-md border border-hairline-soft bg-surface-raised">
+              <div className="flex items-center gap-2 border-b border-hairline bg-surface-default px-3 py-2 text-xs text-ink-secondary">
+                <input
+                  type="checkbox"
+                  checked={allFullySelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected && !allFullySelected;
+                  }}
+                  onChange={toggleAllAssets}
+                  className="rounded border-hairline"
+                  aria-label="全选资产"
+                />
+                <span>组 / 主机 / 端口</span>
+              </div>
+              <div className="divide-y divide-hairline-soft">
+                {tree.map((section) => {
+                  const groupOpen = expandedGroups[section.id] !== false;
+                  const isUngrouped = !section.id;
+                  return (
+                    <div key={section.id || "ungrouped"}>
+                      <div className="flex items-center gap-2 px-3 py-2 hover:bg-surface-default">
+                        <button
+                          type="button"
+                          className="w-5 text-left text-xs text-ink-muted"
+                          onClick={() => toggleGroupExpand(section.id)}
+                          aria-label={groupOpen ? "收起组" : "展开组"}
                         >
-                          <td
-                            className="px-2 py-2.5"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={full}
-                              ref={(el) => {
-                                if (el) el.indeterminate = partial;
-                              }}
-                              onChange={() => toggleAsset(a)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="rounded border-hairline"
-                              aria-label={`选择 ${a.address}`}
-                            />
-                          </td>
-                          <td className="px-1 py-2.5" onClick={(e) => toggleExpand(a.id, e)}>
+                          {groupOpen ? "▾" : "▸"}
+                        </button>
+                        <div className="min-w-0 flex-1 text-sm font-medium text-ink">
+                          {section.name}
+                          <span className="ml-2 text-[11px] font-normal text-ink-muted">
+                            {section.hosts.length}
+                          </span>
+                        </div>
+                        {!isUngrouped ? (
+                          <div className="flex shrink-0 gap-2">
                             <button
                               type="button"
-                              className="w-6 text-center text-xs text-ink-muted hover:text-ink"
-                              aria-label={isOpen ? "收起端口" : "展开端口"}
+                              className="text-[11px] text-ink-muted hover:text-ink"
+                              onClick={() => {
+                                setGroupFormError("");
+                                setRenamingGroup({ id: section.id, name: section.name });
+                              }}
                             >
-                              {isOpen ? "▾" : "▸"}
+                              重命名
                             </button>
-                          </td>
-                          <td className="min-w-0 px-3 py-2.5">
-                            <div className="truncate font-mono text-sm font-medium text-ink">{a.address}</div>
-                            {a.name && a.name !== a.address ? (
-                              <div className="mt-0.5 truncate text-[11px] text-ink-muted">{a.name}</div>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <TagList tags={a.tags || []} />
-                          </td>
-                          <td
-                            className="truncate px-3 py-2.5 font-mono text-xs text-ink-secondary"
-                            title={a.ports_summary || ""}
-                          >
-                            {a.ports_summary || "—"}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <RiskChips findings={a.related_vulnerabilities || []} fallback={a.risk} />
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-ink-muted">{a.source_label || a.source}</td>
-                          <td className="px-3 py-2.5 text-xs text-ink-muted">{formatDate(a.updated_at)}</td>
-                        </tr>
-                        {isOpen && (
-                          <tr className="border-b border-hairline-soft bg-canvas-inset/40">
-                            <td colSpan={8} className="px-4 py-2">
-                              {ports.length ? (
-                                <div className="ml-8 flex flex-wrap gap-2">
-                                  {ports.map((port) => {
-                                    const svc = (a.services || []).find((s) => s.port === port);
-                                    const label = svc?.name ? `${port}/${svc.name}` : port;
-                                    const checked = sel.includes(port);
-                                    return (
-                                      <label
-                                        key={port}
-                                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
-                                          checked
-                                            ? "border-ink bg-canvas text-ink"
-                                            : "border-hairline bg-canvas text-ink-secondary hover:border-ink/40"
-                                        }`}
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() => togglePort(a, port)}
-                                          className="rounded border-hairline"
-                                        />
-                                        <span className="font-mono">{label}</span>
-                                        {svc?.note ? (
-                                          <span
-                                            className="max-w-[8rem] truncate text-[10px] text-ink-muted"
-                                            title={svc.note}
-                                          >
-                                            · {svc.note}
-                                          </span>
-                                        ) : null}
-                                      </label>
-                                    );
-                                  })}
+                            <button
+                              type="button"
+                              className="text-[11px] text-ink-muted hover:text-severity-critical"
+                              onClick={() => {
+                                const row = groupRows.find((g) => g.id === section.id);
+                                setConfirmDeleteGroup(row || { id: section.id, name: section.name, members: [] });
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                      {groupOpen
+                        ? section.hosts.map((host) => {
+                            const asset = catalogForHost(host);
+                            const hostKey = `${section.id}:${host.id}`;
+                            const isOpen = Boolean(expanded[hostKey]);
+                            const full = isAssetFullySelected(asset);
+                            const partial = isAssetPartiallySelected(asset);
+                            const sel = checkedPorts[host.id] || [];
+                            const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(asset);
+                            return (
+                              <Fragment key={hostKey}>
+                                <div
+                                  className="flex cursor-pointer items-center gap-2 px-3 py-2 pl-8 hover:bg-surface-default"
+                                  onClick={() => void openAsset(host.id)}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={full}
+                                    ref={(el) => {
+                                      if (el) el.indeterminate = partial;
+                                    }}
+                                    onChange={() => toggleAsset(asset)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="rounded border-hairline"
+                                    aria-label={`选择 ${host.address}`}
+                                  />
+                                  <button
+                                    type="button"
+                                    className="w-5 text-xs text-ink-muted"
+                                    onClick={(e) => toggleExpand(hostKey, e)}
+                                    aria-label={isOpen ? "收起端口" : "展开端口"}
+                                  >
+                                    {isOpen ? "▾" : "▸"}
+                                  </button>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate font-mono text-sm text-ink">{host.address}</div>
+                                    {aliases.length ? (
+                                      <div className="truncate font-mono text-[11px] text-ink-muted">
+                                        {aliases.join(" · ")}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <div className="shrink-0">
+                                    <TagList tags={host.tags || []} />
+                                  </div>
                                 </div>
-                              ) : (
-                                <p className="ml-8 text-xs text-ink-muted">
-                                  暂无端口清单；勾选主机将按整机目标创建任务（后续 Agent 发现端口会写入台账）。
-                                </p>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                  {!assets.length && (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-ink-muted">
-                        暂无资产。会话测试中 Agent 会按主机自动登记；也可点击「添加资产」录入 IP/域名。
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                                {isOpen ? (
+                                  (host.services || []).length ? (
+                                    (host.services || []).map((svc) => {
+                                      const checked = sel.includes(svc.port);
+                                      const label = svc.name ? `${svc.port}/${svc.name}` : svc.port;
+                                      return (
+                                        <div
+                                          key={`${hostKey}:${svc.port}`}
+                                          className="flex items-center gap-2 px-3 py-1.5 pl-16 text-xs"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => togglePort(asset, svc.port)}
+                                            className="rounded border-hairline"
+                                          />
+                                          <span className="font-mono text-ink">{label}</span>
+                                          <div className="ml-auto">
+                                            <TagList tags={svc.tags || []} />
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  ) : (
+                                    <p className="px-3 py-1.5 pl-16 text-xs text-ink-muted">
+                                      {section.id ? "裸主机（本组未选端口）" : "暂无端口"}
+                                    </p>
+                                  )
+                                ) : null}
+                              </Fragment>
+                            );
+                          })
+                        : null}
+                    </div>
+                  );
+                })}
+                {!tree.length && (
+                  <p className="px-4 py-10 text-center text-sm text-ink-muted">
+                    {assets.length
+                      ? "没有匹配的主机。试试少选几个标签，或清空组筛选。"
+                      : "暂无资产。点击「添加资产」录入 IP/域名，再用「新建组」组装。"}
+                  </p>
+                )}
+              </div>
             </div>
           </main>
 
@@ -779,6 +962,7 @@ export default function AssetPage() {
             assetId={selected?.id}
             initial={selected}
             knownTags={allTags}
+            groups={groupRows}
             onClose={() => setSelected(null)}
             onSaved={() => {
               void load();
@@ -819,7 +1003,7 @@ export default function AssetPage() {
               >
                 <h2 className="text-lg font-semibold">添加资产</h2>
                 <p className="mt-1 text-xs text-ink-muted">
-                  一个资产对应一个 IP 或域名。端口与漏洞由 Agent 在测试中挂接；标签用于分组。
+                  一个资产对应一个 IP 或域名。用「新建组」把主机和所选端口装进去；标签打在主机或端口上，不是组。
                 </p>
                 <div className="mt-4 space-y-3">
                   <Field label="IP / 域名">
@@ -868,10 +1052,179 @@ export default function AssetPage() {
               </div>
             </div>
           )}
+
+          {(showGroupForm || renamingGroup) && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4"
+              onClick={() => {
+                if (savingGroup) return;
+                setShowGroupForm(false);
+                setRenamingGroup(null);
+              }}
+            >
+              <div
+                className="w-full max-w-md rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 className="text-lg font-semibold">{renamingGroup ? "重命名组" : "新建组"}</h2>
+                <Field label="组名">
+                  <input
+                    value={renamingGroup ? renamingGroup.name : groupFormName}
+                    onChange={(e) => {
+                      if (renamingGroup) setRenamingGroup({ ...renamingGroup, name: e.target.value });
+                      else setGroupFormName(e.target.value);
+                    }}
+                    placeholder="例如 XXX公司 / OA"
+                    className="w-full rounded-md border border-hairline px-3 py-2 text-sm"
+                    autoFocus
+                  />
+                </Field>
+                {groupFormError && <p className="mt-3 text-xs text-severity-critical">{groupFormError}</p>}
+                <div className="mt-6 flex justify-end gap-2 border-t border-hairline-soft pt-4">
+                  <button
+                    type="button"
+                    disabled={savingGroup}
+                    onClick={() => {
+                      setShowGroupForm(false);
+                      setRenamingGroup(null);
+                    }}
+                    className="rounded-md border border-hairline px-3 py-1.5 text-xs"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingGroup}
+                    onClick={() => void (renamingGroup ? renameGroup() : createGroup())}
+                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
+                  >
+                    {savingGroup ? "保存中…" : "保存"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showAssemble && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4"
+              onClick={() => {
+                if (!savingAssemble) setShowAssemble(false);
+              }}
+            >
+              <div
+                className="w-full max-w-lg rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 className="text-lg font-semibold">装入组</h2>
+                <p className="mt-1 text-xs text-ink-muted">
+                  把已选主机装进一个组，并勾选该组要包含的端口。不勾端口 = 裸主机。
+                </p>
+                <Field label="组">
+                  <select
+                    value={assembleGroupId}
+                    onChange={(e) => setAssembleGroupId(e.target.value)}
+                    className="w-full rounded-md border border-hairline px-3 py-2 text-sm"
+                  >
+                    {!allGroups.length ? <option value="">请先新建组</option> : null}
+                    {allGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="mt-3 max-h-64 space-y-3 overflow-y-auto">
+                  {selectedSummary.ids.map((id) => {
+                    const asset = assetById.get(id);
+                    if (!asset) return null;
+                    const ports = listPorts(asset);
+                    const picked = new Set(assemblePorts[id] || []);
+                    return (
+                      <div key={id} className="rounded-md border border-hairline-soft px-3 py-2">
+                        <div className="font-mono text-sm">{asset.address}</div>
+                        {ports.length ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {ports.map((port) => (
+                              <label key={port} className="inline-flex items-center gap-1 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={picked.has(port)}
+                                  onChange={() => {
+                                    setAssemblePorts((prev) => {
+                                      const cur = new Set(prev[id] || []);
+                                      if (cur.has(port)) cur.delete(port);
+                                      else cur.add(port);
+                                      return { ...prev, [id]: [...cur] };
+                                    });
+                                  }}
+                                />
+                                <span className="font-mono">{port}</span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-[11px] text-ink-muted">无端口，将以裸主机装入</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {assembleError && <p className="mt-3 text-xs text-severity-critical">{assembleError}</p>}
+                <div className="mt-6 flex justify-end gap-2 border-t border-hairline-soft pt-4">
+                  <button
+                    type="button"
+                    disabled={savingAssemble}
+                    onClick={() => setShowAssemble(false)}
+                    className="rounded-md border border-hairline px-3 py-1.5 text-xs"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingAssemble}
+                    onClick={() => void saveAssemble()}
+                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
+                  >
+                    {savingAssemble ? "保存中…" : "保存"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <ConfirmDialog
+            open={Boolean(confirmDeleteGroup)}
+            title="删除组"
+            description={
+              confirmDeleteGroup
+                ? `确定删除组「${confirmDeleteGroup.name}」？主机会回到未分组，不会删除主机。`
+                : ""
+            }
+            busy={deletingGroup}
+            confirmLabel="删除组"
+            onCancel={() => setConfirmDeleteGroup(null)}
+            onConfirm={() => void deleteGroup()}
+          />
         </div>
       </div>
     </div>
   );
+}
+
+function aliasesFromAsset(asset: Asset): string[] {
+  const raw = asset.aliases || (asset.properties as { aliases?: unknown })?.aliases;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        const rec = item as Record<string, unknown>;
+        return String(rec.value || rec.address || rec.host || "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
 }
 
 function listPorts(asset: Asset): string[] {
@@ -933,11 +1286,6 @@ function serviceFocusPath(asset: Asset, port: string): string | null {
   return null;
 }
 
-/** @deprecated prefer scopeOriginForPort for task scope; kept for display callers */
-function serviceUrl(asset: Asset, port: string): string | null {
-  return scopeOriginForPort(asset, port);
-}
-
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
@@ -959,69 +1307,6 @@ function TagList({ tags }: { tags: string[] }) {
       {tags.length > 4 ? <span className="text-[11px] text-ink-muted">+{tags.length - 4}</span> : null}
     </div>
   );
-}
-
-function RiskChips({
-  findings,
-  fallback,
-}: {
-  findings: RelatedVuln[];
-  fallback?: RiskSummary;
-}) {
-  const chips = buildRiskChips(
-    findings.map((v) => ({
-      id: v.id,
-      title: v.title,
-      severity: v.severity,
-      status: v.status,
-      confidence: v.confidence,
-      port: v.port,
-      description: v.description,
-    })),
-  );
-  if (!chips.length) {
-    if (fallback && fallback.open_total > 0) {
-      return (
-        <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] text-ink-secondary">
-          {fallback.label}
-        </span>
-      );
-    }
-    return <span className="text-xs text-ink-muted">—</span>;
-  }
-  const fullTitle = chips.map((c) => `${c.label} ${c.count}`).join(" · ");
-  // Cap visible chips so the cell stays within ~2 lines; rest in title tooltip.
-  const maxVisible = 4;
-  const visible = chips.slice(0, maxVisible);
-  const extra = chips.length - visible.length;
-  return (
-    <div
-      className="flex max-h-[2.5rem] flex-wrap content-start gap-1 overflow-hidden"
-      title={fullTitle}
-    >
-      {visible.map((c) => (
-        <span
-          key={c.key}
-          className={`inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase leading-tight ${c.badgeClass}`}
-        >
-          <span>{c.label}</span>
-          <span className="opacity-80">{c.count}</span>
-        </span>
-      ))}
-      {extra > 0 ? (
-        <span className="inline-flex shrink-0 items-center rounded-md bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] text-ink-muted">
-          +{extra}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value.slice(0, 10);
-  return d.toLocaleDateString();
 }
 
 function MultiFilter({

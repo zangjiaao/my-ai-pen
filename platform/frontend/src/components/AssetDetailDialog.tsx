@@ -25,6 +25,13 @@ type ServiceRow = {
   version?: string | null;
   url?: string | null;
   note?: string | null;
+  tags?: string[];
+};
+
+type GroupOption = {
+  id: string;
+  name: string;
+  members: { asset_id: string; ports: string[] }[];
 };
 
 type AssetDetail = Omit<SecurityAsset, "services" | "related_vulnerabilities"> & {
@@ -45,6 +52,7 @@ interface Props {
   assetId?: string | null;
   initial?: Partial<AssetDetail> | null;
   knownTags?: string[];
+  groups?: GroupOption[];
   /** @deprecated use knownTags */
   systems?: string[];
   onClose: () => void;
@@ -57,6 +65,7 @@ export default function AssetDetailDialog({
   assetId,
   initial,
   knownTags = [],
+  groups = [],
   systems = [],
   onClose,
   onSaved,
@@ -75,6 +84,7 @@ export default function AssetDetailDialog({
   /** port -> draft note text while editing */
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [editingNotePort, setEditingNotePort] = useState<string | null>(null);
   const [savingNotePort, setSavingNotePort] = useState<string | null>(null);
   const [showAddPort, setShowAddPort] = useState(false);
@@ -95,6 +105,7 @@ export default function AssetDetailDialog({
     setEditingNotePort(null);
     setNoteDrafts({});
     setNameDrafts({});
+    setTagDrafts({});
     setShowAddPort(false);
     setAddPortForm({ port: "", name: "", note: "" });
     setConfirmRemovePort(null);
@@ -153,7 +164,7 @@ export default function AssetDetailDialog({
       const note = (s.note || "").trim();
       // Display/edit body: user note if set, otherwise default to URL as the starting remark.
       const remark = note || url || "";
-      return { port, serviceName, url, note, remark };
+      return { port, serviceName, url, note, remark, tags: s.tags || [] };
     });
   }, [services, host]);
 
@@ -161,15 +172,19 @@ export default function AssetDetailDialog({
     if (!id) return;
     const note = (noteDrafts[port] ?? "").trim();
     const name = (nameDrafts[port] ?? "").trim();
+    const tags = (tagDrafts[port] ?? "")
+      .split(/[,，;；\n]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
     setSavingNotePort(port);
     setError("");
     try {
-      // Merge service name + note so users can fully maintain port info by hand.
+      // Merge service name + note + tags so users can fully maintain port info by hand.
       const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          services: [{ port, name, note }],
+          services: [{ port, name, note, tags }],
         }),
       });
       setDetail(updated);
@@ -181,6 +196,11 @@ export default function AssetDetailDialog({
         return next;
       });
       setNameDrafts((prev) => {
+        const next = { ...prev };
+        delete next[port];
+        return next;
+      });
+      setTagDrafts((prev) => {
         const next = { ...prev };
         delete next[port];
         return next;
@@ -328,6 +348,17 @@ export default function AssetDetailDialog({
       setError(err instanceof Error ? err.message : "保存失败");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const removeFromGroup = async (groupId: string) => {
+    if (!id) return;
+    setError("");
+    try {
+      await authFetch(`/api/asset-groups/${groupId}/hosts/${id}`, { method: "DELETE" });
+      onSaved?.(asset as AssetDetail);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "移出组失败");
     }
   };
 
@@ -506,6 +537,8 @@ export default function AssetDetailDialog({
                     noteDrafts[card.port] !== undefined ? noteDrafts[card.port] : card.remark;
                   const draftName =
                     nameDrafts[card.port] !== undefined ? nameDrafts[card.port] : card.serviceName;
+                  const draftTags =
+                    tagDrafts[card.port] !== undefined ? tagDrafts[card.port] : (card.tags || []).join(", ");
                   const title = card.serviceName
                     ? `${card.port}/${card.serviceName}`
                     : `${card.port}`;
@@ -538,6 +571,17 @@ export default function AssetDetailDialog({
                               />
                             </label>
                           </div>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] text-ink-muted">端口标签</span>
+                            <input
+                              value={draftTags}
+                              onChange={(e) =>
+                                setTagDrafts((prev) => ({ ...prev, [card.port]: e.target.value }))
+                              }
+                              placeholder="例如 系统1, 生产"
+                              className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-sm focus:border-ink focus:outline-none"
+                            />
+                          </label>
                           <label className="block space-y-1">
                             <span className="text-[11px] text-ink-muted">备注</span>
                             <textarea
@@ -614,6 +658,10 @@ export default function AssetDetailDialog({
                                     ...prev,
                                     [card.port]: card.serviceName,
                                   }));
+                                  setTagDrafts((prev) => ({
+                                    ...prev,
+                                    [card.port]: (card.tags || []).join(", "),
+                                  }));
                                 }}
                                 className="text-[11px] text-ink-muted hover:text-ink"
                               >
@@ -629,6 +677,18 @@ export default function AssetDetailDialog({
                               </button>
                             </div>
                           </div>
+                          {(card.tags || []).length ? (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {(card.tags || []).map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                           <div className="mt-2.5 border-t border-hairline-soft pt-2.5">
                             {card.remark ? (
                               <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-ink-secondary">
@@ -762,9 +822,45 @@ export default function AssetDetailDialog({
                   </div>
                 )}
                 <p className="text-[11px] leading-relaxed text-ink-muted">
-                  相同标签可把多个 IP/域名归为一组（如「支付系统」「生产」）。保存后可在列表按标签筛选。
+                  标签打在主机上。端口标签在「端口/服务」里编辑。组是单独的组装，不是标签。
                 </p>
               </div>
+
+              {groups.length > 0 && id ? (
+                <div className="space-y-2">
+                  <span className="text-[11px] font-medium text-ink-secondary">所在组</span>
+                  {groups.filter((g) => g.members.some((m) => m.asset_id === id)).length ? (
+                    groups
+                      .filter((g) => g.members.some((m) => m.asset_id === id))
+                      .map((g) => {
+                        const member = g.members.find((m) => m.asset_id === id);
+                        const ports = member?.ports || [];
+                        return (
+                          <div
+                            key={g.id}
+                            className="flex items-center justify-between gap-2 rounded-md border border-hairline-soft px-2.5 py-2 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-medium text-ink">{g.name}</div>
+                              <div className="font-mono text-[11px] text-ink-muted">
+                                {ports.length ? ports.join(", ") : "裸主机"}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="shrink-0 text-[11px] text-ink-muted hover:text-severity-critical"
+                              onClick={() => void removeFromGroup(g.id)}
+                            >
+                              移出
+                            </button>
+                          </div>
+                        );
+                      })
+                  ) : (
+                    <p className="text-[11px] text-ink-muted">尚未装入任何组。在资产页勾选后点「装入组」。</p>
+                  )}
+                </div>
+              ) : null}
 
               <div className="rounded-md border border-severity-critical/30 bg-severity-critical-subtle/40 p-3.5">
                 <p className="text-sm font-medium text-severity-critical">危险区域</p>
@@ -891,6 +987,9 @@ function normalizeServices(value: unknown): ServiceRow[] {
       version: rec.version != null ? String(rec.version) : null,
       url: typeof urlRaw === "string" && urlRaw.trim() ? urlRaw.trim() : null,
       note: typeof noteRaw === "string" && noteRaw.trim() ? noteRaw.trim() : null,
+      tags: Array.isArray(rec.tags)
+        ? rec.tags.map((t) => String(t).trim()).filter(Boolean)
+        : [],
     });
   }
   return rows.sort((a, b) => Number(a.port) - Number(b.port));

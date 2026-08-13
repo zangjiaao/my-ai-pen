@@ -2,7 +2,7 @@
 
 **Status:** Living Spec — **shipped** (tickets [#408](https://github.com/zangjiaao/my-ai-pen/issues/408)–[#411](https://github.com/zangjiaao/my-ai-pen/issues/411); purpose axis extended by [#413](https://github.com/zangjiaao/my-ai-pen/issues/413)). Product contract remains normative.  
 **Amends:** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368) (v2 settle + seen/touched/booked internal)  
-**Related:** Asset inventory [#322](https://github.com/zangjiaao/my-ai-pen/issues/322); product state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free coverage honesty [#406](https://github.com/zangjiaao/my-ai-pen/issues/406) / soft SEEN harness [#407](https://github.com/zangjiaao/my-ai-pen/issues/407)  
+**Related:** Owner ledger [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) (supersedes #322); product state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free coverage honesty [#406](https://github.com/zangjiaao/my-ai-pen/issues/406) / soft SEEN harness [#407](https://github.com/zangjiaao/my-ai-pen/issues/407)  
 **Field drivers:** Cases `c02e3c20-…`, `5a9cf1f6-…` — operators read Case Surface as “still untested”; Agents treated platform vuln priors as coverage and left Runtime-objective first-touch rows unadvanced; tree chip density (methods + status + severity + rollup) obscured signal.
 
 **Product path:** Node4 Graph × Pi + platform Case Surface tab (ADR 0001).  
@@ -38,7 +38,7 @@
 
 ### L3 — Durable inventory + NEW
 
-- Attack-surface identities **precipitate into asset-scoped inventory** (align with Asset inventory Spec #322; Case ledger remains the live engagement projection).  
+- Attack-surface identities **precipitate into asset-scoped inventory** (align with Owner ledger Spec #454; Case ledger remains the live engagement projection).  
 - **NEW** = identity **first admitted** to that durable inventory (or first observed under product rules for “unknown to inventory”).  
 - **Not NEW** = already in inventory from prior Cases/engagements — **no SEEN chip, no PRIOR chip** (quiet row unless TESTED this Case or finding tags).  
 - **Old surfaces retested this Case** may become **TESTED** and may hang **finding tags** after confirm — same as new paths.
@@ -102,7 +102,7 @@
 
 1. **Primary seam — UI projection:** Surface tree / summary counts use L5; method chips default off; BOOK/SEEN/PRIOR not shown.  
 2. **Secondary seam — Case status mapping:** Expand–contract from v2 write statuses to operator TESTED + internal fields for NEW (inventory flag or join).  
-3. **Tertiary seam — Inventory precipitation (#410):** On Platform dual-write of Traffic settle / TARGET seed / booked create, upsert identity into user-scoped `surface_inventory` (origin_key+path_key; optional asset_id via Host match). First admit → Case row `is_new=true` (sticky for the engagement); later Cases → `is_new=false`. Case ledger remains TESTED/traffic SoT. Aligns with Spec #322 as thin novelty baseline — does not redefine Host→Service.  
+3. **Tertiary seam — Inventory precipitation (#410):** On Platform dual-write of Traffic settle / TARGET seed / booked create, upsert identity into user-scoped `surface_inventory` (origin_key+path_key; optional asset_id via Host match). First admit → Case row `is_new=true` (sticky for the engagement); later Cases → `is_new=false`. Case ledger remains TESTED/traffic SoT. Aligns with Spec #454 as thin novelty baseline — does not redefine Group × Host × Service.  
 4. **Agent seam:** Profession + surface tool guidance + soft continue reminders use **NEW untested** queue (replace pure “seen count” copy where inventory is available).  
 5. **Upsert:** Must not elevate TESTED rank without traffic (harden if still possible).  
 6. **Graph gates:** Keep host-owned package/surface gates; map booked/open internally without forcing BOOK chip on Free UI.  

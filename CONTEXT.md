@@ -91,3 +91,25 @@ _Avoid_: treating queue fullness as stage L0 gate; killed/deferred as ledger vul
 **Runtime transcript**:
 Turn-local agent messages inside the Agent Runtime. Optional Node4 projection from Runtime events for debug/stream; not required as a product session format; never used as fail-closed gate input.
 _Avoid_: dual cookie stores; Feedback parsing private Runtime/session formats; salvage handoff from transcript
+
+### Owner ledger
+
+**Group**:
+A named assembly bucket the owner creates (公司 / 系统 / 项目). Independent of Host and Service. One assembly is Group + Host + a chosen subset of that Host’s Services. The same Host may appear in many Groups with different port subsets.
+_Avoid_: single-parent folder; Host-only membership that always drags every port; Service cluster / 分身
+
+**Host**:
+An owner-enrolled address card: one primary IP or domain, plus optional aliases (child addresses). Aliases are the same machine. Distinct vhosts are distinct Hosts even if they resolve to one IP.
+_Avoid_: auto-merging vhosts because of DNS; treating domain + public IP + internal IP as a Service-level 分身
+
+**Service**:
+One network face of a Host: that Host + one port (proto is display). Durable 攻击面 hangs here. Findings hang here by host:port.
+_Avoid_: path as a Service; a Service that exists without a Host; grouping Services across Hosts into a cluster
+
+**Tag**:
+A label on a Host or on a Service. Search is AND. A Host-level hit keeps the Host and, unless another tag only matches some of its Services, all of its Services; a Service-level hit keeps the Host and that Service only.
+_Avoid_: business tags only on Group; inventing org structure as required clerk work
+
+**Service 攻击面**:
+Durable paths under a Service (company book). A path enters only from `finding(confirm)` or an accepted HTTP(S) Traffic settle on an existing Host. Scan / SYN does not. Not Case Surface (#368 this-run NEW/TESTED).
+_Avoid_: dumping every scanned/SYN path onto the Host; calling Case Surface the company 暴露面总账; Agent creating a Host in order to hang a path

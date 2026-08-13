@@ -2,7 +2,7 @@
 
 **Status:** amended (product model v2 — Agent-first passive management)  
 **Issue:** [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)  
-**Related:** Product state → UI passive projection ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280)); Case traffic audit ([#309](https://github.com/zangjiaao/my-ai-pen/issues/309)); base booking / finding id ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279)); task-graph ([`task-graph.md`](task-graph.md)); Asset inventory ([#322](https://github.com/zangjiaao/my-ai-pen/issues/322)); ADR 0001 Graph × Pi
+**Related:** Product state → UI passive projection ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280)); Case traffic audit ([#309](https://github.com/zangjiaao/my-ai-pen/issues/309)); base booking / finding id ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279)); task-graph ([`task-graph.md`](task-graph.md)); Owner ledger ([#454](https://github.com/zangjiaao/my-ai-pen/issues/454)); ADR 0001 Graph × Pi
 
 **Product path:** Node4 Agent Runtime (Traffic collect → Surface settle + SQLite working store) · Platform Case `surface_ledger` + WS · Conversation right-panel Surface tab  
 
@@ -318,7 +318,7 @@ WS: `surface_upsert` by identity (retain).
 
 - Full automated recon pipeline (OpenAPI crawler skill, browser feature walk) — harness/pack tickets; must **feed** Traffic so settle still owns ledger fill.
 - MITM job D.
-- Asset table PK migration (#322).
+- Owner ledger Group × Host × Service (#454).
 - Keyword intent routing.
 
 ### D15 — Modules (logical, v2 delta)
@@ -376,11 +376,11 @@ External behavior: traffic in → surface row; second request → touched; confi
 
 Traffic is L0 capture. Surface is L1 **settled management ledger derived from Traffic** (plus seed/import). Agent may still `traffic_list` for raw detail.
 
-### Relation to #280 / #322
+### Relation to #280 / #454
 
-Unchanged layer split: Case Surface vs long-lived Asset inventory vs Traffic. v2 changes **how Surface fills**, not the layer boundaries.
+Unchanged layer split: Case Surface vs owner ledger vs Traffic. v2 changes **how Surface fills**, not the layer boundaries.
 
-**Durable surface identity inventory (Spec [#410](https://github.com/zangjiaao/my-ai-pen/issues/410)):** platform `surface_inventory` precipitates origin_key+path_key for **NEW** only (user-scoped; optional `asset_id` when Host exists). Case `surface_ledger` remains live SoT for TESTED/traffic/booked. Full Host→Service→Observation redesign stays Spec [#322](https://github.com/zangjiaao/my-ai-pen/issues/322) — #410 is a thin novelty baseline, not a competing inventory object model.
+**Durable surface identity inventory (Spec [#410](https://github.com/zangjiaao/my-ai-pen/issues/410)):** platform `surface_inventory` precipitates origin_key+path_key for **NEW** only (user-scoped; optional `asset_id` when Host exists). Case `surface_ledger` remains live SoT for TESTED/traffic/booked. Owner ledger (Group × Host × Service) is Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) — #410 is a thin novelty baseline, not a competing inventory object model. #322 Cluster/分身 is retired.
 
 ### Field lesson (Case 77fc1ff9 / similar)
 

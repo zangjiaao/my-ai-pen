@@ -65,8 +65,8 @@
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情。
   - **资产所有权（Scope 模型）：** 正式主机行写入仅在 **用户动作** 下发生——资产页人工录入/导入、**开测授权**（主目标不在表时默认登记）、**下一轮 Scope 勾选**、或从右侧 **Surface / 资产** 路径 **promote**。**Agent 不得静默新建资产行**（测中旁路只进 Case 攻击面候选或 Workset，不写正式 Host）。
-  - **Case Surface vs 资产 inventory：** 右侧 **Surface** tab 的 SoT 是 Case `surface_ledger`（Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)：Agent deposit + Node 工作库 + Platform 双写；空 ledger ⇒ 空面板）。长期 Host → Service → Observation 资产清单是 Spec [#322](https://github.com/zangjiaao/my-ai-pen/issues/322)，**依赖 #368 的 Surface 对象语义**；对象描述冲突以 #368 为准。
-  - **Agent 可维护的附属信息：** 对已存在主机合并端口、服务指纹、URL、API 端点等表面信息（inventory 深化见 #322）；booking 尽量把 finding 挂到 Scope 主 host（path-only location 回退 task target）；未知主机的 finding 允许暂时 `asset_id` 为空，promote 后可回填。
+  - **Case Surface vs 资产台账：** 右侧 **Surface** tab 的 SoT 是 Case `surface_ledger`（Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)）——**本轮**覆盖。长期资产是 Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) / [`specs/owner-ledger.md`](specs/owner-ledger.md)：**Group × Host × Service 组装**（同一 Host 可进多组、各组口子集不同；别名在 Host 上；vhost 分 Host）。对象冲突以 #368 为准。**#322 Cluster/分身 已退役**，不要再实现。
+  - **Agent 可维护的附属信息：** 对已存在 Host 合并端口、指纹、URL；不得静默建 Host / 建 Group / 写组装。booking 尽量把 finding 挂到 Scope 主 host（path-only location 回退 task target）；未知主机的 finding 允许暂时 `asset_id` 为空，promote 后可回填。
   - **下一轮 Scope：** 任务结束后若有 out-of-scope 候选 host，UI 多选 → 新任务（新 `scope.allow`），不是同一 work-burst 无限续跑。
 - **会话工作态（Send / 中断）：** 以 Node 侧 work-burst（`busy` / `work_status`）为真相源；平台维护会话 `workers` 并广播 `conversation_working`。当前会话只要有专家在工作，UI 显示中断；中断会扇出到该会话全部在线专家运行时。
 - 高风险操作：`request_decision` ↔ 用户 authorize/cancel。

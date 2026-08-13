@@ -9,6 +9,7 @@ from app.models.evidence import Evidence
 from app.models.expert import Expert
 from app.models.conversation_report import ConversationReport
 from app.models.surface_inventory import SurfaceInventory
+from app.models.owner_ledger import AssetAssembly, AssetGroup
 
 __all__ = [
     "User",
@@ -22,4 +23,6 @@ __all__ = [
     "Expert",
     "ConversationReport",
     "SurfaceInventory",
+    "AssetGroup",
+    "AssetAssembly",
 ]

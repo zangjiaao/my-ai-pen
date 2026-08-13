@@ -851,6 +851,13 @@ def merge_service_lists(existing: object, incoming: object) -> list[dict[str, An
                     cleaned.pop("note", None)
                     cleaned.pop("remark", None)
             cleaned.pop("_note_set", None)
+            if cleaned.get("_tags_set") or "tags" in cleaned:
+                tags = normalize_tags(cleaned.get("tags"))
+                if tags:
+                    cleaned["tags"] = tags
+                else:
+                    cleaned.pop("tags", None)
+            cleaned.pop("_tags_set", None)
             by_port[port] = cleaned
             order.append(port)
             continue
@@ -872,12 +879,23 @@ def merge_service_lists(existing: object, incoming: object) -> list[dict[str, An
                 prev.pop("note", None)
                 prev.pop("remark", None)
         prev.pop("_note_set", None)
+        # Service tags (#454): only overwrite when incoming explicitly sets tags.
+        if item.get("_tags_set") or "tags" in item:
+            tags = normalize_tags(item.get("tags"))
+            if tags:
+                prev["tags"] = tags
+            else:
+                prev.pop("tags", None)
+        prev.pop("_tags_set", None)
         name = str(prev.get("name") or prev.get("service") or prev.get("product") or "").strip()
         if name:
             prev["name"] = name
         prev["port"] = port
         by_port[port] = prev
-    return [{k: v for k, v in by_port[p].items() if k != "_note_set"} for p in order]
+    return [
+        {k: v for k, v in by_port[p].items() if k not in {"_note_set", "_tags_set"}}
+        for p in order
+    ]
 
 
 def _service_note(item: dict[str, Any]) -> str:
@@ -1020,9 +1038,6 @@ def merge_discover_properties(
 ) -> dict[str, Any]:
     """Merge discover payload; services keyed by port, open_ports derived; urls/apis unioned."""
     base = dict(existing_properties) if isinstance(existing_properties, dict) else {}
-    # Drop multi-host fields — one asset = one host.
-    base.pop("aliases", None)
-    base.pop("identities", None)
 
     existing_services = extract_services(base)
     incoming_services = _normalize_service_list(services) if services is not None else []
@@ -1392,6 +1407,9 @@ def _normalize_service_list(raw: object) -> list[dict[str, Any]]:
         if note_explicit:
             cleaned["note"] = _service_note(item)
             cleaned["_note_set"] = True
+        if "tags" in item:
+            cleaned["tags"] = normalize_tags(item.get("tags"))
+            cleaned["_tags_set"] = True
         out.append(cleaned)
     return out
 
@@ -1416,3 +1434,249 @@ def _parse_dt(value: object) -> datetime | None:
         return dt
     except ValueError:
         return None
+
+
+UNGROUPED_GROUP_ID = ""
+UNGROUPED_GROUP_NAME = "未分组"
+
+
+def normalize_assembly_ports(value: object) -> list[str]:
+    """Normalized unique port list for an assembly subset. Empty = bare Host."""
+    return _normalize_port_list(value)
+
+
+def collect_owner_tags(hosts: list[dict[str, Any]] | None) -> list[str]:
+    """Union of Host tags and Service tags, stable case-insensitive order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for host in hosts or []:
+        if not isinstance(host, dict):
+            continue
+        for tag in normalize_tags(host.get("tags")):
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(tag)
+        for svc in extract_services(host.get("properties") if isinstance(host.get("properties"), dict) else {}):
+            for tag in normalize_tags(svc.get("tags")):
+                key = tag.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(tag)
+    return sorted(out, key=lambda t: t.lower())
+
+
+def apply_service_tags(properties: object, port_tags: object) -> dict[str, Any]:
+    """Set tags on existing services by port. Empty list clears. Does not create ports or Groups."""
+    props = dict(properties) if isinstance(properties, dict) else {}
+    services = [dict(s) for s in extract_services(props)]
+    incoming = port_tags if isinstance(port_tags, dict) else {}
+    want: dict[str, list[str]] = {}
+    for raw_port, raw_tags in incoming.items():
+        port = normalize_port(raw_port)
+        if not port:
+            continue
+        want[port] = normalize_tags(raw_tags)
+    out: list[dict[str, Any]] = []
+    for svc in services:
+        port = normalize_port(svc.get("port"))
+        if not port:
+            continue
+        row = dict(svc)
+        if port in want:
+            tags = want[port]
+            if tags:
+                row["tags"] = tags
+            else:
+                row.pop("tags", None)
+        out.append(row)
+    props["services"] = out
+    props["open_ports"] = [str(s.get("port")) for s in out if s.get("port")]
+    return props
+
+
+def project_owner_ledger(
+    *,
+    hosts: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
+    assemblies: list[dict[str, Any]] | None = None,
+    keyword: str | None = None,
+    group_ids: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Project Group × Host × Service tree. Search is condition AND; operator searches Hosts.
+
+    Empty assembly ports = bare Host in that Group. Hosts in no assembly go under 未分组
+    unless a group_ids filter is set.
+    """
+    host_rows = [h for h in (hosts or []) if isinstance(h, dict) and h.get("id") is not None]
+    by_id: dict[str, dict[str, Any]] = {str(h["id"]): h for h in host_rows}
+    group_rows = [g for g in (groups or []) if isinstance(g, dict) and g.get("id") is not None]
+    group_by_id = {str(g["id"]): g for g in group_rows}
+
+    members: dict[str, list[dict[str, Any]]] = {}
+    assembled_hosts: set[str] = set()
+    for raw in assemblies or []:
+        if not isinstance(raw, dict):
+            continue
+        gid = str(raw.get("group_id") or "")
+        aid = str(raw.get("asset_id") or "")
+        if not gid or not aid or gid not in group_by_id or aid not in by_id:
+            continue
+        ports = _normalize_port_list(raw.get("ports") if raw.get("ports") is not None else [])
+        # Explicit empty list stays empty (bare host). Missing/invalid-only still bare.
+        if raw.get("ports") is None:
+            ports = _normalize_port_list(raw.get("ports") or [])
+        members.setdefault(gid, []).append({"asset_id": aid, "ports": ports})
+        assembled_hosts.add(aid)
+
+    selected_groups: set[str] | None = None
+    if group_ids is not None:
+        selected_groups = {str(g) for g in group_ids if str(g)}
+
+    selected_tags = normalize_tags(tags)
+    keyword_norm = str(keyword or "").strip()
+
+    tree: list[dict[str, Any]] = []
+    named = sorted(group_rows, key=lambda g: (str(g.get("name") or "").lower(), str(g.get("id"))))
+    for group in named:
+        gid = str(group["id"])
+        if selected_groups is not None and gid not in selected_groups:
+            continue
+        visible_hosts: list[dict[str, Any]] = []
+        for member in members.get(gid, []):
+            projected = _project_host_in_assembly(
+                by_id[member["asset_id"]],
+                assembly_ports=member["ports"],
+                group_name=str(group.get("name") or ""),
+                keyword=keyword_norm,
+                selected_tags=selected_tags,
+            )
+            if projected:
+                visible_hosts.append(projected)
+        visible_hosts.sort(key=lambda h: (str(h.get("address") or ""), str(h.get("id") or "")))
+        if visible_hosts:
+            tree.append({
+                "id": gid,
+                "name": str(group.get("name") or ""),
+                "hosts": visible_hosts,
+            })
+
+    if selected_groups is None:
+        ungrouped: list[dict[str, Any]] = []
+        for host in host_rows:
+            if str(host["id"]) in assembled_hosts:
+                continue
+            projected = _project_host_in_assembly(
+                host,
+                assembly_ports=None,
+                group_name=UNGROUPED_GROUP_NAME,
+                keyword=keyword_norm,
+                selected_tags=selected_tags,
+            )
+            if projected:
+                ungrouped.append(projected)
+        ungrouped.sort(key=lambda h: (str(h.get("address") or ""), str(h.get("id") or "")))
+        if ungrouped:
+            tree.append({
+                "id": UNGROUPED_GROUP_ID,
+                "name": UNGROUPED_GROUP_NAME,
+                "hosts": ungrouped,
+            })
+    return tree
+
+
+def _project_host_in_assembly(
+    host: dict[str, Any],
+    *,
+    assembly_ports: list[str] | None,
+    group_name: str,
+    keyword: str,
+    selected_tags: list[str],
+) -> dict[str, Any] | None:
+    props = host.get("properties") if isinstance(host.get("properties"), dict) else {}
+    services = extract_services(props)
+    if assembly_ports is not None:
+        if not assembly_ports:
+            services = []
+        else:
+            want = set(assembly_ports)
+            services = [s for s in services if normalize_port(s.get("port")) in want]
+
+    host_tags = normalize_tags(host.get("tags"))
+    host_tag_set = {t.lower() for t in host_tags}
+    selected_l = [t.lower() for t in selected_tags]
+    address = str(host.get("address") or "")
+    name = str(host.get("name") or address)
+    aliases = extract_aliases(props, address)
+
+    kw = keyword.lower()
+    kw_host = False
+    kw_service_ports: set[str] = set()
+    if kw:
+        hay = [address, name, group_name, *aliases, *host_tags]
+        kw_host = any(kw in str(item).lower() for item in hay if item)
+        for svc in services:
+            port = str(svc.get("port") or "")
+            svc_name = str(svc.get("name") or svc.get("service") or svc.get("product") or "")
+            svc_tags = normalize_tags(svc.get("tags"))
+            blob = " ".join([port, svc_name, *svc_tags]).lower()
+            if kw in blob:
+                kw_service_ports.add(port)
+        if not kw_host and not kw_service_ports:
+            return None
+
+    for tag in selected_l:
+        on_host = tag in host_tag_set
+        on_svc = any(
+            tag in {t.lower() for t in normalize_tags(s.get("tags"))}
+            for s in services
+        )
+        if not on_host and not on_svc:
+            return None
+
+    visible = list(services)
+    for tag in selected_l:
+        if tag in host_tag_set:
+            continue
+        visible = [
+            s for s in visible
+            if tag in {t.lower() for t in normalize_tags(s.get("tags"))}
+        ]
+    if kw and not kw_host:
+        visible = [s for s in visible if str(s.get("port") or "") in kw_service_ports]
+
+    if not visible:
+        allow_bare = assembly_ports == [] or (assembly_ports is None and not services)
+        needs_service = False
+        if selected_l and not all(t in host_tag_set for t in selected_l):
+            needs_service = True
+        if kw and not kw_host:
+            needs_service = True
+        if needs_service or (services and not allow_bare):
+            return None
+
+    return {
+        "id": str(host.get("id")),
+        "address": address,
+        "name": name,
+        "tags": host_tags,
+        "aliases": aliases,
+        "services": [_public_service(s) for s in visible],
+    }
+
+
+def _public_service(svc: dict[str, Any]) -> dict[str, Any]:
+    port = normalize_port(svc.get("port")) or str(svc.get("port") or "")
+    name = str(svc.get("name") or svc.get("service") or svc.get("product") or "").strip()
+    out: dict[str, Any] = {"port": port, "name": name}
+    for field in ("protocol", "product", "version", "url", "note"):
+        val = svc.get(field)
+        if val:
+            out[field] = val
+    tags = normalize_tags(svc.get("tags"))
+    if tags:
+        out["tags"] = tags
+    return out
