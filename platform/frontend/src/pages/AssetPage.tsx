@@ -327,7 +327,7 @@ export default function AssetPage() {
                   : "先新建组，再添加主机。"}
               </p>
             ) : (
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 {activeSection.hosts.map((host) => {
                   const catalog = assetById.get(host.id);
                   const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(catalog);
@@ -351,7 +351,7 @@ export default function AssetPage() {
                   return (
                     <article
                       key={host.id}
-                      className="grid grid-cols-[minmax(14rem,34%)_minmax(0,1fr)] gap-x-10 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface"
+                      className="grid h-full grid-cols-1 gap-4 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface min-[520px]:grid-cols-[minmax(10rem,38%)_minmax(0,1fr)] min-[520px]:gap-x-6"
                     >
                       <button
                         type="button"
