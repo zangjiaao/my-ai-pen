@@ -337,6 +337,7 @@ export default function AssetPage() {
                     : catalog?.related_vulnerabilities || [];
                   const pathTotal = ports.reduce((n, s) => n + (s.paths?.length || 0), 0);
                   const displayName = host.name && host.name !== host.address ? host.name : "";
+                  const hostNote = hostNoteFromAsset(catalog) || displayName;
                   return (
                     <article
                       key={host.id}
@@ -348,21 +349,21 @@ export default function AssetPage() {
                         className="flex min-h-0 min-w-0 flex-col self-stretch text-left"
                       >
                         <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
-                        {displayName ? (
-                          <div className="mt-0.5 truncate text-xs text-ink-secondary">{displayName}</div>
-                        ) : null}
                         {aliases.map((alias) => (
                           <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
                             {alias}
                           </div>
                         ))}
-                        {host.tags?.length ? (
-                          <div className="mt-3 flex flex-wrap gap-1">
-                            {host.tags.map((tag) => (
+                        {(host.tags?.length || hostNote) ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-1">
+                            {(host.tags || []).map((tag) => (
                               <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
                                 {tag}
                               </span>
                             ))}
+                            {hostNote ? (
+                              <span className="min-w-0 truncate text-[11px] text-ink-muted">{hostNote}</span>
+                            ) : null}
                           </div>
                         ) : null}
                         <p className="mt-auto pt-3 text-[11px] text-ink-muted">
@@ -584,6 +585,16 @@ export default function AssetPage() {
       ) : null}
     </div>
   );
+}
+
+function hostNoteFromAsset(asset?: Asset): string {
+  if (!asset) return "";
+  const props = asset.properties || {};
+  for (const key of ["note", "remark", "comment"] as const) {
+    const text = String(props[key] ?? "").trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function aliasesFromAsset(asset?: Asset): string[] {
