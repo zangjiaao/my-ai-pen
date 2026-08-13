@@ -341,12 +341,12 @@ export default function AssetPage() {
                   return (
                     <article
                       key={host.id}
-                      className="grid h-full grid-cols-1 gap-4 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface min-[520px]:grid-cols-[minmax(10rem,38%)_minmax(0,1fr)] min-[520px]:gap-x-6"
+                      className="flex h-full flex-col rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface"
                     >
                       <button
                         type="button"
                         onClick={() => setHostId(host.id)}
-                        className="flex min-h-0 min-w-0 flex-col self-stretch text-left"
+                        className="min-w-0 text-left"
                       >
                         <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
                         {aliases.map((alias) => (
@@ -366,7 +366,7 @@ export default function AssetPage() {
                             ) : null}
                           </div>
                         ) : null}
-                        <p className="mt-auto pt-3 text-[11px] text-ink-muted">
+                        <p className="mt-2 text-[11px] text-ink-muted">
                           {[
                             ports.length ? `${ports.length} 个端口` : "无端口",
                             pathTotal ? `${pathTotal} 条攻击面` : null,
@@ -376,7 +376,7 @@ export default function AssetPage() {
                             .join(" · ")}
                         </p>
                       </button>
-                      <div className="min-w-0 self-center border-t border-hairline-soft pt-3 min-[520px]:border-t-0 min-[520px]:border-l min-[520px]:pt-0 min-[520px]:pl-6">
+                      <div className="mt-3 min-w-0 border-t border-hairline-soft pt-2">
                         {ports.length ? (
                           ports.map((svc) => {
                             const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
