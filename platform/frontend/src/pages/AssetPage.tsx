@@ -444,15 +444,8 @@ export default function AssetPage() {
                                       </span>
                                     ))}
                                   </span>
-                                  {paths.length || portVulns.length ? (
-                                    <span className="text-[11px] text-ink-muted">
-                                      {[
-                                        paths.length ? `${paths.length} 路径` : null,
-                                        portVulns.length ? `${portVulns.length} 发现` : null,
-                                      ]
-                                        .filter(Boolean)
-                                        .join(" · ")}
-                                    </span>
+                                  {paths.length ? (
+                                    <span className="text-[11px] text-ink-muted">{paths.length} 路径</span>
                                   ) : null}
                                 </span>
                               </button>
