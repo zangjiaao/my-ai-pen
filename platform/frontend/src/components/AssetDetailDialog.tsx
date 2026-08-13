@@ -5,7 +5,7 @@ import FindingCard, { groupFindingsByKind } from "./cards/FindingCard";
 import VulnDetailDialog from "./VulnDetailDialog";
 import ConfirmDialog from "./ConfirmDialog";
 
-type DetailTab = "overview" | "risk" | "edit";
+type DetailTab = "overview" | "surface" | "risk" | "intel" | "edit";
 
 type RelatedVuln = {
   id: string;
@@ -151,9 +151,18 @@ export default function AssetDetailDialog({
   );
   const riskGroups = useMemo(() => groupFindingsByKind(findingRows), [findingRows]);
 
+  const allPaths = useMemo(
+    () =>
+      services.flatMap((s) =>
+        (s.paths || []).map((p) => ({ port: s.port, path: p.path })),
+      ),
+    [services],
+  );
   const tabs: { key: DetailTab; label: string; count?: number }[] = [
-    { key: "overview", label: "端口/服务" },
-    { key: "risk", label: "风险", count: vulns.length },
+    { key: "overview", label: "端口" },
+    { key: "surface", label: "攻击面", count: allPaths.length },
+    { key: "risk", label: "漏洞", count: vulns.length },
+    { key: "intel", label: "情报" },
     { key: "edit", label: "编辑" },
   ];
 
@@ -722,6 +731,28 @@ export default function AssetDetailDialog({
             </div>
           )}
 
+          {tab === "surface" && (
+            <div>
+              {allPaths.length ? (
+                <ul className="space-y-1">
+                  {allPaths.map((p) => (
+                    <li key={`${p.port}:${p.path}`} className="font-mono text-xs text-ink-secondary">
+                      :{p.port} {p.path}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-ink-muted">这台主机还没有收编路径。</p>
+              )}
+            </div>
+          )}
+
+          {tab === "intel" && (
+            <p className="text-sm leading-relaxed text-ink-muted">
+              情报块还没接入。主机档案位已经留好，不会用空话填充。
+            </p>
+          )}
+
           {tab === "risk" && (
             <div className="space-y-4">
               {riskGroups.map((group) =>
@@ -868,7 +899,7 @@ export default function AssetDetailDialog({
                         );
                       })
                   ) : (
-                    <p className="text-[11px] text-ink-muted">尚未装入任何组。在资产页勾选后点「装入组」。</p>
+                    <p className="text-[11px] text-ink-muted">尚未装入任何组。打开组档案可以把这台主机装进去。</p>
                   )}
                 </div>
               ) : null}

@@ -97,23 +97,22 @@ Worked example (company Group): Host `1.1.1.1` has Host tag `部门1`, `:80` tag
 
 Worked example (system Groups): filter Group=`系统2` AND tag=`数据库服务器` → Group「XXX系统2」→ `2.2.2.2` → `:1443`.
 
-### UI (scheme B — locked)
+### UI (scheme B — management tree)
 
 ```
-[关键词]   [组 多选]   [tag 多选]
+[关键词]   [组 多选]   [tag 多选]     [添加主机] [新建组]
 
 ▼ XXX公司
-    ▶ 1.1.1.1   (aliases…)              部门1
-    ▼ 2.2.2.2                           系统2 · 部门2
-        1443/tcp
+  1.1.1.1  aliases…     [80] [443]              部门1
+  2.2.2.2               [1143]                  系统2 · 部门2
 ```
 
-1. Filter row: keyword, Group multi-select, tag multi-select.  
-2. Group row: drawer, expand/collapse.  
-3. Host row: primary address, aliases, tags on the right; expand/collapse.  
-4. Port row: one Service; port on the left, tags on the right.
+1. Filter row only: keyword, Group, tag. No checkbox, no「创建任务」.  
+2. Tree fills the pane (tight rows). Ports are inline chips.  
+3. Click **组名** / **Host** / **端口芯片** → that object’s dialog (编辑 / 标签 / 攻击面 / 漏洞 / 情报位).  
+4. Group dialog is where you assemble Host + port subset.
 
-The same Host may appear under two open Groups with different port lists. Surface tab stays #368. No Service-cluster chrome.
+The same Host may appear under two open Groups with different port chips. Surface tab stays #368. No Service-cluster chrome.
 
 ---
 
@@ -182,3 +181,4 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-13 | New Spec #454. Retire #322 Host→Service+Cluster. Lock assembly, aliases vs vhost, scheme B UI, Wave 2 path admit. |
 | 2026-08-13 | #454a: Group + assembly tables, tree API (AND search), scheme B `/assets`. Service stays in `properties.services`. |
 | 2026-08-13 | #454b/#454c: official Service row + dual-read; book / accepted HTTP(S) admit port and path. Scan does not. |
+| 2026-08-13 | UI: dense click-to-inspect tree. Drop checkbox / 创建任务. Group·Host·Port each open a ledger dialog. |
