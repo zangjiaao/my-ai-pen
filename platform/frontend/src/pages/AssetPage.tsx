@@ -193,13 +193,13 @@ export default function AssetPage() {
       <Sidebar activeId={null} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
-        <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3">
-          <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2" ref={filterBarRef}>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden px-8 py-6">
+          <div className="mb-6 flex shrink-0 flex-wrap items-center gap-3" ref={filterBarRef}>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="检索地址 / 别名 / 端口 / 标签 / 组名"
-              className="min-w-[14rem] flex-1 rounded-md border border-hairline px-3 py-1.5 text-sm focus:border-ink focus:outline-none"
+              placeholder="关键词：地址 / 别名 / 端口 / 标签 / 组名"
+              className="min-w-[20rem] flex-1 rounded-md border border-hairline bg-canvas px-4 py-2.5 text-[15px] focus:border-ink focus:outline-none"
             />
             <MultiFilter
               label="组"
@@ -223,114 +223,153 @@ export default function AssetPage() {
               onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
               emptyText="暂无标签"
             />
-            <button
-              type="button"
-              onClick={() => {
-                setForm(EMPTY_FORM);
-                setFormError("");
-                setShowForm(true);
-              }}
-              className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-on-ink"
-            >
-              添加主机
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setGroupFormName("");
-                setGroupFormError("");
-                setShowGroupForm(true);
-              }}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm"
-            >
-              新建组
-            </button>
+            <div className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setForm(EMPTY_FORM);
+                  setFormError("");
+                  setShowForm(true);
+                }}
+                className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-on-ink"
+              >
+                添加主机
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupFormName("");
+                  setGroupFormError("");
+                  setShowGroupForm(true);
+                }}
+                className="rounded-full border border-hairline px-5 py-2.5 text-sm"
+              >
+                新建组
+              </button>
+            </div>
           </div>
 
           {error ? (
-            <div className="mb-2 shrink-0 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-3 py-2 text-sm text-severity-critical">
+            <div className="mb-4 shrink-0 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
               {error}
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-hairline-soft">
+          <div className="min-h-0 flex-1 space-y-8 overflow-y-auto pb-10">
             {tree.map((section) => {
-              const isOpen = !collapsed[section.id || "ungrouped"];
+              const key = section.id || "ungrouped";
+              const isOpen = !collapsed[key];
               const isUngrouped = !section.id;
               return (
-                <section key={section.id || "ungrouped"} className="border-b border-hairline-soft last:border-b-0">
-                  <div className="flex items-center gap-1 bg-surface-default px-2 py-1">
+                <section key={key}>
+                  <div className="mb-3 flex items-center gap-3">
                     <button
                       type="button"
-                      className="w-5 text-xs text-ink-muted"
-                      onClick={() =>
-                        setCollapsed((prev) => ({
-                          ...prev,
-                          [section.id || "ungrouped"]: !prev[section.id || "ungrouped"],
-                        }))
-                      }
+                      className="flex items-center gap-2 text-ink"
+                      onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}
+                      aria-expanded={isOpen}
+                      aria-label={isOpen ? "收起组" : "展开组"}
                     >
-                      {isOpen ? "▾" : "▸"}
+                      <span className="text-sm text-ink-muted">{isOpen ? "▾" : "▸"}</span>
                     </button>
                     {isUngrouped ? (
-                      <span className="text-[13px] font-medium text-ink-secondary">{section.name}</span>
+                      <span className="text-xl font-medium tracking-tight">{section.name}</span>
                     ) : (
                       <button
                         type="button"
-                        className="text-[13px] font-medium text-ink hover:underline"
+                        className="text-xl font-medium tracking-tight hover:underline"
                         onClick={() => setGroupId(section.id)}
                       >
                         {section.name}
                       </button>
                     )}
-                    <span className="text-[11px] text-ink-muted">{section.hosts.length}</span>
+                    <span className="text-sm text-ink-muted">{section.hosts.length} 台</span>
                   </div>
-                  {isOpen
-                    ? section.hosts.map((host) => {
-                        const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(assetById.get(host.id));
+                  {isOpen ? (
+                    <div className="space-y-4">
+                      {section.hosts.map((host) => {
+                        const aliases = host.aliases?.length
+                          ? host.aliases
+                          : aliasesFromAsset(assetById.get(host.id));
+                        const ports = host.services || [];
                         return (
-                          <div
+                          <article
                             key={`${section.id}:${host.id}`}
-                            className="grid grid-cols-[minmax(12rem,22%)_minmax(0,1fr)_auto] items-center gap-2 border-t border-hairline-soft px-2 py-1 pl-7 hover:bg-surface-default/70"
+                            className="flex overflow-hidden rounded-lg border border-hairline bg-canvas"
                           >
                             <button
                               type="button"
-                              className="min-w-0 text-left"
                               onClick={() => setHostId(host.id)}
+                              className="flex w-[38%] min-w-[16rem] flex-col items-start justify-between border-r border-hairline px-6 py-5 text-left hover:bg-surface"
                             >
-                              <div className="truncate font-mono text-[13px] text-ink">{host.address}</div>
-                              {aliases.length ? (
-                                <div className="truncate font-mono text-[10px] text-ink-muted">{aliases.join(" · ")}</div>
-                              ) : null}
+                              <div className="w-full">
+                                <div className="truncate font-mono text-[22px] font-medium leading-tight tracking-tight text-ink">
+                                  {host.address}
+                                </div>
+                                {aliases.map((alias) => (
+                                  <div
+                                    key={alias}
+                                    className="mt-1.5 truncate font-mono text-[13px] text-ink-secondary"
+                                  >
+                                    {alias}
+                                  </div>
+                                ))}
+                              </div>
+                              {host.tags?.length ? (
+                                <div className="mt-5 flex flex-wrap gap-1.5">
+                                  {host.tags.map((tag) => (
+                                    <span
+                                      key={tag}
+                                      className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="mt-5 text-[12px] text-ink-muted">无标签</span>
+                              )}
                             </button>
-                            <div className="flex min-w-0 flex-wrap gap-1">
-                              {(host.services || []).map((svc) => (
-                                <button
-                                  key={svc.port}
-                                  type="button"
-                                  title={(svc.tags || []).join(", ") || svc.name || svc.port}
-                                  onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
-                                  className="rounded border border-hairline bg-canvas px-1.5 py-0.5 font-mono text-[11px] leading-tight text-ink hover:border-ink"
-                                >
-                                  {svc.name ? `${svc.port}/${svc.name}` : svc.port}
-                                </button>
-                              ))}
-                              {!(host.services || []).length ? (
-                                <span className="text-[11px] text-ink-muted">{isUngrouped ? "无端口" : "裸主机"}</span>
-                              ) : null}
+                            <div className="min-w-0 flex-1">
+                              {ports.length ? (
+                                ports.map((svc) => (
+                                  <button
+                                    key={svc.port}
+                                    type="button"
+                                    onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
+                                    className="flex w-full items-center justify-between gap-4 border-b border-hairline-soft px-6 py-3.5 last:border-b-0 hover:bg-surface"
+                                  >
+                                    <span className="font-mono text-[15px] text-ink">
+                                      {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
+                                    </span>
+                                    <span className="flex flex-wrap justify-end gap-1.5">
+                                      {(svc.tags || []).map((tag) => (
+                                        <span
+                                          key={tag}
+                                          className="rounded-md bg-surface px-2 py-0.5 text-[12px] text-ink-secondary"
+                                        >
+                                          {tag}
+                                        </span>
+                                      ))}
+                                    </span>
+                                  </button>
+                                ))
+                              ) : (
+                                <div className="px-6 py-8 text-sm text-ink-muted">
+                                  {isUngrouped ? "还没有端口" : "裸主机 · 本组未选端口"}
+                                </div>
+                              )}
                             </div>
-                            <div className="max-w-[14rem] justify-self-end">
-                              <TagList tags={host.tags || []} />
-                            </div>
-                          </div>
+                          </article>
                         );
-                      })
-                    : null}
+                      })}
+                    </div>
+                  ) : null}
                 </section>
               );
             })}
             {!tree.length ? (
-              <p className="px-4 py-12 text-center text-sm text-ink-muted">
+              <p className="px-2 py-20 text-center text-sm text-ink-muted">
                 {assets.length ? "没有匹配的主机。" : "还没有资产。添加主机，再建组组装。"}
               </p>
             ) : null}
@@ -475,20 +514,6 @@ function multiLabel(selected: string[], allLabel: string, options: { value: stri
   return `${selected.length} 项`;
 }
 
-function TagList({ tags }: { tags: string[] }) {
-  if (!tags.length) return null;
-  return (
-    <div className="flex flex-wrap justify-end gap-1">
-      {tags.slice(0, 3).map((t) => (
-        <span key={t} className="rounded bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">
-          {t}
-        </span>
-      ))}
-      {tags.length > 3 ? <span className="text-[10px] text-ink-muted">+{tags.length - 3}</span> : null}
-    </div>
-  );
-}
-
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block space-y-1">
@@ -532,7 +557,7 @@ function MultiFilter({
 }) {
   return (
     <div className="relative">
-      <button type="button" onClick={onToggle} className="rounded-md border border-hairline px-2.5 py-1.5 text-sm hover:bg-surface-default">
+      <button type="button" onClick={onToggle} className="rounded-md border border-hairline px-3.5 py-2.5 text-sm hover:bg-surface">
         {label}：{buttonText}
         {selected.length > 0 ? <span className="ml-1 text-[10px] text-ink-muted">{selected.length}</span> : null}
       </button>
