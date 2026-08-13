@@ -97,24 +97,24 @@ Worked example (company Group): Host `1.1.1.1` has Host tag `部门1`, `:80` tag
 
 Worked example (system Groups): filter Group=`系统2` AND tag=`数据库服务器` → Group「XXX系统2」→ `2.2.2.2` → `:1443`.
 
-### UI (档案布局 — 左组右卡)
+### UI (页内 Tab + 资产卡)
 
 ```
-[关键词]   [tag 多选]                    [添加主机]
-
-档案          │  XXX公司          编辑组
-XXX公司    2  │  ┌ 1.1.1.1        │ 80 / http   系统1 ┐
-XXX系统1   0  │  │ example.com    │ 443 / https 系统2 │
-未分组     1  │  └ [部门1]        │                    ┘
-+ 新建组      │
+[搜索]  [标签]                         [新建组] [添加主机]
+XXX公司  XXX系统1  未分组                         编辑组
+────────────────────────────────────────────────
+┌ 1.1.1.1              80 / http     系统1     ┐
+│ example.com          443 / https   系统2     │
+│ 部门1                                        │
+└──────────────────────────────────────────────┘
 ```
 
-1. Same chrome as 漏洞/专家：TopBar + filter row + in-page sections. No nested frames.  
-2. Left **档案** rail is a page column (one hairline, like the app sidebar). Select a Group.  
-3. Right is a section list: Host identity left, ports right. Hosts separated by a hairline, not boxed cards.  
-4. 「编辑组」opens the Group dialog. Click Host / port → that object’s dialog. No checkbox, no「创建任务」.
+1. Same page chrome as 漏洞/专家：TopBar + filter + actions. **No second sidebar.**  
+2. Groups are **page tabs** (underline, same as the Case right-panel tabs). Click to switch the card list.  
+3. Each Host is one Expert-style card: one hairline. Left identity (primary, aliases, Host tags); right one port per row (port, Service tags). No inner frames.  
+4. 「编辑组」opens the Group dialog. Click Host / port → that object’s dialog.
 
-A Host can still belong to many Groups; switching the left rail shows that Group’s port subset. Surface tab stays #368. No Service-cluster chrome.
+A Host can still belong to many Groups; the tab shows that Group’s port subset. Surface tab stays #368. No Service-cluster chrome.
 
 ---
 
@@ -186,3 +186,4 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-13 | UI: dense click-to-inspect tree. Drop checkbox / 创建任务. Group·Host·Port each open a ledger dialog. |
 | 2026-08-13 | UI 方案 A 资产卡：组抽屉 + Host 卡（左身份/别名/tag，右端口一行一个）。 |
 | 2026-08-13 | UI 档案布局：左分组列表，右当前组资产卡。 |
+| 2026-08-13 | UI：去掉第二侧栏。组用页内 Tab；Host 用单层卡片。 |

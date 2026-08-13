@@ -222,107 +222,102 @@ export default function AssetPage() {
       <Sidebar activeId={null} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <aside className="flex w-56 shrink-0 flex-col border-r border-hairline">
-            <p className="px-3 pb-1 pt-4 text-[11px] font-medium uppercase tracking-wide text-ink-muted">
-              档案
-            </p>
-            <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-              {navItems.map((item) => {
-                const active = item.id === activeSectionId;
-                return (
-                  <button
-                    key={item.id || "ungrouped"}
-                    type="button"
-                    onClick={() => setActiveSectionId(item.id)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm ${
-                      active ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:text-ink"
-                    }`}
-                  >
-                    <span className="truncate">{item.name}</span>
-                    <span className="shrink-0 text-[11px] text-ink-muted">{item.count}</span>
-                  </button>
-                );
-              })}
-              {!navItems.length ? <p className="px-2.5 py-4 text-xs text-ink-muted">还没有组</p> : null}
-            </nav>
-          </aside>
-
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <div className="shrink-0 px-6 pt-6" ref={filterBarRef}>
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="搜索地址 / 别名 / 端口 / 标签"
-                  className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
-                />
-                <MultiFilter
-                  label="标签"
-                  buttonText={multiLabel(selectedTags, "全部标签", allTags.map((t) => ({ value: t, label: t })))}
-                  open={openMenu === "tag"}
-                  onToggle={() => setOpenMenu((m) => (m === "tag" ? null : "tag"))}
-                  onClear={() => setSelectedTags([])}
-                  options={allTags.map((t) => ({ value: t, label: t }))}
-                  selected={selectedTags}
-                  onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
-                  emptyText="暂无标签"
-                />
-                <div className="ml-auto flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGroupFormName("");
-                      setGroupFormError("");
-                      setShowGroupForm(true);
-                    }}
-                    className="rounded-md border border-hairline px-3 py-2 text-sm hover:bg-surface"
-                  >
-                    新建组
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setForm({
-                        ...EMPTY_FORM,
-                        groupIds: activeSectionId ? [activeSectionId] : [],
-                      });
-                      setFormError("");
-                      setShowForm(true);
-                    }}
-                    className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
-                  >
-                    添加主机
-                  </button>
-                </div>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 px-6 pt-6" ref={filterBarRef}>
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索地址 / 别名 / 端口 / 标签"
+                className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+              />
+              <MultiFilter
+                label="标签"
+                buttonText={multiLabel(selectedTags, "全部标签", allTags.map((t) => ({ value: t, label: t })))}
+                open={openMenu === "tag"}
+                onToggle={() => setOpenMenu((m) => (m === "tag" ? null : "tag"))}
+                onClear={() => setSelectedTags([])}
+                options={allTags.map((t) => ({ value: t, label: t }))}
+                selected={selectedTags}
+                onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
+                emptyText="暂无标签"
+              />
+              <div className="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGroupFormName("");
+                    setGroupFormError("");
+                    setShowGroupForm(true);
+                  }}
+                  className="rounded-md border border-hairline px-3 py-2 text-sm hover:bg-surface"
+                >
+                  新建组
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForm({
+                      ...EMPTY_FORM,
+                      groupIds: activeSectionId ? [activeSectionId] : [],
+                    });
+                    setFormError("");
+                    setShowForm(true);
+                  }}
+                  className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
+                >
+                  添加主机
+                </button>
               </div>
-              <div className="flex items-baseline justify-between gap-3 pb-3">
-                <h2 className="text-lg font-medium tracking-tight">
-                  {activeSection.name}
-                  <span className="ml-2 text-sm font-normal text-ink-muted">{activeSection.hosts.length}</span>
-                </h2>
-                {!isUngrouped ? (
-                  <button
-                    type="button"
-                    onClick={() => setGroupId(activeSection.id)}
-                    className="text-xs text-ink-secondary hover:text-ink"
-                  >
-                    编辑组
-                  </button>
-                ) : null}
-              </div>
-              {error ? <p className="mb-3 text-sm text-severity-critical">{error}</p> : null}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10">
-              {!activeSection.hosts.length ? (
-                <p className="py-10 text-sm text-ink-muted">
-                  {navItems.length
-                    ? "这一组还没有主机。添加主机时选进这个组即可。"
-                    : "先新建组，再添加主机。"}
-                </p>
-              ) : (
-                activeSection.hosts.map((host, index) => {
+            <div className="flex items-end justify-between gap-4 border-b border-hairline">
+              <div className="flex min-w-0 flex-1 gap-5 overflow-x-auto">
+                {navItems.map((item) => {
+                  const active = item.id === activeSectionId;
+                  return (
+                    <button
+                      key={item.id || "ungrouped"}
+                      type="button"
+                      onClick={() => setActiveSectionId(item.id)}
+                      className={`shrink-0 border-b-2 pb-2.5 text-sm ${
+                        active
+                          ? "border-ink font-medium text-ink"
+                          : "border-transparent text-ink-secondary hover:text-ink"
+                      }`}
+                    >
+                      {item.name}
+                      <span className="ml-1.5 text-[11px] font-normal text-ink-muted">{item.count}</span>
+                    </button>
+                  );
+                })}
+                {!navItems.length ? (
+                  <span className="pb-2.5 text-sm text-ink-muted">还没有组</span>
+                ) : null}
+              </div>
+              {!isUngrouped ? (
+                <button
+                  type="button"
+                  onClick={() => setGroupId(activeSection.id)}
+                  className="mb-2.5 shrink-0 text-xs text-ink-secondary hover:text-ink"
+                >
+                  编辑组
+                </button>
+              ) : null}
+            </div>
+            {error ? <p className="mt-3 text-sm text-severity-critical">{error}</p> : null}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            {!activeSection.hosts.length ? (
+              <p className="py-8 text-sm text-ink-muted">
+                {navItems.length
+                  ? "这一组还没有主机。添加主机时选进这个组即可。"
+                  : "先新建组，再添加主机。"}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {activeSection.hosts.map((host) => {
                   const aliases = host.aliases?.length
                     ? host.aliases
                     : aliasesFromAsset(assetById.get(host.id));
@@ -330,23 +325,21 @@ export default function AssetPage() {
                   return (
                     <article
                       key={host.id}
-                      className={`grid grid-cols-[minmax(12rem,34%)_minmax(0,1fr)] gap-x-8 py-4 ${
-                        index > 0 ? "border-t border-hairline-soft" : ""
-                      }`}
+                      className="grid grid-cols-[minmax(13rem,32%)_minmax(0,1fr)] gap-x-10 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface"
                     >
                       <button
                         type="button"
                         onClick={() => setHostId(host.id)}
-                        className="min-w-0 text-left hover:opacity-80"
+                        className="min-w-0 self-start text-left"
                       >
-                        <div className="truncate font-mono text-[15px] font-medium text-ink">{host.address}</div>
+                        <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
                         {aliases.map((alias) => (
-                          <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
+                          <div key={alias} className="mt-1 truncate font-mono text-xs text-ink-secondary">
                             {alias}
                           </div>
                         ))}
                         {host.tags?.length ? (
-                          <div className="mt-2 flex flex-wrap gap-1">
+                          <div className="mt-3 flex flex-wrap gap-1">
                             {host.tags.map((tag) => (
                               <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
                                 {tag}
@@ -355,14 +348,14 @@ export default function AssetPage() {
                           </div>
                         ) : null}
                       </button>
-                      <div className="min-w-0">
+                      <div className="min-w-0 self-center">
                         {ports.length ? (
                           ports.map((svc) => (
                             <button
                               key={svc.port}
                               type="button"
                               onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
-                              className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-4 rounded-md px-2 py-1.5 text-left hover:bg-surface"
+                              className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-4 rounded-md px-2 py-1.5 text-left hover:bg-canvas-inset"
                             >
                               <span className="font-mono text-sm text-ink">
                                 {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
@@ -377,18 +370,16 @@ export default function AssetPage() {
                             </button>
                           ))
                         ) : (
-                          <p className="py-1.5 text-sm text-ink-muted">
-                            {isUngrouped ? "还没有端口" : "裸主机"}
-                          </p>
+                          <p className="text-sm text-ink-muted">{isUngrouped ? "还没有端口" : "裸主机"}</p>
                         )}
                       </div>
                     </article>
                   );
-                })
-              )}
-            </div>
-          </main>
-        </div>
+                })}
+              </div>
+            )}
+          </div>
+        </main>
       </div>
 
       <AssetDetailDialog
