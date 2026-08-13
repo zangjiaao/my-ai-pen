@@ -5,6 +5,7 @@ import { authFetch } from "../lib/api";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import GroupLedgerDialog from "../components/GroupLedgerDialog";
 import ServiceLedgerDialog from "../components/ServiceLedgerDialog";
+import { buildRiskChips } from "../components/cards/FindingCard";
 
 type RelatedVuln = {
   id: string;
@@ -19,6 +20,7 @@ type RelatedVuln = {
 type Service = {
   port: string;
   name?: string;
+  protocol?: string | null;
   tags?: string[];
   paths?: { path: string; source?: string }[];
   note?: string | null;
@@ -37,6 +39,12 @@ type Asset = {
   related_vulnerabilities: RelatedVuln[];
 };
 
+type RiskSummary = {
+  open_total: number;
+  highest?: string;
+  label?: string;
+};
+
 type TreeHost = {
   id: string;
   address: string;
@@ -44,7 +52,10 @@ type TreeHost = {
   tags: string[];
   aliases: string[];
   services: Service[];
+  source_label?: string;
+  risk?: RiskSummary;
   related_vulnerabilities?: RelatedVuln[];
+  updated_at?: string | null;
 };
 
 type TreeGroup = {
@@ -318,14 +329,29 @@ export default function AssetPage() {
             ) : (
               <div className="space-y-3">
                 {activeSection.hosts.map((host) => {
-                  const aliases = host.aliases?.length
-                    ? host.aliases
-                    : aliasesFromAsset(assetById.get(host.id));
-                  const ports = host.services || [];
+                  const catalog = assetById.get(host.id);
+                  const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(catalog);
+                  const ports = host.services?.length ? host.services : catalog?.services || [];
+                  const vulns = host.related_vulnerabilities?.length
+                    ? host.related_vulnerabilities
+                    : catalog?.related_vulnerabilities || [];
+                  const pathTotal = ports.reduce((n, s) => n + (s.paths?.length || 0), 0);
+                  const riskChips = buildRiskChips(
+                    vulns.map((v) => ({
+                      id: v.id,
+                      title: v.title,
+                      severity: v.severity,
+                      status: v.status,
+                      confidence: v.confidence,
+                      port: v.port,
+                      description: v.description,
+                    })),
+                  );
+                  const displayName = host.name && host.name !== host.address ? host.name : "";
                   return (
                     <article
                       key={host.id}
-                      className="grid grid-cols-[minmax(13rem,32%)_minmax(0,1fr)] gap-x-10 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface"
+                      className="grid grid-cols-[minmax(14rem,34%)_minmax(0,1fr)] gap-x-10 rounded-lg border border-hairline bg-canvas px-5 py-4 hover:bg-surface"
                     >
                       <button
                         type="button"
@@ -333,8 +359,11 @@ export default function AssetPage() {
                         className="min-w-0 self-start text-left"
                       >
                         <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
+                        {displayName ? (
+                          <div className="mt-0.5 truncate text-xs text-ink-secondary">{displayName}</div>
+                        ) : null}
                         {aliases.map((alias) => (
-                          <div key={alias} className="mt-1 truncate font-mono text-xs text-ink-secondary">
+                          <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
                             {alias}
                           </div>
                         ))}
@@ -347,28 +376,86 @@ export default function AssetPage() {
                             ))}
                           </div>
                         ) : null}
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          {riskChips.slice(0, 4).map((c) => (
+                            <span
+                              key={c.key}
+                              className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${c.badgeClass}`}
+                            >
+                              {c.label}
+                              <span className="opacity-80">{c.count}</span>
+                            </span>
+                          ))}
+                        </div>
+                        <p className="mt-2 text-[11px] text-ink-muted">
+                          {[
+                            ports.length ? `${ports.length} 个端口` : "无端口",
+                            pathTotal ? `${pathTotal} 条攻击面` : null,
+                            vulns.length ? `${vulns.length} 条发现` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
                       </button>
                       <div className="min-w-0 self-center">
                         {ports.length ? (
-                          ports.map((svc) => (
-                            <button
-                              key={svc.port}
-                              type="button"
-                              onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
-                              className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-4 rounded-md px-2 py-1.5 text-left hover:bg-canvas-inset"
-                            >
-                              <span className="font-mono text-sm text-ink">
-                                {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
-                              </span>
-                              <span className="flex flex-wrap justify-end gap-1">
-                                {(svc.tags || []).map((tag) => (
-                                  <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
-                                    {tag}
+                          ports.map((svc) => {
+                            const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
+                            const paths = svc.paths || [];
+                            return (
+                              <button
+                                key={svc.port}
+                                type="button"
+                                onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
+                                className="-mx-2 flex w-[calc(100%+1rem)] items-start justify-between gap-4 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
+                              >
+                                <span className="min-w-0">
+                                  <span className="font-mono text-sm text-ink">
+                                    {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
+                                    {svc.protocol && svc.protocol !== svc.name ? (
+                                      <span className="ml-1.5 text-[11px] text-ink-muted">{svc.protocol}</span>
+                                    ) : null}
                                   </span>
-                                ))}
-                              </span>
-                            </button>
-                          ))
+                                  {svc.note ? (
+                                    <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
+                                      {svc.note}
+                                    </span>
+                                  ) : null}
+                                  {paths.length ? (
+                                    <span className="mt-0.5 block truncate font-mono text-[11px] text-ink-muted">
+                                      {paths
+                                        .slice(0, 2)
+                                        .map((p) => p.path)
+                                        .join("  ")}
+                                      {paths.length > 2 ? `  +${paths.length - 2}` : ""}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="flex shrink-0 flex-col items-end gap-1">
+                                  <span className="flex flex-wrap justify-end gap-1">
+                                    {(svc.tags || []).map((tag) => (
+                                      <span
+                                        key={tag}
+                                        className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </span>
+                                  {paths.length || portVulns.length ? (
+                                    <span className="text-[11px] text-ink-muted">
+                                      {[
+                                        paths.length ? `${paths.length} 路径` : null,
+                                        portVulns.length ? `${portVulns.length} 发现` : null,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(" · ")}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </button>
+                            );
+                          })
                         ) : (
                           <p className="text-sm text-ink-muted">{isUngrouped ? "还没有端口" : "裸主机"}</p>
                         )}
