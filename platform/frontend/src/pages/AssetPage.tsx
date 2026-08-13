@@ -345,7 +345,7 @@ export default function AssetPage() {
                       <button
                         type="button"
                         onClick={() => setHostId(host.id)}
-                        className="min-w-0 self-start text-left"
+                        className="flex min-h-0 min-w-0 flex-col self-stretch text-left"
                       >
                         <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
                         {displayName ? (
@@ -365,7 +365,7 @@ export default function AssetPage() {
                             ))}
                           </div>
                         ) : null}
-                        <p className="mt-2 text-[11px] text-ink-muted">
+                        <p className="mt-auto pt-3 text-[11px] text-ink-muted">
                           {[
                             ports.length ? `${ports.length} 个端口` : "无端口",
                             pathTotal ? `${pathTotal} 条攻击面` : null,
@@ -379,7 +379,6 @@ export default function AssetPage() {
                         {ports.length ? (
                           ports.map((svc) => {
                             const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
-                            const paths = svc.paths || [];
                             const portRisk = buildRiskChips(
                               portVulns.map((v) => ({
                                 id: v.id,
@@ -396,57 +395,38 @@ export default function AssetPage() {
                                 key={svc.port}
                                 type="button"
                                 onClick={() => setServiceKey({ assetId: host.id, port: svc.port })}
-                                className="-mx-2 flex w-[calc(100%+1rem)] items-start justify-between gap-4 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
+                                className="-mx-2 grid w-[calc(100%+1rem)] grid-cols-[minmax(0,42%)_minmax(0,1fr)] items-start gap-3 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
                               >
                                 <span className="min-w-0">
-                                  <span className="font-mono text-sm text-ink">
+                                  <span className="block font-mono text-sm text-ink">
                                     {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
-                                    {svc.protocol && svc.protocol !== svc.name ? (
-                                      <span className="ml-1.5 text-[11px] text-ink-muted">{svc.protocol}</span>
-                                    ) : null}
                                   </span>
-                                  {svc.note ? (
-                                    <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
-                                      {svc.note}
-                                    </span>
-                                  ) : null}
-                                  {paths.length ? (
-                                    <span className="mt-0.5 block truncate font-mono text-[11px] text-ink-muted">
-                                      {paths
-                                        .slice(0, 2)
-                                        .map((p) => p.path)
-                                        .join("  ")}
-                                      {paths.length > 2 ? `  +${paths.length - 2}` : ""}
+                                  {(svc.tags?.length || svc.note) ? (
+                                    <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                                      {(svc.tags || []).map((tag) => (
+                                        <span
+                                          key={tag}
+                                          className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
+                                        >
+                                          {tag}
+                                        </span>
+                                      ))}
+                                      {svc.note ? (
+                                        <span className="min-w-0 truncate text-[11px] text-ink-muted">{svc.note}</span>
+                                      ) : null}
                                     </span>
                                   ) : null}
                                 </span>
-                                <span className="flex shrink-0 flex-col items-end gap-1">
-                                  {portRisk.length ? (
-                                    <span className="flex flex-wrap justify-end gap-1">
-                                      {portRisk.slice(0, 4).map((c) => (
-                                        <span
-                                          key={c.key}
-                                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${c.badgeClass}`}
-                                        >
-                                          {c.label}
-                                          <span className="opacity-80">{c.count}</span>
-                                        </span>
-                                      ))}
+                                <span className="flex min-w-0 flex-wrap justify-end gap-1">
+                                  {portRisk.map((c) => (
+                                    <span
+                                      key={c.key}
+                                      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${c.badgeClass}`}
+                                    >
+                                      {c.label}
+                                      {c.count > 1 ? <span className="opacity-80">{c.count}</span> : null}
                                     </span>
-                                  ) : null}
-                                  <span className="flex flex-wrap justify-end gap-1">
-                                    {(svc.tags || []).map((tag) => (
-                                      <span
-                                        key={tag}
-                                        className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
-                                      >
-                                        {tag}
-                                      </span>
-                                    ))}
-                                  </span>
-                                  {paths.length ? (
-                                    <span className="text-[11px] text-ink-muted">{paths.length} 路径</span>
-                                  ) : null}
+                                  ))}
                                 </span>
                               </button>
                             );
