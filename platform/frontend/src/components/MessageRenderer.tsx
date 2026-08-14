@@ -209,6 +209,16 @@ function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpe
       onClick={() =>
         onOpen?.({
           ...content,
+          // Chat vuln_found often has `url` / `location_key` but not `location`.
+          // Normalize so VulnDetailDialog Location matches the right-panel Findings card.
+          location:
+            content.location ||
+            content.url ||
+            content.endpoint ||
+            content.location_key ||
+            content.affected_asset ||
+            undefined,
+          endpoint: content.endpoint || content.url || content.location_key || undefined,
           finding_kind: category === "key" ? "auth" : category,
           kind: category === "key" ? "auth" : category,
           __surface_kind: category,

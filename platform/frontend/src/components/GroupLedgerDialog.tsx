@@ -26,11 +26,23 @@ type CatalogAsset = {
 
 type Member = { asset_id: string; ports: string[] };
 
-type Tab = "members" | "surface" | "risk" | "intel";
+type GroupDetail = {
+  id: string;
+  name: string;
+  members: Member[];
+};
+
+type Tab = "edit" | "members" | "surface" | "risk" | "intel";
+
+/** Match AssetDetailDialog field chrome. */
+const FIELD =
+  "w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink";
+const FIELD_SELECT =
+  "min-w-[10rem] flex-1 rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink";
 
 interface Props {
   open: boolean;
-  group: { id: string; name: string; members: Member[] } | null;
+  group: GroupDetail | null;
   catalog: CatalogAsset[];
   onClose: () => void;
   onSaved: () => void;
@@ -50,7 +62,10 @@ export default function GroupLedgerDialog({
   onOpenService,
 }: Props) {
   const [tab, setTab] = useState<Tab>("members");
+  /** Draft in the 编辑 form. */
   const [name, setName] = useState("");
+  /** Last persisted name (header + dirty check). */
+  const [savedName, setSavedName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -60,15 +75,27 @@ export default function GroupLedgerDialog({
   const [adding, setAdding] = useState(false);
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
 
+  // Reset only when opening a different group — not when parent reloads after rename
+  // (depending on group.name mid-edit wiped the draft / looked like “can’t rename”).
   useEffect(() => {
     if (!open || !group) return;
     setTab("members");
     setName(group.name);
+    setSavedName(group.name);
     setError("");
     setConfirmDelete(false);
     setAddHostId("");
     setAddPorts([]);
-  }, [open, group?.id, group?.name]);
+  }, [open, group?.id]);
+
+  // If parent finishes load with a newer name while we are not dirty, adopt it.
+  useEffect(() => {
+    if (!open || !group) return;
+    if (name === savedName && group.name !== savedName) {
+      setName(group.name);
+      setSavedName(group.name);
+    }
+  }, [open, group?.name, group, name, savedName]);
 
   const catalogById = useMemo(() => new Map(catalog.map((a) => [a.id, a])), [catalog]);
   const members = group?.members || [];
@@ -123,20 +150,26 @@ export default function GroupLedgerDialog({
 
   if (!open || !group) return null;
 
+  const nameDirty = name.trim() !== savedName.trim();
+
   const saveName = async () => {
     const next = name.trim();
     if (!next) {
       setError("组名不能为空");
       return;
     }
+    if (next === savedName.trim()) return;
     setSaving(true);
     setError("");
     try {
-      await authFetch(`/api/asset-groups/${group.id}`, {
+      const updated = await authFetch<GroupDetail>(`/api/asset-groups/${group.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: next }),
       });
+      const persisted = String(updated?.name || next).trim() || next;
+      setSavedName(persisted);
+      setName(persisted);
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "重命名失败");
@@ -193,6 +226,7 @@ export default function GroupLedgerDialog({
   };
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
+    { key: "edit", label: "编辑" },
     { key: "members", label: "组装", count: members.length },
     { key: "surface", label: "攻击面", count: paths.length },
     { key: "risk", label: "漏洞", count: vulns.length },
@@ -207,18 +241,14 @@ export default function GroupLedgerDialog({
       >
         <div className="shrink-0 px-5 pt-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] text-ink-muted">组</p>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => {
-                  if (name.trim() && name.trim() !== group.name) void saveName();
-                }}
-                className="w-full border-0 bg-transparent text-lg font-semibold outline-none focus:ring-0"
-              />
+            <div className="min-w-0">
+              <h2 className="truncate text-lg font-semibold text-ink">{savedName || group.name}</h2>
             </div>
-            <button type="button" onClick={onClose} className="rounded-md border px-3 py-1.5 text-xs">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border border-hairline bg-surface px-3 py-1.5 text-xs text-ink hover:bg-canvas"
+            >
               关闭
             </button>
           </div>
@@ -230,7 +260,10 @@ export default function GroupLedgerDialog({
               <button
                 key={t.key}
                 type="button"
-                onClick={() => setTab(t.key)}
+                onClick={() => {
+                  setTab(t.key);
+                  setError("");
+                }}
                 className={`px-0.5 py-2.5 text-[13px] font-medium ${
                   tab === t.key
                     ? "border-b-2 border-ink text-ink"
@@ -238,7 +271,9 @@ export default function GroupLedgerDialog({
                 }`}
               >
                 {t.label}
-                {t.count != null ? <span className="ml-1 text-[11px] font-normal text-ink-muted">{t.count}</span> : null}
+                {t.count != null ? (
+                  <span className="ml-1 text-[11px] font-normal text-ink-muted">{t.count}</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -251,6 +286,70 @@ export default function GroupLedgerDialog({
             </div>
           ) : null}
 
+          {tab === "edit" ? (
+            <div className="space-y-3">
+              <label className="block space-y-1">
+                <span className="text-[11px] text-ink-muted">组名</span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveName();
+                    }
+                  }}
+                  placeholder="例如：XXX公司"
+                  className={FIELD}
+                  autoFocus
+                />
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={saving || !nameDirty || !name.trim()}
+                  onClick={() => void saveName()}
+                  className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-on-ink disabled:opacity-50"
+                >
+                  {saving ? "保存中…" : "保存"}
+                </button>
+                {nameDirty ? (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => {
+                      setName(savedName);
+                      setError("");
+                    }}
+                    className="rounded-md border border-hairline bg-surface px-3 py-1.5 text-xs text-ink-secondary hover:bg-canvas"
+                  >
+                    撤销
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-ink-muted">修改后点保存；回车也可保存</span>
+                )}
+              </div>
+
+              <div className="rounded-md border border-severity-critical/30 bg-severity-critical-subtle/40 p-3.5">
+                <p className="text-sm font-medium text-severity-critical">危险区域</p>
+                <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
+                  删除组后主机会回到未分组，不会删除主机本身。
+                </p>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => {
+                    setError("");
+                    setConfirmDelete(true);
+                  }}
+                  className="mt-3 rounded-md border border-severity-critical/40 bg-canvas px-3 py-1.5 text-xs font-medium text-severity-critical hover:bg-severity-critical-subtle disabled:opacity-50"
+                >
+                  {deleting ? "删除中…" : "删除组"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {tab === "members" ? (
             <div className="space-y-3">
               {memberAssets.map(({ member, asset }) => (
@@ -258,7 +357,7 @@ export default function GroupLedgerDialog({
                   <div className="flex items-center justify-between gap-2">
                     <button
                       type="button"
-                      className="truncate font-mono text-sm hover:underline"
+                      className="truncate font-mono text-sm text-ink hover:underline"
                       onClick={() => onOpenHost(asset.id)}
                     >
                       {asset.address}
@@ -300,7 +399,7 @@ export default function GroupLedgerDialog({
                       setAddHostId(e.target.value);
                       setAddPorts([]);
                     }}
-                    className="min-w-[10rem] flex-1 rounded-md border border-hairline px-2 py-1.5 text-sm"
+                    className={FIELD_SELECT}
                   >
                     <option value="">选择主机…</option>
                     {unusedHosts.map((a) => (
@@ -321,7 +420,10 @@ export default function GroupLedgerDialog({
                 {addPortOptions.length ? (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {addPortOptions.map((port) => (
-                      <label key={port} className="inline-flex items-center gap-1 text-[11px]">
+                      <label
+                        key={port}
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-hairline bg-surface px-2 py-1 text-[11px] text-ink"
+                      >
                         <input
                           type="checkbox"
                           checked={addPorts.includes(port)}
@@ -330,11 +432,12 @@ export default function GroupLedgerDialog({
                               prev.includes(port) ? prev.filter((p) => p !== port) : [...prev, port],
                             )
                           }
+                          className="rounded border-hairline"
                         />
                         <span className="font-mono">{port}</span>
                       </label>
                     ))}
-                    <span className="text-[11px] text-ink-muted">不勾 = 裸主机</span>
+                    <span className="self-center text-[11px] text-ink-muted">不勾 = 裸主机</span>
                   </div>
                 ) : null}
               </div>
@@ -346,7 +449,13 @@ export default function GroupLedgerDialog({
               <ul className="space-y-1">
                 {paths.map((p) => (
                   <li key={`${p.host}:${p.port}:${p.path}`} className="font-mono text-xs text-ink-secondary">
-                    <button type="button" className="hover:underline" onClick={() => onOpenService(catalog.find((a) => a.address === p.host)?.id || "", p.port)}>
+                    <button
+                      type="button"
+                      className="hover:underline"
+                      onClick={() =>
+                        onOpenService(catalog.find((a) => a.address === p.host)?.id || "", p.port)
+                      }
+                    >
                       {p.host}:{p.port}
                     </button>{" "}
                     {p.path}
@@ -354,7 +463,9 @@ export default function GroupLedgerDialog({
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-ink-muted">本组还没有收编路径。订洞或被接受的 HTTP(S) 会挂到端口下。</p>
+              <p className="text-sm text-ink-muted">
+                本组还没有收编路径。订洞或被接受的 HTTP(S) 会挂到端口下。
+              </p>
             )
           ) : null}
 
@@ -386,16 +497,6 @@ export default function GroupLedgerDialog({
             </p>
           ) : null}
         </div>
-
-        <div className="shrink-0 border-t border-hairline-soft px-5 py-3">
-          <button
-            type="button"
-            className="text-xs text-severity-critical hover:underline"
-            onClick={() => setConfirmDelete(true)}
-          >
-            删除组
-          </button>
-        </div>
       </div>
 
       <VulnDetailDialog
@@ -407,7 +508,7 @@ export default function GroupLedgerDialog({
       <ConfirmDialog
         open={confirmDelete}
         title="删除组"
-        description={`确定删除组「${group.name}」？主机会回到未分组，不会删除主机。`}
+        description={`确定删除组「${savedName || group.name}」？主机会回到未分组，不会删除主机。`}
         busy={deleting}
         confirmLabel="删除组"
         onCancel={() => setConfirmDelete(false)}

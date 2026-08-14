@@ -2105,12 +2105,16 @@ def vuln_summary(v: Vulnerability) -> dict:
     history = getattr(v, "history", None)
     rcount = rediscovery_count(history)
     first = getattr(v, "first_seen_at", None) or v.discovered_at
+    location_key = getattr(v, "location_key", None) or None
+    # Prefer path identity over dumping full PoC into location (chat + panel Location).
+    location = (str(location_key).strip() if location_key else "") or ""
     return {
         "id": str(v.id),
         "vulnerability_id": str(v.id),
         "title": v.title,
         "severity": v.severity,
-        "location": v.poc or "",
+        "location": location,
+        "location_key": str(location_key).strip() if location_key else None,
         "confidence": v.confidence,
         "status": v.status,
         "asset_id": str(v.asset_id) if v.asset_id else None,
