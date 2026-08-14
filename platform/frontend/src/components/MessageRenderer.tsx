@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
+import { AUTH_BADGE } from "../lib/findingKinds";
 import { isTruthyNewFlag } from "../lib/findingNew";
 import { PROCESS_LEADING_SLOT_CLASS } from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
@@ -148,13 +149,13 @@ function chatAuthSubtype(content: Record<string, unknown>): { label: string; bad
     .map((v) => String(v || ""))
     .join("\n")
     .toLowerCase();
-  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: "bg-status-running/12 text-status-running" };
-  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: "bg-[#ecfeff] text-[#0e7490]" };
-  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: "bg-[#f5f3ff] text-[#6d28d9]" };
-  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: "bg-[#f0fdfa] text-[#0f766e]" };
-  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: "bg-[#eef2ff] text-[#4338ca]" };
-  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: "bg-[#f8fafc] text-[#475569]" };
-  return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
+  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: AUTH_BADGE.JWT };
+  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: AUTH_BADGE.APIKEY };
+  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: AUTH_BADGE.PASSWORD };
+  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: AUTH_BADGE.SESSION };
+  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: AUTH_BADGE.TOKEN };
+  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: AUTH_BADGE.SECRET };
+  return { label: "KEY", badgeClass: AUTH_BADGE.KEY };
 }
 
 function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (finding: Partial<SecurityVulnerability>) => void }) {

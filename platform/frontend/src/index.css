@@ -36,6 +36,17 @@
   --color-status-success: #16a34a;
   --color-status-error: #d73a31;
   --color-status-running: #2563eb;
+  /* Key-family chips (PASSWORD / APIKEY / …) — not vuln severity */
+  --color-key-password: #6d28d9;
+  --color-key-password-subtle: #f5f3ff;
+  --color-key-apikey: #0e7490;
+  --color-key-apikey-subtle: #ecfeff;
+  --color-key-session: #0f766e;
+  --color-key-session-subtle: #f0fdfa;
+  --color-key-token: #4338ca;
+  --color-key-token-subtle: #eef2ff;
+  --color-key-secret: #475569;
+  --color-key-secret-subtle: #f8fafc;
 }
 
 html.dark {
@@ -70,6 +81,16 @@ html.dark {
   --color-status-success: #4ade80;
   --color-status-error: #f87171;
   --color-status-running: #60a5fa;
+  --color-key-password: #c4b5fd;
+  --color-key-password-subtle: #2a1f3d;
+  --color-key-apikey: #67e8f9;
+  --color-key-apikey-subtle: #143033;
+  --color-key-session: #5eead4;
+  --color-key-session-subtle: #14302c;
+  --color-key-token: #a5b4fc;
+  --color-key-token-subtle: #1e1b3d;
+  --color-key-secret: #94a3b8;
+  --color-key-secret-subtle: #1c1f24;
 }
 
 body {

@@ -580,6 +580,17 @@ async def update_asset(
     if "tags" in body:
         a.tags = normalize_tags(body.get("tags"))
 
+    if "note" in body:
+        props = dict(a.properties or {})
+        text = str(body.get("note") or "").strip()
+        if text:
+            props["note"] = text
+        else:
+            props.pop("note", None)
+            props.pop("remark", None)
+            props.pop("comment", None)
+        a.properties = props
+
     if "address" in body and body["address"] is not None:
         if not is_valid_ledger_address(body["address"]):
             raise HTTPException(400, "地址无效：请填写一个 IP 或域名")

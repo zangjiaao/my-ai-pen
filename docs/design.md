@@ -47,6 +47,19 @@ colors:
   status-running: "#2563eb"
   status-running-subtle: "#eff6ff"
 
+  # ── Semantic: Key family chips (PASSWORD / APIKEY / …) ──
+  # Light + html.dark pairs live in platform/frontend/src/index.css.
+  key-password: "#6d28d9"
+  key-password-subtle: "#f5f3ff"
+  key-apikey: "#0e7490"
+  key-apikey-subtle: "#ecfeff"
+  key-session: "#0f766e"
+  key-session-subtle: "#f0fdfa"
+  key-token: "#4338ca"
+  key-token-subtle: "#eef2ff"
+  key-secret: "#475569"
+  key-secret-subtle: "#f8fafc"
+
 typography:
   # ── UI Sans (Geist — Figma 式的可变字重无衬线) ──
   display:

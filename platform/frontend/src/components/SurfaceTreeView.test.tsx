@@ -11,6 +11,7 @@ import {
   buildSurfaceTree,
   countSurfaceViewStats,
   filterSurfaceTree,
+  parseOriginEnrollTarget,
   surfaceTreeRowChrome,
   SurfaceTreeView,
 } from "./SurfaceTreeView.tsx";
@@ -343,6 +344,29 @@ function testToolbarMatchesTrafficPatternAndViewFilters() {
   assert.ok(!html.includes(">Flag<"), "no Flag chip");
 }
 
+function testOriginEnrollTargetAndButton() {
+  const entries = [entry({ key: "https://lab.example:443|/login", path: "/login" })];
+  const roots = buildSurfaceTree(entries);
+  const target = parseOriginEnrollTarget(roots[0]!);
+  assert.deepEqual(target, { host: "lab.example", port: "443" });
+
+  const unknownHtml = renderToStaticMarkup(
+    createElement(SurfaceTreeView, { roots, total: 1 }),
+  );
+  assert.ok(unknownHtml.includes("纳入"), "unenrolled origin offers enroll");
+  assert.ok(!unknownHtml.includes("已纳入"), "unenrolled origin is not marked enrolled");
+
+  const knownHtml = renderToStaticMarkup(
+    createElement(SurfaceTreeView, {
+      roots,
+      total: 1,
+      knownAssets: [{ address: "lab.example", ports: ["443"] }],
+    }),
+  );
+  assert.ok(knownHtml.includes("已纳入"), "already-enrolled origin shows 已纳入");
+  assert.ok(!knownHtml.includes('data-testid="surface-enroll"'), "already-enrolled origin has no enroll button");
+}
+
 testMethodsStayInModelButNotOnTreeChrome();
 testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus();
 testRenderHasNoMethodChips();
@@ -350,4 +374,5 @@ testLedgerProjectionUnchanged();
 testOperatorChipsNewTestedNoSeenBook();
 testOriginRootDoesNotShowNewOrTestedFromChildren();
 testToolbarMatchesTrafficPatternAndViewFilters();
+testOriginEnrollTargetAndButton();
 console.log("SurfaceTreeView.test.tsx: ok");

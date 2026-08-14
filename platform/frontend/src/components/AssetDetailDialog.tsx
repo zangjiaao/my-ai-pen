@@ -5,7 +5,14 @@ import FindingCard, { groupFindingsByKind } from "./cards/FindingCard";
 import VulnDetailDialog from "./VulnDetailDialog";
 import ConfirmDialog from "./ConfirmDialog";
 
-type DetailTab = "overview" | "surface" | "risk" | "intel" | "edit";
+type DetailTab = "edit" | "ports" | "intel" | "risk";
+
+type ServiceRow = {
+  port: string;
+  name?: string;
+  tags?: string[];
+  note?: string | null;
+};
 
 type RelatedVuln = {
   id: string;
@@ -17,25 +24,7 @@ type RelatedVuln = {
   description?: string | null;
 };
 
-type ServiceRow = {
-  port: string;
-  name?: string;
-  protocol?: string | null;
-  product?: string | null;
-  version?: string | null;
-  url?: string | null;
-  note?: string | null;
-  tags?: string[];
-  paths?: { path: string; source?: string }[];
-};
-
-type GroupOption = {
-  id: string;
-  name: string;
-  members: { asset_id: string; ports: string[] }[];
-};
-
-type AssetDetail = Omit<SecurityAsset, "services" | "related_vulnerabilities"> & {
+type AssetDetail = Omit<SecurityAsset, "related_vulnerabilities"> & {
   type_label?: string;
   source_label?: string;
   ports_summary?: string;
@@ -53,7 +42,6 @@ interface Props {
   assetId?: string | null;
   initial?: Partial<AssetDetail> | null;
   knownTags?: string[];
-  groups?: GroupOption[];
   /** @deprecated use knownTags */
   systems?: string[];
   onClose: () => void;
@@ -66,7 +54,6 @@ export default function AssetDetailDialog({
   assetId,
   initial,
   knownTags = [],
-  groups = [],
   systems = [],
   onClose,
   onSaved,
@@ -77,39 +64,26 @@ export default function AssetDetailDialog({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<DetailTab>("overview");
-  const [form, setForm] = useState({ name: "", address: "", tags: [] as string[] });
+  const [tab, setTab] = useState<DetailTab>("edit");
+  const [form, setForm] = useState({ note: "", address: "", tags: [] as string[] });
   const [tagDraft, setTagDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
-  /** port -> draft note text while editing */
-  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
-  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
-  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
-  const [editingNotePort, setEditingNotePort] = useState<string | null>(null);
-  const [savingNotePort, setSavingNotePort] = useState<string | null>(null);
-  const [showAddPort, setShowAddPort] = useState(false);
-  const [addPortForm, setAddPortForm] = useState({ port: "", name: "", note: "" });
-  const [addingPort, setAddingPort] = useState(false);
-  const [removingPort, setRemovingPort] = useState<string | null>(null);
-  const [confirmRemovePort, setConfirmRemovePort] = useState<string | null>(null);
+  const [selectedPorts, setSelectedPorts] = useState<string[]>([]);
+  const [confirmRemovePorts, setConfirmRemovePorts] = useState(false);
+  const [removingPorts, setRemovingPorts] = useState(false);
   const id = assetId || initial?.id || initial?.asset_id || null;
   const tagSuggestions = Array.from(new Set([...knownTags, ...systems].filter(Boolean)));
 
   useEffect(() => {
     if (!open) return;
     setError("");
-    setTab("overview");
+    setTab("edit");
     setSelectedVuln(null);
     setConfirmDelete(false);
+    setSelectedPorts([]);
+    setConfirmRemovePorts(false);
     setTagDraft("");
-    setEditingNotePort(null);
-    setNoteDrafts({});
-    setNameDrafts({});
-    setTagDrafts({});
-    setShowAddPort(false);
-    setAddPortForm({ port: "", name: "", note: "" });
-    setConfirmRemovePort(null);
     const seed = normalizeInitial(initial);
     setDetail(seed);
     if (seed) applyForm(seed);
@@ -125,13 +99,12 @@ export default function AssetDetailDialog({
   }, [open, id]);
 
   const asset = detail || normalizeInitial(initial);
-  const properties = asset?.properties || {};
-  const services = useMemo(
-    () => normalizeServices(asset?.services || properties.services),
-    [asset?.services, properties.services],
-  );
   const vulns = (asset?.related_vulnerabilities || []) as RelatedVuln[];
   const host = asString(asset?.address, "");
+  const services = useMemo(
+    () => normalizeServices(asset?.services || asset?.properties?.services),
+    [asset?.services, asset?.properties],
+  );
 
   const findingRows = useMemo(
     () =>
@@ -151,139 +124,12 @@ export default function AssetDetailDialog({
   );
   const riskGroups = useMemo(() => groupFindingsByKind(findingRows), [findingRows]);
 
-  const allPaths = useMemo(
-    () =>
-      services.flatMap((s) =>
-        (s.paths || []).map((p) => ({ port: s.port, path: p.path })),
-      ),
-    [services],
-  );
   const tabs: { key: DetailTab; label: string; count?: number }[] = [
-    { key: "overview", label: "端口" },
-    { key: "surface", label: "攻击面", count: allPaths.length },
-    { key: "risk", label: "漏洞", count: vulns.length },
-    { key: "intel", label: "情报" },
     { key: "edit", label: "编辑" },
+    { key: "ports", label: "端口", count: services.length },
+    { key: "intel", label: "情报" },
+    { key: "risk", label: "漏洞", count: vulns.length },
   ];
-
-  const portCards = useMemo(() => {
-    return services.map((s) => {
-      const port = s.port;
-      const serviceName = (s.name || "").trim();
-      const url = (s.url || "").trim() || guessServiceUrl(host, port, serviceName, s.protocol || null);
-      const note = (s.note || "").trim();
-      // Display/edit body: user note if set, otherwise default to URL as the starting remark.
-      const remark = note || url || "";
-      return { port, serviceName, url, note, remark, tags: s.tags || [], paths: s.paths || [] };
-    });
-  }, [services, host]);
-
-  const savePortEdit = async (port: string) => {
-    if (!id) return;
-    const note = (noteDrafts[port] ?? "").trim();
-    const name = (nameDrafts[port] ?? "").trim();
-    const tags = (tagDrafts[port] ?? "")
-      .split(/[,，;；\n]+/)
-      .map((t) => t.trim())
-      .filter(Boolean);
-    setSavingNotePort(port);
-    setError("");
-    try {
-      // Merge service name + note + tags so users can fully maintain port info by hand.
-      const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          services: [{ port, name, note, tags }],
-        }),
-      });
-      setDetail(updated);
-      applyForm(updated);
-      setEditingNotePort(null);
-      setNoteDrafts((prev) => {
-        const next = { ...prev };
-        delete next[port];
-        return next;
-      });
-      setNameDrafts((prev) => {
-        const next = { ...prev };
-        delete next[port];
-        return next;
-      });
-      setTagDrafts((prev) => {
-        const next = { ...prev };
-        delete next[port];
-        return next;
-      });
-      onSaved?.(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "端口信息保存失败");
-    } finally {
-      setSavingNotePort(null);
-    }
-  };
-
-  const addPort = async () => {
-    if (!id) return;
-    const port = addPortForm.port.trim();
-    if (!port) {
-      setError("请填写端口号");
-      return;
-    }
-    if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
-      setError("端口号须为 1–65535 的数字");
-      return;
-    }
-    const portNorm = String(Number(port));
-    if (services.some((s) => s.port === portNorm || s.port === port)) {
-      setError(`端口 ${portNorm} 已存在，可直接编辑`);
-      return;
-    }
-    setAddingPort(true);
-    setError("");
-    try {
-      const name = addPortForm.name.trim();
-      const note = addPortForm.note.trim();
-      const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          services: [{ port: portNorm, name, note }],
-        }),
-      });
-      setDetail(updated);
-      applyForm(updated);
-      setShowAddPort(false);
-      setAddPortForm({ port: "", name: "", note: "" });
-      onSaved?.(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "添加端口失败");
-    } finally {
-      setAddingPort(false);
-    }
-  };
-
-  const removePort = async (port: string) => {
-    if (!id) return;
-    setRemovingPort(port);
-    setError("");
-    try {
-      const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ remove_ports: [port] }),
-      });
-      setDetail(updated);
-      applyForm(updated);
-      setConfirmRemovePort(null);
-      if (editingNotePort === port) setEditingNotePort(null);
-      onSaved?.(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "删除端口失败");
-    } finally {
-      setRemovingPort(null);
-    }
-  };
 
   const availableSuggestions = useMemo(() => {
     const selected = new Set(form.tags.map((t) => t.toLowerCase()));
@@ -292,7 +138,7 @@ export default function AssetDetailDialog({
 
   function applyForm(data: AssetDetail) {
     setForm({
-      name: asString(data.name),
+      note: hostNoteFromDetail(data),
       address: asString(data.address),
       tags: Array.isArray(data.tags) ? data.tags.map(String).filter(Boolean) : [],
     });
@@ -333,7 +179,6 @@ export default function AssetDetailDialog({
       setError("请填写 IP 或域名");
       return;
     }
-    // Flush draft tag on save if user typed but didn't press Enter.
     const tags = [...form.tags];
     const draft = tagDraft.trim();
     if (draft && !tags.some((t) => t.toLowerCase() === draft.toLowerCase())) {
@@ -346,9 +191,9 @@ export default function AssetDetailDialog({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: form.name.trim() || form.address.trim(),
           address: form.address.trim(),
           tags,
+          note: form.note.trim(),
         }),
       });
       setDetail(updated);
@@ -361,14 +206,36 @@ export default function AssetDetailDialog({
     }
   };
 
-  const removeFromGroup = async (groupId: string) => {
-    if (!id) return;
+  const togglePort = (port: string) => {
+    setSelectedPorts((prev) => (prev.includes(port) ? prev.filter((p) => p !== port) : [...prev, port]));
+  };
+
+  const toggleAllPorts = () => {
+    if (selectedPorts.length === services.length) {
+      setSelectedPorts([]);
+      return;
+    }
+    setSelectedPorts(services.map((s) => s.port));
+  };
+
+  const removeSelectedPorts = async () => {
+    if (!id || !selectedPorts.length) return;
+    setRemovingPorts(true);
     setError("");
     try {
-      await authFetch(`/api/asset-groups/${groupId}/hosts/${id}`, { method: "DELETE" });
-      onSaved?.(asset as AssetDetail);
+      const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ remove_ports: selectedPorts }),
+      });
+      setDetail(updated);
+      setSelectedPorts([]);
+      setConfirmRemovePorts(false);
+      onSaved?.(updated);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "移出组失败");
+      setError(err instanceof Error ? err.message : "删除端口失败");
+    } finally {
+      setRemovingPorts(false);
     }
   };
 
@@ -403,8 +270,8 @@ export default function AssetDetailDialog({
                 <h2 className="truncate font-mono text-lg font-semibold">
                   {asString(asset?.address, "资产")}
                 </h2>
-                {asset?.name && asset.name !== asset.address ? (
-                  <span className="truncate text-xs text-ink-muted">{asString(asset.name)}</span>
+                {hostNoteFromDetail(asset) ? (
+                  <span className="truncate text-xs text-ink-muted">{hostNoteFromDetail(asset)}</span>
                 ) : null}
               </div>
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-muted">
@@ -457,239 +324,140 @@ export default function AssetDetailDialog({
             </div>
           )}
 
-          {tab === "overview" && (
+          {tab === "edit" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-ink-muted">
-                  {portCards.length ? `${portCards.length} 个端口/服务` : "可手动维护，或由 Agent 自动挂接"}
-                </p>
-                {!showAddPort ? (
+              <label className="block space-y-1">
+                <span className="text-[11px] text-ink-muted">IP / 域名</span>
+                <input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
+                />
+              </label>
+
+              <div className="space-y-1">
+                <span className="text-[11px] text-ink-muted">标签</span>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 py-2">
+                  {form.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded-md bg-canvas-inset px-2 py-1 text-xs text-ink"
+                    >
+                      {tag}
+                      <button
+                        type="button"
+                        onClick={() => removeTag(tag)}
+                        className="rounded text-ink-muted hover:text-severity-critical"
+                        aria-label={`移除标签 ${tag}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    value={tagDraft}
+                    onChange={(e) => setTagDraft(e.target.value)}
+                    onKeyDown={onTagKeyDown}
+                    onBlur={() => {
+                      if (tagDraft.trim()) addTag(tagDraft);
+                    }}
+                    placeholder={form.tags.length ? "继续添加…" : "输入标签后回车"}
+                    className="min-w-[8rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm text-ink outline-none placeholder:text-ink-muted"
+                  />
                   <button
                     type="button"
-                    disabled={!id || loading}
-                    onClick={() => {
-                      setShowAddPort(true);
-                      setError("");
-                    }}
-                    className="rounded-md border border-hairline px-2.5 py-1 text-[11px] font-medium hover:bg-surface-default disabled:opacity-50"
+                    disabled={!tagDraft.trim()}
+                    onClick={() => addTag(tagDraft)}
+                    className="shrink-0 rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-40"
                   >
-                    添加端口
+                    添加
                   </button>
+                </div>
+                {availableSuggestions.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {availableSuggestions.slice(0, 8).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => addTag(t)}
+                        className="rounded-md border border-dashed border-hairline px-2 py-0.5 text-[11px] text-ink-secondary hover:border-ink hover:bg-surface-default hover:text-ink"
+                      >
+                        + {t}
+                      </button>
+                    ))}
+                  </div>
                 ) : null}
               </div>
 
-              {showAddPort ? (
-                <div className="rounded-md border border-hairline-soft bg-surface-default px-3.5 py-3">
-                  <p className="text-[13px] font-medium text-ink">添加端口</p>
-                  <div className="mt-2.5 grid grid-cols-2 gap-2">
-                    <label className="block space-y-1">
-                      <span className="text-[11px] text-ink-muted">端口 *</span>
-                      <input
-                        value={addPortForm.port}
-                        onChange={(e) =>
-                          setAddPortForm((prev) => ({ ...prev, port: e.target.value.replace(/[^\d]/g, "") }))
-                        }
-                        placeholder="例如 8080"
-                        inputMode="numeric"
-                        autoFocus
-                        className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-1.5 font-mono text-sm focus:border-ink focus:outline-none"
-                      />
-                    </label>
-                    <label className="block space-y-1">
-                      <span className="text-[11px] text-ink-muted">服务名（可选）</span>
-                      <input
-                        value={addPortForm.name}
-                        onChange={(e) => setAddPortForm((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="例如 http / ssh"
-                        className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-sm focus:border-ink focus:outline-none"
-                      />
-                    </label>
-                  </div>
-                  <label className="mt-2 block space-y-1">
-                    <span className="text-[11px] text-ink-muted">备注（可选）</span>
-                    <textarea
-                      value={addPortForm.note}
-                      onChange={(e) => setAddPortForm((prev) => ({ ...prev, note: e.target.value }))}
-                      rows={2}
-                      placeholder="URL、用途、测试重点等"
-                      className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-2 text-xs leading-relaxed focus:border-ink focus:outline-none"
-                    />
-                  </label>
-                  <div className="mt-2.5 flex justify-end gap-2">
-                    <button
-                      type="button"
-                      disabled={addingPort}
-                      onClick={() => {
-                        setShowAddPort(false);
-                        setAddPortForm({ port: "", name: "", note: "" });
-                        setError("");
-                      }}
-                      className="rounded-md border px-2.5 py-1 text-[11px]"
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      disabled={addingPort || !addPortForm.port.trim()}
-                      onClick={() => void addPort()}
-                      className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
-                    >
-                      {addingPort ? "添加中…" : "添加"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+              <label className="block space-y-1">
+                <span className="text-[11px] text-ink-muted">备注</span>
+                <textarea
+                  value={form.note}
+                  onChange={(e) => setForm({ ...form, note: e.target.value })}
+                  rows={3}
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
+                />
+              </label>
 
-              {portCards.length ? (
-                portCards.map((card) => {
-                  const isEditing = editingNotePort === card.port;
-                  const draftNote =
-                    noteDrafts[card.port] !== undefined ? noteDrafts[card.port] : card.remark;
-                  const draftName =
-                    nameDrafts[card.port] !== undefined ? nameDrafts[card.port] : card.serviceName;
-                  const draftTags =
-                    tagDrafts[card.port] !== undefined ? tagDrafts[card.port] : (card.tags || []).join(", ");
-                  const title = card.serviceName
-                    ? `${card.port}/${card.serviceName}`
-                    : `${card.port}`;
-                  return (
-                    <div
-                      key={card.port}
-                      className="rounded-md border border-hairline-soft bg-surface-default px-3.5 py-3"
-                    >
-                      {isEditing ? (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-[5.5rem_1fr] gap-2">
-                            <label className="block space-y-1">
-                              <span className="text-[11px] text-ink-muted">端口</span>
-                              <input
-                                value={card.port}
-                                disabled
-                                className="w-full rounded-md border border-hairline bg-canvas-inset px-2.5 py-1.5 font-mono text-sm text-ink-muted"
-                              />
-                            </label>
-                            <label className="block space-y-1">
-                              <span className="text-[11px] text-ink-muted">服务名</span>
-                              <input
-                                value={draftName}
-                                onChange={(e) =>
-                                  setNameDrafts((prev) => ({ ...prev, [card.port]: e.target.value }))
-                                }
-                                placeholder="例如 http / ssh"
-                                autoFocus
-                                className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-sm focus:border-ink focus:outline-none"
-                              />
-                            </label>
-                          </div>
-                          <label className="block space-y-1">
-                            <span className="text-[11px] text-ink-muted">端口标签</span>
-                            <input
-                              value={draftTags}
-                              onChange={(e) =>
-                                setTagDrafts((prev) => ({ ...prev, [card.port]: e.target.value }))
-                              }
-                              placeholder="例如 系统1, 生产"
-                              className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-sm focus:border-ink focus:outline-none"
-                            />
-                          </label>
-                          <label className="block space-y-1">
-                            <span className="text-[11px] text-ink-muted">备注</span>
-                            <textarea
-                              value={draftNote}
-                              onChange={(e) =>
-                                setNoteDrafts((prev) => ({ ...prev, [card.port]: e.target.value }))
-                              }
-                              rows={3}
-                              placeholder={
-                                card.url
-                                  ? `${card.url}\n（可追加服务说明、测试重点等）`
-                                  : "默认可填 URL，并追加其他补充信息"
-                              }
-                              className="w-full rounded-md border border-hairline bg-canvas px-2.5 py-2 text-xs leading-relaxed text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
-                            />
-                          </label>
-                          <div className="flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              disabled={removingPort === card.port || savingNotePort === card.port}
-                              onClick={() => setConfirmRemovePort(card.port)}
-                              className="text-[11px] text-severity-critical hover:underline disabled:opacity-50"
-                            >
-                              删除端口
-                            </button>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                disabled={savingNotePort === card.port}
-                                onClick={() => {
-                                  setEditingNotePort(null);
-                                  setNoteDrafts((prev) => {
-                                    const next = { ...prev };
-                                    delete next[card.port];
-                                    return next;
-                                  });
-                                  setNameDrafts((prev) => {
-                                    const next = { ...prev };
-                                    delete next[card.port];
-                                    return next;
-                                  });
-                                }}
-                                className="rounded-md border px-2.5 py-1 text-[11px]"
-                              >
-                                取消
-                              </button>
-                              <button
-                                type="button"
-                                disabled={savingNotePort === card.port}
-                                onClick={() => void savePortEdit(card.port)}
-                                className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
-                              >
-                                {savingNotePort === card.port ? "保存中…" : "保存"}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex items-start justify-between gap-3">
-                            <p className="min-w-0 truncate font-mono text-base font-semibold text-ink">
-                              {title}
-                            </p>
-                            <div className="flex shrink-0 items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingNotePort(card.port);
-                                  setNoteDrafts((prev) => ({
-                                    ...prev,
-                                    [card.port]: card.remark,
-                                  }));
-                                  setNameDrafts((prev) => ({
-                                    ...prev,
-                                    [card.port]: card.serviceName,
-                                  }));
-                                  setTagDrafts((prev) => ({
-                                    ...prev,
-                                    [card.port]: (card.tags || []).join(", "),
-                                  }));
-                                }}
-                                className="text-[11px] text-ink-muted hover:text-ink"
-                              >
-                                编辑
-                              </button>
-                              <button
-                                type="button"
-                                disabled={removingPort === card.port}
-                                onClick={() => setConfirmRemovePort(card.port)}
-                                className="text-[11px] text-ink-muted hover:text-severity-critical disabled:opacity-50"
-                              >
-                                删除
-                              </button>
-                            </div>
-                          </div>
-                          {(card.tags || []).length ? (
-                            <div className="mt-1.5 flex flex-wrap gap-1">
-                              {(card.tags || []).map((tag) => (
+              <div className="rounded-md border border-severity-critical/30 bg-severity-critical-subtle/40 p-3.5">
+                <p className="text-sm font-medium text-severity-critical">危险区域</p>
+                <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
+                  删除资产后不可恢复。关联漏洞只会解绑，不会一并删除。
+                </p>
+                <button
+                  type="button"
+                  disabled={deleting || !id}
+                  onClick={() => {
+                    setError("");
+                    setConfirmDelete(true);
+                  }}
+                  className="mt-3 rounded-md border border-severity-critical/40 bg-canvas px-3 py-1.5 text-xs font-medium text-severity-critical hover:bg-severity-critical-subtle disabled:opacity-50"
+                >
+                  {deleting ? "删除中…" : "删除资产"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tab === "ports" && (
+            <div className="space-y-2">
+              {services.length ? (
+                <>
+                  <div className="flex items-center justify-between gap-2 pb-1">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-secondary">
+                      <input
+                        type="checkbox"
+                        checked={selectedPorts.length === services.length}
+                        onChange={toggleAllPorts}
+                      />
+                      全选
+                    </label>
+                    <span className="text-[11px] text-ink-muted">
+                      {selectedPorts.length ? `已选 ${selectedPorts.length}` : "勾选后可批量删除"}
+                    </span>
+                  </div>
+                  {services.map((svc) => {
+                    const on = selectedPorts.includes(svc.port);
+                    return (
+                      <label
+                        key={svc.port}
+                        className={`flex cursor-pointer items-start gap-2.5 rounded-md border px-2.5 py-2 ${
+                          on ? "border-ink bg-surface" : "border-hairline-soft hover:bg-surface"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={on}
+                          onChange={() => togglePort(svc.port)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block font-mono text-sm text-ink">
+                            {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
+                          </span>
+                          {(svc.tags?.length || svc.note) ? (
+                            <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                              {(svc.tags || []).map((tag) => (
                                 <span
                                   key={tag}
                                   className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
@@ -697,52 +465,18 @@ export default function AssetDetailDialog({
                                   {tag}
                                 </span>
                               ))}
-                            </div>
+                              {svc.note ? (
+                                <span className="min-w-0 truncate text-[11px] text-ink-muted">{svc.note}</span>
+                              ) : null}
+                            </span>
                           ) : null}
-                          {(card.paths || []).length ? (
-                            <div className="mt-2 space-y-0.5">
-                              <p className="text-[11px] text-ink-muted">攻击面</p>
-                              {(card.paths || []).map((p) => (
-                                <div key={p.path} className="font-mono text-[11px] text-ink-secondary">
-                                  {p.path}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-                          <div className="mt-2.5 border-t border-hairline-soft pt-2.5">
-                            {card.remark ? (
-                              <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-ink-secondary">
-                                {card.remark}
-                              </p>
-                            ) : (
-                              <p className="text-xs text-ink-muted">暂无备注</p>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })
-              ) : !showAddPort ? (
-                <p className="py-6 text-center text-sm text-ink-muted">
-                  暂无端口/服务，点击上方「添加端口」手动维护
-                </p>
-              ) : null}
-            </div>
-          )}
-
-          {tab === "surface" && (
-            <div>
-              {allPaths.length ? (
-                <ul className="space-y-1">
-                  {allPaths.map((p) => (
-                    <li key={`${p.port}:${p.path}`} className="font-mono text-xs text-ink-secondary">
-                      :{p.port} {p.path}
-                    </li>
-                  ))}
-                </ul>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </>
               ) : (
-                <p className="text-sm text-ink-muted">这台主机还没有收编路径。</p>
+                <p className="py-6 text-center text-sm text-ink-muted">这台主机还没有端口。可在卡片上添加。</p>
               )}
             </div>
           )}
@@ -782,147 +516,6 @@ export default function AssetDetailDialog({
               {!vulns.length && <p className="py-6 text-center text-sm text-ink-muted">暂无风险项</p>}
             </div>
           )}
-
-          {tab === "edit" && (
-            <div className="space-y-5">
-              <label className="block space-y-1">
-                <span className="text-[11px] text-ink-muted">显示名称（可选）</span>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="默认与地址相同"
-                  className="w-full rounded-md border px-2.5 py-2 text-sm"
-                />
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-ink-muted">IP / 域名</span>
-                <input
-                  value={form.address}
-                  onChange={(e) => setForm({ ...form, address: e.target.value })}
-                  className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                />
-              </label>
-
-              <div className="space-y-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-[11px] font-medium text-ink-secondary">标签</span>
-                  <span className="text-[11px] text-ink-muted">用于业务分组，可多选</span>
-                </div>
-                <div className="rounded-md border border-hairline bg-surface-default px-2.5 py-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {form.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="inline-flex items-center gap-1 rounded-md bg-canvas-inset px-2 py-1 text-xs text-ink"
-                      >
-                        {tag}
-                        <button
-                          type="button"
-                          onClick={() => removeTag(tag)}
-                          className="rounded text-ink-muted hover:text-severity-critical"
-                          aria-label={`移除标签 ${tag}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                    <input
-                      value={tagDraft}
-                      onChange={(e) => setTagDraft(e.target.value)}
-                      onKeyDown={onTagKeyDown}
-                      onBlur={() => {
-                        if (tagDraft.trim()) addTag(tagDraft);
-                      }}
-                      placeholder={form.tags.length ? "继续添加…" : "输入标签后回车"}
-                      className="min-w-[8rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none placeholder:text-ink-muted"
-                    />
-                    <button
-                      type="button"
-                      disabled={!tagDraft.trim()}
-                      onClick={() => addTag(tagDraft)}
-                      className="shrink-0 rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-40"
-                    >
-                      添加
-                    </button>
-                  </div>
-                </div>
-                {availableSuggestions.length > 0 && (
-                  <div className="space-y-1.5">
-                    <p className="text-[11px] text-ink-muted">已有标签，点击添加</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {availableSuggestions.map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => addTag(t)}
-                          className="rounded-md border border-dashed border-hairline px-2 py-0.5 text-[11px] text-ink-secondary hover:border-ink hover:bg-surface-default hover:text-ink"
-                        >
-                          + {t}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <p className="text-[11px] leading-relaxed text-ink-muted">
-                  标签打在主机上。端口标签在「端口/服务」里编辑。组是单独的组装，不是标签。
-                </p>
-              </div>
-
-              {groups.length > 0 && id ? (
-                <div className="space-y-2">
-                  <span className="text-[11px] font-medium text-ink-secondary">所在组</span>
-                  {groups.filter((g) => g.members.some((m) => m.asset_id === id)).length ? (
-                    groups
-                      .filter((g) => g.members.some((m) => m.asset_id === id))
-                      .map((g) => {
-                        const member = g.members.find((m) => m.asset_id === id);
-                        const ports = member?.ports || [];
-                        return (
-                          <div
-                            key={g.id}
-                            className="flex items-center justify-between gap-2 rounded-md border border-hairline-soft px-2.5 py-2 text-xs"
-                          >
-                            <div className="min-w-0">
-                              <div className="font-medium text-ink">{g.name}</div>
-                              <div className="font-mono text-[11px] text-ink-muted">
-                                {ports.length ? ports.join(", ") : "裸主机"}
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="shrink-0 text-[11px] text-ink-muted hover:text-severity-critical"
-                              onClick={() => void removeFromGroup(g.id)}
-                            >
-                              移出
-                            </button>
-                          </div>
-                        );
-                      })
-                  ) : (
-                    <p className="text-[11px] text-ink-muted">尚未装入任何组。打开组档案可以把这台主机装进去。</p>
-                  )}
-                </div>
-              ) : null}
-
-              <div className="rounded-md border border-severity-critical/30 bg-severity-critical-subtle/40 p-3.5">
-                <p className="text-sm font-medium text-severity-critical">危险区域</p>
-                <p className="mt-1 text-xs leading-relaxed text-ink-secondary">
-                  删除资产后不可恢复。关联漏洞只会解绑，不会一并删除。
-                </p>
-                <button
-                  type="button"
-                  disabled={deleting || !id}
-                  onClick={() => {
-                    setError("");
-                    setConfirmDelete(true);
-                  }}
-                  className="mt-3 rounded-md border border-severity-critical/40 bg-canvas px-3 py-1.5 text-xs font-medium text-severity-critical hover:bg-severity-critical-subtle disabled:opacity-50"
-                >
-                  {deleting ? "删除中…" : "删除资产"}
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {tab === "edit" && (
@@ -942,6 +535,24 @@ export default function AssetDetailDialog({
             </div>
           </div>
         )}
+        {tab === "ports" && selectedPorts.length > 0 ? (
+          <div className="shrink-0 border-t border-hairline-soft px-5 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-ink-secondary">已选 {selectedPorts.length} 个端口</span>
+              <button
+                type="button"
+                disabled={removingPorts || !id}
+                onClick={() => {
+                  setError("");
+                  setConfirmRemovePorts(true);
+                }}
+                className="rounded-md border border-severity-critical/40 px-3 py-1.5 text-xs font-medium text-severity-critical hover:bg-severity-critical-subtle disabled:opacity-50"
+              >
+                删除选中
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <VulnDetailDialog
@@ -963,17 +574,15 @@ export default function AssetDetailDialog({
         error={error || null}
       />
       <ConfirmDialog
-        open={Boolean(confirmRemovePort)}
+        open={confirmRemovePorts}
         title="删除端口"
-        description={`确定从该资产移除端口 ${confirmRemovePort || ""}？关联漏洞不会被删除，仅从端口清单中去掉。`}
-        busy={Boolean(removingPort)}
+        description={`确定从该主机移除 ${selectedPorts.length} 个端口（${selectedPorts.join(", ")}）？关联漏洞不会被删除，仅从端口清单中去掉。`}
+        busy={removingPorts}
         onCancel={() => {
-          if (!removingPort) setConfirmRemovePort(null);
+          if (!removingPorts) setConfirmRemovePorts(false);
         }}
-        onConfirm={() => {
-          if (confirmRemovePort) void removePort(confirmRemovePort);
-        }}
-        error={null}
+        onConfirm={() => void removeSelectedPorts()}
+        error={error || null}
       />
     </div>
   );
@@ -1004,13 +613,6 @@ function normalizeInitial(initial?: Props["initial"]): AssetDetail | null {
   };
 }
 
-function formatDate(value?: string | null): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value.slice(0, 10);
-  return d.toLocaleDateString();
-}
-
 function normalizeServices(value: unknown): ServiceRow[] {
   if (!Array.isArray(value)) return [];
   const rows: ServiceRow[] = [];
@@ -1019,61 +621,33 @@ function normalizeServices(value: unknown): ServiceRow[] {
     const rec = item as Record<string, unknown>;
     const port = String(rec.port ?? "").trim();
     if (!port) continue;
-    const urlRaw = rec.url ?? rec.uri ?? rec.endpoint;
     const noteRaw = rec.note ?? rec.remark ?? rec.comment;
     rows.push({
       port,
       name: asString(rec.name || rec.service || rec.product, ""),
-      protocol: rec.protocol != null ? String(rec.protocol) : null,
-      product: rec.product != null ? String(rec.product) : null,
-      version: rec.version != null ? String(rec.version) : null,
-      url: typeof urlRaw === "string" && urlRaw.trim() ? urlRaw.trim() : null,
       note: typeof noteRaw === "string" && noteRaw.trim() ? noteRaw.trim() : null,
       tags: Array.isArray(rec.tags)
         ? rec.tags.map((t) => String(t).trim()).filter(Boolean)
-        : [],
-      paths: Array.isArray(rec.paths)
-        ? rec.paths
-            .map((item) => {
-              if (typeof item === "string") return { path: item };
-              if (item && typeof item === "object" && "path" in item) {
-                const recPath = item as { path?: unknown; source?: unknown };
-                return {
-                  path: String(recPath.path || "").trim(),
-                  source: recPath.source ? String(recPath.source) : undefined,
-                };
-              }
-              return { path: "" };
-            })
-            .filter((p) => p.path)
         : [],
     });
   }
   return rows.sort((a, b) => Number(a.port) - Number(b.port));
 }
 
-/** Build a simple URL for common web ports when agent did not store one. */
-function guessServiceUrl(
-  host: string,
-  port: string,
-  serviceName: string,
-  protocol: string | null,
-): string | null {
-  if (!host || !port) return null;
-  const name = (serviceName || "").toLowerCase();
-  const proto = (protocol || "").toLowerCase();
-  const webish =
-    ["http", "https", "http-proxy", "ssl/http", "ssl/https", "www"].includes(name) ||
-    ["80", "443", "8080", "8443", "8000", "8888", "3000", "5000"].includes(port) ||
-    proto === "http" ||
-    proto === "https";
-  if (!webish) return null;
-  const scheme =
-    port === "443" || port === "8443" || name === "https" || name === "ssl/https" || proto === "https"
-      ? "https"
-      : "http";
-  if ((scheme === "http" && port === "80") || (scheme === "https" && port === "443")) {
-    return `${scheme}://${host}`;
+function hostNoteFromDetail(asset?: AssetDetail | null): string {
+  if (!asset) return "";
+  const props = asset.properties || {};
+  for (const key of ["note", "remark", "comment"] as const) {
+    const text = String(props[key] ?? "").trim();
+    if (text) return text;
   }
-  return `${scheme}://${host}:${port}`;
+  if (asset.name && asset.name !== asset.address) return asString(asset.name);
+  return "";
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value.slice(0, 10);
+  return d.toLocaleDateString();
 }

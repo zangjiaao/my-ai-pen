@@ -206,16 +206,24 @@ export default function ServiceLedgerDialog({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="http / ssh …"
-                  className="w-full rounded-md border border-hairline px-2.5 py-1.5 text-sm"
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                 />
               </label>
               <div className="space-y-1">
                 <span className="text-[11px] text-ink-muted">标签</span>
-                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-hairline px-2 py-1.5">
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 py-2">
                   {tags.map((tag) => (
-                    <span key={tag} className="inline-flex items-center gap-1 rounded-md bg-canvas-inset px-2 py-0.5 text-xs">
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded-md bg-canvas-inset px-2 py-1 text-xs text-ink"
+                    >
                       {tag}
-                      <button type="button" onClick={() => setTags((prev) => prev.filter((t) => t !== tag))}>
+                      <button
+                        type="button"
+                        onClick={() => setTags((prev) => prev.filter((t) => t !== tag))}
+                        className="rounded text-ink-muted hover:text-severity-critical"
+                        aria-label={`移除标签 ${tag}`}
+                      >
                         ×
                       </button>
                     </span>
@@ -229,12 +237,20 @@ export default function ServiceLedgerDialog({
                         addTag(tagDraft);
                       }
                     }}
-                    placeholder="回车添加"
-                    className="min-w-[6rem] flex-1 border-0 bg-transparent text-sm outline-none"
+                    placeholder={tags.length ? "继续添加…" : "输入标签后回车"}
+                    className="min-w-[8rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm text-ink outline-none placeholder:text-ink-muted"
                   />
+                  <button
+                    type="button"
+                    disabled={!tagDraft.trim()}
+                    onClick={() => addTag(tagDraft)}
+                    className="shrink-0 rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-40"
+                  >
+                    添加
+                  </button>
                 </div>
                 {knownTags.filter((t) => !tags.some((x) => x.toLowerCase() === t.toLowerCase())).length ? (
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1.5">
                     {knownTags
                       .filter((t) => !tags.some((x) => x.toLowerCase() === t.toLowerCase()))
                       .slice(0, 8)
@@ -243,7 +259,7 @@ export default function ServiceLedgerDialog({
                           key={t}
                           type="button"
                           onClick={() => addTag(t)}
-                          className="rounded-md border border-dashed border-hairline px-1.5 py-0.5 text-[11px] text-ink-muted hover:border-ink"
+                          className="rounded-md border border-dashed border-hairline px-2 py-0.5 text-[11px] text-ink-secondary hover:border-ink hover:bg-surface hover:text-ink"
                         >
                           + {t}
                         </button>
@@ -257,7 +273,7 @@ export default function ServiceLedgerDialog({
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   rows={3}
-                  className="w-full rounded-md border border-hairline px-2.5 py-1.5 text-xs"
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                 />
               </label>
             </div>

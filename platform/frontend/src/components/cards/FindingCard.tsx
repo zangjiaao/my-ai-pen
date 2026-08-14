@@ -3,6 +3,7 @@
  * Exclusive kinds: Vuln | Key | Flag (one badge each).
  */
 import type { SecurityVulnerability } from "../../lib/securityTypes";
+import { AUTH_BADGE } from "../../lib/findingKinds";
 import { isFindingNew } from "../../lib/findingNew";
 
 export type FindingKindId = "vuln" | "auth" | "flag";
@@ -373,26 +374,26 @@ export function displayFindingTitle(title: unknown, maxLen = 72): string {
 export function classifyAuthSubtype(finding: Record<string, unknown>): { label: string; badgeClass: string } {
   const blob = findingTextBlob(finding).toLowerCase();
   if (/\bjwt\b|\bjson\s*web\s*token\b|\beyj[a-z0-9_-]+\.[a-z0-9_-]+/i.test(blob)) {
-    return { label: "JWT", badgeClass: "bg-status-running/12 text-status-running" };
+    return { label: "JWT", badgeClass: AUTH_BADGE.JWT };
   }
   if (
     /\b(api[_-]?key|access[_-]?key|secret[_-]?key|akia[0-9a-z]{12,}|accesskeyid|secretaccesskey|ak\/sk)\b/i.test(blob)
   ) {
-    return { label: "APIKEY", badgeClass: "bg-[#ecfeff] text-[#0e7490]" };
+    return { label: "APIKEY", badgeClass: AUTH_BADGE.APIKEY };
   }
   if (/\b(password|passwd|pwd|口令|密码)\b/i.test(blob)) {
-    return { label: "PASSWORD", badgeClass: "bg-[#f5f3ff] text-[#6d28d9]" };
+    return { label: "PASSWORD", badgeClass: AUTH_BADGE.PASSWORD };
   }
   if (/\b(session[_-]?id|session[_-]?token|phpsessid|jsessionid)\b/i.test(blob)) {
-    return { label: "SESSION", badgeClass: "bg-[#f0fdfa] text-[#0f766e]" };
+    return { label: "SESSION", badgeClass: AUTH_BADGE.SESSION };
   }
   if (/\b(bearer\s+[a-z0-9._\-]{8,}|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) {
-    return { label: "TOKEN", badgeClass: "bg-[#eef2ff] text-[#4338ca]" };
+    return { label: "TOKEN", badgeClass: AUTH_BADGE.TOKEN };
   }
   if (/\b(private[_-]?key|secret|credential|credentials)\b/i.test(blob)) {
-    return { label: "SECRET", badgeClass: "bg-[#f8fafc] text-[#475569]" };
+    return { label: "SECRET", badgeClass: AUTH_BADGE.SECRET };
   }
-  return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
+  return { label: "KEY", badgeClass: AUTH_BADGE.KEY };
 }
 
 function findingDisplayTitle(finding: Record<string, unknown>, kind: FindingKindId): string {

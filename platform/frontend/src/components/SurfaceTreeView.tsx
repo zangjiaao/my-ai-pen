@@ -4,9 +4,11 @@
  * Toolbar aligned with Traffic: search + single view filter (All / NEW / Untested / Findings).
  */
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { authFetch } from "../lib/api";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 import type { SurfaceEntry } from "../lib/surfaceModel";
+import ConfirmDialog from "./ConfirmDialog";
 import {
   preferSurfaceStatus,
   surfaceMethodChips,
@@ -331,12 +333,69 @@ export type SurfaceViewFilter = "all" | "new" | "untested" | "findings";
 /** @deprecated Use SurfaceViewFilter — kept for import compatibility. */
 export type SurfaceKindFilter = SurfaceViewFilter;
 
+export type SurfaceKnownAsset = {
+  address: string;
+  aliases?: string[];
+  ports?: string[];
+};
+
+/** Parse origin/host row into ledger Host + port. Origin is scheme://host:port. */
+export function parseOriginEnrollTarget(node: SurfaceTreeNode): { host: string; port: string } | null {
+  if (node.nodeKind !== "origin" && node.nodeKind !== "host") return null;
+  const raw = node.id.startsWith("origin:") ? node.id.slice("origin:".length) : node.label || node.path;
+  if (!raw) return null;
+  try {
+    const href = raw.includes("://") ? raw : `http://${raw}`;
+    const url = new URL(href);
+    const host = String(url.hostname || "").trim();
+    if (!host) return null;
+    const port =
+      String(url.port || "").trim() || (url.protocol === "https:" ? "443" : url.protocol === "http:" ? "80" : "");
+    if (!port) return null;
+    return { host, port };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHostKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function knownAssetIndex(assets: SurfaceKnownAsset[]): { hosts: Set<string>; hostPorts: Set<string> } {
+  const hosts = new Set<string>();
+  const hostPorts = new Set<string>();
+  for (const asset of assets) {
+    const names = [asset.address, ...(asset.aliases || [])]
+      .map((n) => normalizeHostKey(String(n || "")))
+      .filter(Boolean);
+    const ports = (asset.ports || []).map((p) => String(p).trim()).filter(Boolean);
+    for (const name of names) {
+      hosts.add(name);
+      for (const port of ports) hostPorts.add(`${name}:${port}`);
+    }
+  }
+  return { hosts, hostPorts };
+}
+
+function hostPortEnrolled(
+  host: string,
+  port: string,
+  index: { hosts: Set<string>; hostPorts: Set<string> },
+  extra: Set<string>,
+): boolean {
+  const key = `${normalizeHostKey(host)}:${port}`;
+  return extra.has(key) || index.hostPorts.has(key);
+}
+
 export function SurfaceTreeView({
   roots,
   total,
   findingsTotal = 0,
   unlinked = [],
+  knownAssets = [],
   onOpenVulnerability,
+  onEnrolledAsset,
 }: {
   roots: SurfaceTreeNode[];
   total: number;
@@ -347,11 +406,19 @@ export function SurfaceTreeView({
   /** @deprecated unused; Findings-kind chips removed from Surface toolbar. */
   kindCounts?: { vuln: number; flag: number; key: number };
   unlinked?: SurfaceFindingTag[];
+  /** Owner-ledger Hosts already in the library (address + aliases + ports). */
+  knownAssets?: SurfaceKnownAsset[];
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
+  onEnrolledAsset?: (asset: Record<string, unknown>) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const [viewFilter, setViewFilter] = useState<SurfaceViewFilter>("all");
+  const [enrolledKeys, setEnrolledKeys] = useState<Set<string>>(() => new Set());
+  const [enrollTarget, setEnrollTarget] = useState<{ host: string; port: string; label: string } | null>(null);
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollError, setEnrollError] = useState("");
+  const knownIndex = useMemo(() => knownAssetIndex(knownAssets), [knownAssets]);
 
   const filterActive = Boolean(query.trim()) || viewFilter !== "all";
   const stats = useMemo(() => countSurfaceViewStats(roots), [roots]);
@@ -387,6 +454,29 @@ export function SurfaceTreeView({
   };
 
   const unlinkedCount = filteredUnlinked.length;
+
+  const enrollOrigin = async () => {
+    if (!enrollTarget) return;
+    setEnrolling(true);
+    setEnrollError("");
+    try {
+      const created = await authFetch<Record<string, unknown>>("/api/assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: enrollTarget.host,
+          ports: [enrollTarget.port],
+        }),
+      });
+      setEnrolledKeys((prev) => new Set(prev).add(`${normalizeHostKey(enrollTarget.host)}:${enrollTarget.port}`));
+      onEnrolledAsset?.(created);
+      setEnrollTarget(null);
+    } catch (err) {
+      setEnrollError(err instanceof Error ? err.message : "纳入资产库失败");
+    } finally {
+      setEnrolling(false);
+    }
+  };
 
   return (
     <div className="space-y-2" data-testid="surface-tree">
@@ -438,6 +528,12 @@ export function SurfaceTreeView({
               isOpen={isOpen}
               onToggle={toggle}
               onOpenVulnerability={onOpenVulnerability}
+              knownIndex={knownIndex}
+              enrolledKeys={enrolledKeys}
+              onAskEnroll={(target) => {
+                setEnrollError("");
+                setEnrollTarget(target);
+              }}
             />
           ))}
         </div>
@@ -469,6 +565,22 @@ export function SurfaceTreeView({
           </div>
         </section>
       )}
+
+      <ConfirmDialog
+        open={Boolean(enrollTarget)}
+        title="纳入资产库"
+        description={`把 ${enrollTarget?.host || ""} 登记为资产，并挂上端口 ${enrollTarget?.port || ""}？不会改本轮攻击面树。`}
+        confirmLabel="纳入"
+        busy={enrolling}
+        error={enrollError || null}
+        onCancel={() => {
+          if (!enrolling) {
+            setEnrollTarget(null);
+            setEnrollError("");
+          }
+        }}
+        onConfirm={() => void enrollOrigin()}
+      />
     </div>
   );
 }
@@ -589,18 +701,65 @@ export function filterSurfaceTree(
   return roots.map(filterNode).filter((n): n is SurfaceTreeNode => n != null);
 }
 
+const ENROLL_CHIP =
+  "ml-auto inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-[11px] leading-none";
+
+function SurfaceEnrollChip({
+  enrolled,
+  host,
+  port,
+  label,
+  onEnroll,
+}: {
+  enrolled: boolean;
+  host: string;
+  port: string;
+  label: string;
+  onEnroll: (target: { host: string; port: string; label: string }) => void;
+}) {
+  if (enrolled) {
+    return (
+      <span data-testid="surface-enrolled" className={`${ENROLL_CHIP} text-ink-muted`}>
+        已纳入
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title="纳入资产库"
+      aria-label={`把 ${host} 纳入资产库`}
+      data-testid="surface-enroll"
+      onClick={(e) => {
+        e.stopPropagation();
+        onEnroll({ host, port, label });
+      }}
+      className={`${ENROLL_CHIP} gap-0.5 text-ink-secondary hover:bg-canvas hover:text-ink`}
+    >
+      <Plus className="h-3 w-3" />
+      纳入
+    </button>
+  );
+}
+
 function SurfaceTreeNodeRow({
   node,
   depth,
   isOpen,
   onToggle,
   onOpenVulnerability,
+  knownIndex,
+  enrolledKeys,
+  onAskEnroll,
 }: {
   node: SurfaceTreeNode;
   depth: number;
   isOpen: (node: SurfaceTreeNode, depth: number) => boolean;
   onToggle: (id: string, depth: number, node: SurfaceTreeNode) => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
+  knownIndex: { hosts: Set<string>; hostPorts: Set<string> };
+  enrolledKeys: Set<string>;
+  onAskEnroll: (target: { host: string; port: string; label: string }) => void;
 }) {
   const hasChildren = node.children.length > 0;
   const hasEntries = (node.entries?.length || 0) > 0;
@@ -613,6 +772,12 @@ function SurfaceTreeNodeRow({
   const allPreviewTitles = dedupeFindingTags([...node.findingTags, ...node.subtreeFindingTags])
     .map((t) => t.title)
     .join("\n");
+
+  const enrollTarget = parseOriginEnrollTarget(node);
+  const enrolled =
+    Boolean(enrollTarget) &&
+    hostPortEnrolled(enrollTarget!.host, enrollTarget!.port, knownIndex, enrolledKeys);
+  const canEnroll = Boolean(enrollTarget) && !enrolled;
 
   const displayLabel =
     node.nodeKind === "path"
@@ -630,7 +795,7 @@ function SurfaceTreeNodeRow({
   return (
     <div>
       <div
-        className="flex min-w-0 items-center gap-1 rounded-md px-1 py-1 hover:bg-surface-default"
+        className="group/origin flex min-w-0 items-center gap-1 rounded-md px-1 py-1 hover:bg-surface-default"
         style={{ paddingLeft }}
       >
         {canExpand ? (
@@ -759,6 +924,15 @@ function SurfaceTreeNodeRow({
             </span>
           )}
         </div>
+        {enrollTarget ? (
+          <SurfaceEnrollChip
+            enrolled={enrolled}
+            host={enrollTarget.host}
+            port={enrollTarget.port}
+            label={displayLabel}
+            onEnroll={onAskEnroll}
+          />
+        ) : null}
       </div>
 
       {open && hasChildren && (
@@ -771,6 +945,9 @@ function SurfaceTreeNodeRow({
               isOpen={isOpen}
               onToggle={onToggle}
               onOpenVulnerability={onOpenVulnerability}
+              knownIndex={knownIndex}
+              enrolledKeys={enrolledKeys}
+              onAskEnroll={onAskEnroll}
             />
           ))}
         </div>
