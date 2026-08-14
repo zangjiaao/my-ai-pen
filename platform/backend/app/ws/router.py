@@ -1583,8 +1583,6 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "traffic_exchange",
             # Spec #368 / #373: surface ledger lives in conversation.context, not chat log.
             "surface_upsert",
-            # Sidebar/top-bar title only — not a chat timeline event.
-            "conversation_title_updated",
         }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
@@ -6471,25 +6469,8 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
             except Exception as soft_exc:
                 print(f"[WS] soft_gate_next_steps: {soft_exc}")
             out["case_context"] = ctx
-            # Session title for auto-naming (Agent may set when still default 新会话).
-            if getattr(c, "title", None) is not None:
-                out["conversation_title"] = str(c.title or "")
     except Exception as e:
         print(f"[WS] attach case_context error: {e}")
-    if "conversation_title" not in out and conv_id:
-        try:
-            from app.db.base import async_session
-            from app.models.conversation import Conversation
-
-            async with async_session() as db:
-                r = await db.execute(
-                    select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
-                )
-                c2 = r.scalar_one_or_none()
-                if c2 is not None:
-                    out["conversation_title"] = str(c2.title or "")
-        except Exception as title_exc:
-            print(f"[WS] attach conversation_title error: {title_exc}")
     return out
 
 

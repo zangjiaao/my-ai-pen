@@ -1037,13 +1037,6 @@ export default function ConversationPage() {
     conversation_working: (msg) => {
       applyConversationWorking(msg);
     },
-    conversation_title_updated: (msg) => {
-      const m = msg as Record<string, unknown>;
-      const cid = String(m.conversation_id || "").trim();
-      const title = String(m.title || "").trim();
-      if (!cid || !title) return;
-      patchConversation(cid, { title });
-    },
     work_status: (msg) => {
       // Legacy/direct path if platform ever forwards raw work_status to the room.
       applyConversationWorking({
@@ -1829,7 +1822,7 @@ export default function ConversationPage() {
       upsertStreamedAgentText(msg, "thinking");
     },
   },
-      { bypass: ["conversation_working", "work_status", "conversation_title_updated"] },
+      { bypass: ["conversation_working", "work_status"] },
     ),
   );
 

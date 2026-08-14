@@ -516,14 +516,6 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   const allowDestructive = parseAllowDestructive(message);
 
   const caseContext = parseCaseContext(message.case_context ?? message.caseContext);
-  const conversationTitleRaw =
-    message.conversation_title ?? message.conversationTitle;
-  const conversationTitle =
-    typeof conversationTitleRaw === "string"
-      ? conversationTitleRaw
-      : conversationTitleRaw != null
-        ? String(conversationTitleRaw)
-        : undefined;
 
   // Language: top-level or worker_limits; always a registry wire code (#138).
   const agentLanguage = extractAgentLanguageFromMessage(message);
@@ -565,7 +557,6 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
           ? message.parentTaskId
           : undefined,
     caseContext,
-    conversationTitle,
     agentLanguage,
     todoReplaceAllowed: todoReplaceAllowed || undefined,
     pendingHandoffTodos:

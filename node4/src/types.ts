@@ -79,11 +79,6 @@ export type TaskEnvelope = {
   expertName?: string;
   expertId?: string;
   /**
-   * Current Case/session title from the platform (e.g. default "新会话").
-   * Used so the agent can auto-name when still a placeholder.
-   */
-  conversationTitle?: string;
-  /**
    * Same-case work-group context from the platform (thread + findings board).
    * Experts joining mid-case should read this like a group chat.
    */

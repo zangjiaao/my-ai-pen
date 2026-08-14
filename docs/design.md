@@ -638,7 +638,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 - 「创建会话」黑色 pill (`button-primary`) 置顶，全宽。点击后立即进入对话页，不弹窗。
 - **会话列表**：所有会话统一放在同一个列表里，按最后活跃时间倒序排列。不使用"历史会话"等分组标签。
 - 会话列表项：默认 `{colors.ink-secondary}` weight 380；当前活跃项 `{colors.ink}` weight 500 + `{colors.accent-subtle}` 背景。每项显示 AI 自动生成的标题 + 状态圆点 + 活跃时间。
-- **会话自动命名**：用户发送第一条**有实质任务**的消息后，Node Agent（任意 seat，含 `default`）经 `platform_set_conversation_title(only_if_default=true)` 生成短标题（如 "Web渗透 — lab.example.com"），替换默认的"新会话"。纯寒暄不改名。用户可手动重命名；非默认标题不会被自动覆盖。**不**依赖平台会话 Agent 人格。
+- **会话自动命名**：用户发送第一条消息后，可由平台**非对话**逻辑或 Node `default` 侧生成标题（如 "Web渗透 — new-platform.example.com"），替换默认的"新会话"。用户可手动重命名。**不**依赖平台会话 Agent 人格（见 Node default model）。
 - 次级导航入口（资产、漏洞、节点）放在会话列表下方，用 `divider` 隔开。
 - 底部放全局状态：在线节点数 / 活跃会话数 / 待确认高危漏洞数。
 
@@ -663,7 +663,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 | [权限] | "使用以下账号测试权限控制和越权漏洞：admin / ***（高权限），viewer / ***（低权限）。" |
 | [复测] | ~~prompt chip only~~ **not product intent** — retest is Case chat + Agent (map #81 N1); no `/retest` API. |
 
-**会话自动命名**：用户发送第一条有实质任务的消息后，Agent 调用 `platform_set_conversation_title` 自动生成短标题，替换 Sidebar 中的"新会话"（`only_if_default`，不覆盖用户已改名）。用户可点击标题手动重命名。
+**会话自动命名**：用户发送第一条消息后自动生成会话标题（平台非对话逻辑或 Node default），替换 Sidebar 中的"新会话"。用户可点击标题手动重命名。
 
 **`conversation-message-user`** — 用户消息：`{colors.surface-default}` 微暖灰背景 + `{rounded.lg}` 圆角，右对齐，最大宽 70%。这是"人说话"。
 **`conversation-message-agent`** — Agent 消息：白色背景（直接放在 canvas 上），左对齐，Markdown 渲染全宽。这是"系统说话"。

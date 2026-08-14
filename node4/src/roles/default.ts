@@ -58,7 +58,6 @@ const DEFAULT_TOOL_NAMES = [
   "platform_enrich_asset",
   "platform_batch_enrich_assets",
   "platform_conversation_snapshot",
-  "platform_set_conversation_title",
   "platform_list_reports",
   "platform_create_report",
   "platform_list_experts",
@@ -72,8 +71,7 @@ export const DEFAULT_SEAT_PACK: RolePack = {
   toolNames: mergePlatformCitizenTools(DEFAULT_TOOL_NAMES),
   workLines: [
     "How to work (intent → action):",
-    "- **Greet / small talk:** brief reply as {{ expert_name }}; offer help with assets, findings, reports, or expert handoff. Then stop. (No auto-title for pure greetings.)",
-    "- **Session title:** if title is still 新会话/New session and the user gave a real task/target, platform_set_conversation_title(short title, only_if_default=true) once — silent. Explicit rename → only_if_default=false. Do not overwrite user titles.",
+    "- **Greet / small talk:** brief reply as {{ expert_name }}; offer help with assets, findings, reports, or expert handoff. Then stop.",
     "- **Ledger Q&A:** platform.list_* / platform.get_* / platform.conversation_snapshot first; answer from real data.",
     "- **Add Hosts (only if user asked):** platform_create_asset(reason=…, address/CIDR/addresses, optional ports; group_name= for 装入分组). Same IP in another Group → new Host (id identity).",
     "- **Ports:** platform_enrich_asset / platform_batch_enrich_assets — add ports/services **or** remove_ports=[…]. Never use assemble for 加/删端口.",
