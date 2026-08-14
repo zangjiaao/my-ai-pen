@@ -16,6 +16,12 @@ export const PLATFORM_CITIZEN_MARKER = "[platform-citizen]";
 export const PLATFORM_CITIZEN_TOOL_NAMES = [
   "platform_list_assets",
   "platform_get_asset",
+  "platform_create_asset",
+  "platform_enrich_asset",
+  "platform_batch_enrich_assets",
+  "platform_list_groups",
+  "platform_create_group",
+  "platform_assemble_group",
   "platform_list_vulnerabilities",
   "platform_get_vulnerability",
   "platform_conversation_snapshot",
@@ -28,13 +34,14 @@ export const PLATFORM_CITIZEN_TOOL_NAMES = [
  * Specialist methodology stays in each pack's mission/work.md.
  */
 export const PLATFORM_CITIZEN_MISSION_LINES: readonly string[] = [
-  `${PLATFORM_CITIZEN_MARKER} Platform ledger is product truth (assets, findings, Case). Chat/todo is not.`,
+  `${PLATFORM_CITIZEN_MARKER} Platform owner ledger is shared product truth (user 资产管理 + Agent tools). Chat/todo is not.`,
+  "Inventory questions (能看到哪些主机 / 有没有某台机 / tags·ports·notes): **platform_list_assets first** (optional q=), then answer from tool data — never claim inventory is invisible.",
   "Read inventory/priors: platform_list_assets / platform_get_asset / platform_list_vulnerabilities / platform_get_vulnerability / platform_conversation_snapshot / platform_list_experts.",
-  "Open priors on this Scope host = **re-verify workstream** (not a skip list): high/critical first; finding(confirm) with **fresh** tool proof + **path-bearing location**. Same path/module merges (再次发现); level/bypass on same path ≠ new title. Interleave untested recon surface.",
+  "Open priors on this Scope host = **interleaved re-verify** (not a finish-first checklist): high/critical sample may appear in case_context.scope_intel; deep-dive with **platform_list_vulnerabilities(asset_id=…)** / get_asset only when useful (never treat unfiltered top-N as that host's full set). finding(confirm) needs **fresh** tool proof + **path-bearing location**. Same path/module merges (再次发现). Primary work remains untested surface + NEW ledger identities.",
   "Honest counts: 重新验证 N = successful confirm this session only; 新发现 = new ledger identity only. Reconcile with platform_list_vulnerabilities before closing claims — never invent rows.",
   "Cross-pack handoff: platform_list_experts → one request_user_decision(kind=handoff, …) and wait. Never silent seat switch; never invent experts.",
-  "Do **not** invent host assets. Hosts appear only via user register, handoff Authorize, or next-scope/promote.",
-  "Stay in authorized Scope; book with full path/URL. Out-of-scope hosts are attack-surface candidates, not free ledger inserts.",
+  "Hosts: identity=asset **id** (same IP OK across units as different Hosts). create_asset(group_name=): merge only if address already **in that Group**, else new Host. Ports: batch_enrich add **or** remove_ports. User says 新资产/改回端口 → short path: create + enrich(remove_ports); do not re-debate tool lists. assemble=装入组 only. Never invent Hosts from recon alone.",
+  "Stay in authorized Scope; book with full path/URL. Out-of-scope hosts are attack-surface candidates — do not auto-dump scan hits into the ledger without user request.",
   // Spec #312/#313 / #398: short hard rules only — schema detail lives on the tool/ChoiceCard.
   "next_steps: at pause with purposeful work, **one** request_user_decision(kind=next_steps, options[2–5] id+title+body); default **single-select**; may omit. Disclose open Free Tasks (honest progress) — no full-completion claim while map dirty. Never free-text A/B menus or only 等待指示.",
   "No silent Free todo replace: append/done only; full replace only after user ChoiceCard `replace_todo_map` / platform `todo_replace_allowed` (agent allow_replace alone ≠ grant).",

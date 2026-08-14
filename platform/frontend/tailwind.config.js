@@ -37,6 +37,13 @@ export default {
           error: "var(--color-status-error)",
           running: "var(--color-status-running)",
         },
+        key: {
+          password: { DEFAULT: "var(--color-key-password)", subtle: "var(--color-key-password-subtle)" },
+          apikey: { DEFAULT: "var(--color-key-apikey)", subtle: "var(--color-key-apikey-subtle)" },
+          session: { DEFAULT: "var(--color-key-session)", subtle: "var(--color-key-session-subtle)" },
+          token: { DEFAULT: "var(--color-key-token)", subtle: "var(--color-key-token-subtle)" },
+          secret: { DEFAULT: "var(--color-key-secret)", subtle: "var(--color-key-secret-subtle)" },
+        },
       },
       fontFamily: {
         sans: ["Geist", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],

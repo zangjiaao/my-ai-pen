@@ -1,6 +1,6 @@
 import { ApiError, authFetch } from "../lib/api";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
-import { Check, Copy, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import {
@@ -167,12 +167,12 @@ export default function NodePage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="搜索节点名称、IP…"
-              className="rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+              className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as (typeof STATUS_FILTERS)[number])}
-              className="rounded-md border border-hairline px-3 py-2 text-sm"
+              className="rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               {STATUS_FILTERS.map((s) => (
                 <option key={s} value={s}>
@@ -186,8 +186,9 @@ export default function NodePage() {
                 setRegisterError("");
                 setShowRegister(true);
               }}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
             >
+              <Plus className="h-4 w-4" />
               注册节点
             </button>
           </div>
@@ -309,7 +310,7 @@ export default function NodePage() {
             onChange={(e) => setRegName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void register()}
             placeholder="节点名称（留空自动生成）"
-            className="w-full rounded-md border border-hairline px-3 py-2 text-sm"
+            className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
           />
         </SimpleDialog>
       )}
@@ -606,7 +607,7 @@ function NodeDetailDialog({
                         setEditingName(false);
                       }
                     }}
-                    className="min-w-0 flex-1 rounded border border-hairline px-2 py-1 text-xl font-semibold focus:outline-none"
+                    className="min-w-0 flex-1 rounded-md border border-hairline bg-surface px-2.5 py-1 text-xl font-semibold text-ink outline-none focus:border-ink"
                   />
                 ) : (
                   <h2 className="min-w-0 truncate text-xl font-semibold text-ink">{node.name}</h2>
@@ -754,7 +755,7 @@ function NodeDetailDialog({
                             setTimeoutSec(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                       <label className="block space-y-1">
@@ -768,7 +769,7 @@ function NodeDetailDialog({
                             setMaxTurns(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                       <label className="block space-y-1">
@@ -782,7 +783,7 @@ function NodeDetailDialog({
                             setMaxRetries(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                     </div>
@@ -802,7 +803,7 @@ function NodeDetailDialog({
                             setMainTimeoutSec(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                       <label className="block space-y-1">
@@ -816,7 +817,7 @@ function NodeDetailDialog({
                             setMainMaxTurns(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                     </div>
@@ -835,7 +836,7 @@ function NodeDetailDialog({
                             setMaxConcurrent(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                         />
                       </label>
                       <label className="block space-y-1">
@@ -846,7 +847,7 @@ function NodeDetailDialog({
                             setScanMode(e.target.value);
                             setSaveOk(false);
                           }}
-                          className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
+                          className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                         >
                           <option value="quick">快速 (quick)</option>
                           <option value="standard">标准 (standard)</option>
@@ -868,7 +869,7 @@ function NodeDetailDialog({
                           setAgentLanguage(e.target.value);
                           setSaveOk(false);
                         }}
-                        className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
+                        className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                       >
                         {AGENT_LANGUAGE_OPTIONS.map((opt) => (
                           <option key={opt.code} value={opt.code}>

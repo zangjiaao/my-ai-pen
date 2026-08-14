@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { authFetch } from "../lib/api";
 import { evidenceProofSteps, type EvidenceLike } from "../lib/evidenceDisplay";
+import { AUTH_BADGE } from "../lib/findingKinds";
 import { asString, type SecurityEvidence, type SecurityVulnerability } from "../lib/securityTypes";
 
 interface Props {
@@ -126,8 +127,10 @@ export default function VulnDetailDialog({
       try {
         const vuln = await authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`);
         if (cancelled) return;
-        setDetail(vuln);
-        await hydrateEvidence(vuln);
+        // API rows often lack url/location; keep chat/panel surface fields from initial.
+        const merged = mergeDetailWithInitial(vuln, base);
+        setDetail(merged);
+        await hydrateEvidence(merged);
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load vulnerability");
@@ -187,37 +190,8 @@ export default function VulnDetailDialog({
         ? "bg-status-success/15 text-status-success"
         : keySub.badgeClass;
 
-  const method = vulnerability?.method ? String(vulnerability.method).toUpperCase() : "";
-  // Prefer Surface-tree aligned path (set when finding is hung on the panel).
-  const surfaceFromPanel = String(
-    (vulnerability as { __surface_display?: string } | null)?.__surface_display
-      || (initial as { __surface_display?: string } | null)?.__surface_display
-      || "",
-  ).trim();
-  const surfaceFromUrl = (() => {
-    const raw = String(
-      vulnerability?.endpoint ||
-        vulnerability?.location ||
-        (vulnerability as { url?: string } | null)?.url ||
-        "",
-    ).trim();
-    if (!raw) return "";
-    try {
-      if (/^https?:\/\//i.test(raw)) {
-        const token = raw.match(/^https?:\/\/\S+/i)?.[0] || raw;
-        const u = new URL(token);
-        const origin = `${u.hostname}${u.port ? `:${u.port}` : ""}`;
-        let path = u.pathname || "/";
-        if (path.length > 1) path = path.replace(/\/+$/, "");
-        return path === "/" ? origin : `${origin}${path}`;
-      }
-    } catch {
-      /* ignore */
-    }
-    if (raw.startsWith("/")) return raw.split(/[?#]/)[0] || raw;
-    return raw;
-  })();
-  const surfaceLine = surfaceFromPanel || [method, surfaceFromUrl].filter(Boolean).join(" ") || "—";
+  // Prefer Surface-tree path (right panel) then location_key / url / poc URL (chat open).
+  const surfaceLine = resolveSurfaceLine(vulnerability, initial);
 
   const descriptionRaw = String(
     vulnerability?.description || vulnerability?.impact || "",
@@ -588,8 +562,198 @@ type FindingExtras = {
   impact?: string | null;
   reproduction?: string | null;
   evidence_id?: string | null;
+  location_key?: string | null;
   __surface_kind?: string | null;
+  __surface_display?: string | null;
+  __surface_path?: string | null;
 };
+
+/** First http(s) URL in free text (chat PoC / proof often embeds the target). */
+function firstHttpUrl(text: string): string {
+  const m = String(text || "").match(/https?:\/\/[^\s"'<>\\]+/i);
+  if (!m) return "";
+  return m[0].replace(/[),.;]+$/g, "");
+}
+
+/** Compact operator-facing surface from URL, path, or host:port. */
+function formatSurfaceToken(raw: string): string {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  // Snapshot sometimes stuffed full curl PoC into location — pull the URL out.
+  if (trimmed.length > 160 || /\bcurl\s|Observed:|HTTP\s+\d{3}/i.test(trimmed)) {
+    const embedded = firstHttpUrl(trimmed);
+    if (embedded) return formatSurfaceToken(embedded);
+    if (trimmed.length > 160) return "";
+  }
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const token = firstHttpUrl(trimmed) || trimmed;
+      const u = new URL(token);
+      const origin = `${u.hostname}${u.port ? `:${u.port}` : ""}`;
+      let path = u.pathname || "/";
+      if (path.length > 1) path = path.replace(/\/+$/, "");
+      return path === "/" ? origin : `${origin}${path}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (trimmed.startsWith("/")) return trimmed.split(/[?#]/)[0] || trimmed;
+  return trimmed;
+}
+
+/** True when token is a path only (no host) — needs host from asset / PoC. */
+function isPathOnlySurface(token: string): boolean {
+  const t = String(token || "").trim();
+  return Boolean(t) && t.startsWith("/") && !t.includes("://");
+}
+
+/**
+ * Join host (+ optional port) with a path. Prefer host:port from a matching PoC URL
+ * when asset is missing (common for book-time findings).
+ */
+function withHost(
+  pathOrKey: string,
+  opts: { host?: string; port?: string; blobs?: string[] },
+): string {
+  const path = (pathOrKey.split(/[?#]/)[0] || pathOrKey).trim() || "/";
+  const pathPart = path === "/" ? "" : path;
+  const port = String(opts.port || "").trim();
+  const host = String(opts.host || "").trim();
+
+  // Prefer a PoC/description URL whose path matches location_key (gives real host).
+  for (const blob of opts.blobs || []) {
+    const u = firstHttpUrl(String(blob || ""));
+    if (!u) continue;
+    try {
+      const parsed = new URL(u);
+      let p = parsed.pathname || "/";
+      if (p.length > 1) p = p.replace(/\/+$/, "");
+      if (p === path || path === "/" || p.endsWith(path) || path.endsWith(p)) {
+        const hostPort = `${parsed.hostname}${parsed.port ? `:${parsed.port}` : port ? `:${port}` : ""}`;
+        return `${hostPort}${pathPart || (p === "/" ? "" : p)}`;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  // Any first URL host as fallback when asset is empty.
+  if (!host) {
+    for (const blob of opts.blobs || []) {
+      const u = firstHttpUrl(String(blob || ""));
+      if (!u) continue;
+      try {
+        const parsed = new URL(u);
+        const hostPort = `${parsed.hostname}${parsed.port ? `:${parsed.port}` : port ? `:${port}` : ""}`;
+        return `${hostPort}${pathPart}`;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  if (host) {
+    const hostPort = port ? `${host}:${port}` : host;
+    return `${hostPort}${pathPart}`;
+  }
+  return pathPart || path;
+}
+
+/**
+ * Location line for the detail dialog.
+ * Chat `vuln_found` has `url`; ledger API has `location_key` + `port` (+ asset);
+ * right-panel Findings inject `__surface_display`. All must produce a non-dash line.
+ * Path-only location_key is enriched with host from asset or PoC URL.
+ */
+function resolveSurfaceLine(
+  vulnerability: SecurityVulnerability | null,
+  initial?: Partial<SecurityVulnerability> | null,
+): string {
+  const v = (vulnerability || {}) as SecurityVulnerability & FindingExtras;
+  const i = (initial || {}) as Partial<SecurityVulnerability> & FindingExtras;
+  const panel = String(v.__surface_display || i.__surface_display || "").trim();
+  if (panel) return panel;
+
+  const method = String(v.method || i.method || "")
+    .trim()
+    .toUpperCase();
+  const port = String(v.port || i.port || "").trim();
+  const host = String(v.asset?.address || i.affected_asset || i.target || "").trim();
+  const blobs = [
+    v.poc,
+    v.description,
+    i.poc,
+    i.description,
+    (i as { evidence_summary?: string }).evidence_summary,
+  ].map((b) => String(b || ""));
+
+  // Prefer absolute URL / host-bearing fields first (not bare location_key paths).
+  const absoluteCandidates = [v.endpoint, v.location, v.url, i.endpoint, i.location, i.url];
+  for (const c of absoluteCandidates) {
+    const raw = String(c || "").trim();
+    if (!raw || isPathOnlySurface(raw)) continue;
+    const formatted = formatSurfaceToken(raw);
+    if (formatted && !isPathOnlySurface(formatted)) {
+      return [method, formatted].filter(Boolean).join(" ");
+    }
+  }
+
+  // Path identity (location_key / bare path) + host from asset or PoC.
+  const pathCandidates = [
+    v.location_key,
+    i.location_key,
+    i.__surface_path,
+    v.__surface_path,
+    v.location,
+    i.location,
+    v.endpoint,
+    i.endpoint,
+  ];
+  for (const c of pathCandidates) {
+    const raw = String(c || "").trim();
+    if (!raw || !isPathOnlySurface(raw)) continue;
+    const joined = withHost(raw, { host, port, blobs });
+    if (joined) return [method, joined].filter(Boolean).join(" ");
+  }
+
+  for (const blob of blobs) {
+    const u = firstHttpUrl(blob);
+    if (!u) continue;
+    const formatted = formatSurfaceToken(u);
+    if (formatted) return [method, formatted].filter(Boolean).join(" ");
+  }
+
+  if (host && port) return `${host}:${port}`;
+  if (host) return host;
+  if (port) return `port ${port}`;
+  return "—";
+}
+
+/** Keep chat/panel surface fields when ledger GET omits url/location. */
+function mergeDetailWithInitial(
+  api: SecurityVulnerability,
+  initial: SecurityVulnerability | null,
+): SecurityVulnerability {
+  if (!initial) return api;
+  const extra = initial as SecurityVulnerability & FindingExtras;
+  const apiX = api as SecurityVulnerability & FindingExtras;
+  return {
+    ...api,
+    location: api.location || extra.location || extra.url || undefined,
+    endpoint: api.endpoint || extra.endpoint || undefined,
+    method: api.method || extra.method || undefined,
+    affected_asset: api.affected_asset || extra.affected_asset || extra.url || undefined,
+    target: api.target || extra.target || extra.url || undefined,
+    port: api.port || extra.port || undefined,
+    ...( {
+      location_key: apiX.location_key || extra.location_key || undefined,
+      url: extra.url || apiX.url || undefined,
+      __surface_display: extra.__surface_display || apiX.__surface_display || undefined,
+      __surface_path: extra.__surface_path || apiX.__surface_path || undefined,
+      __surface_kind: extra.__surface_kind || apiX.__surface_kind || undefined,
+      finding_kind: extra.finding_kind || apiX.finding_kind || undefined,
+    } as object),
+  } as SecurityVulnerability;
+}
 
 function resolveDetailKind(
   vulnerability: SecurityVulnerability | null,
@@ -632,13 +796,13 @@ function detailAuthSubtype(
     .map((v) => String(v || ""))
     .join("\n")
     .toLowerCase();
-  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: "bg-status-running/12 text-status-running" };
-  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: "bg-[#ecfeff] text-[#0e7490]" };
-  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: "bg-[#f5f3ff] text-[#6d28d9]" };
-  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: "bg-[#f0fdfa] text-[#0f766e]" };
-  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: "bg-[#eef2ff] text-[#4338ca]" };
-  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: "bg-[#f8fafc] text-[#475569]" };
-  return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
+  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: AUTH_BADGE.JWT };
+  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: AUTH_BADGE.APIKEY };
+  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: AUTH_BADGE.PASSWORD };
+  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: AUTH_BADGE.SESSION };
+  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: AUTH_BADGE.TOKEN };
+  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: AUTH_BADGE.SECRET };
+  return { label: "KEY", badgeClass: AUTH_BADGE.KEY };
 }
 
 function formatTimelineTime(value: unknown): string {
@@ -748,9 +912,17 @@ function buildDetailTimeline(
 function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): SecurityVulnerability | null {
   if (!initial) return null;
   const raw = initial as Partial<SecurityVulnerability> & FindingExtras;
-  const location = initial.location || raw.url || raw.target || initial.affected_asset || initial.poc;
+  // Prefer real surface fields over stuffing full PoC into location (snapshot legacy).
+  const location =
+    initial.location ||
+    raw.url ||
+    raw.location_key ||
+    raw.target ||
+    initial.endpoint ||
+    initial.affected_asset ||
+    undefined;
   const description = initial.description || raw.impact;
-  const poc = initial.poc || raw.reproduction || location;
+  const poc = initial.poc || raw.reproduction || undefined;
   const evidenceIds = initial.evidence_ids?.length
     ? initial.evidence_ids
     : raw.evidence_id
@@ -771,6 +943,7 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     cwe: initial.cwe,
     asset_id: initial.asset_id,
     asset: initial.asset,
+    port: initial.port,
     affected_asset: initial.affected_asset || raw.url || raw.target || undefined,
     target: initial.target || raw.target || raw.url || undefined,
     location: location || undefined,
@@ -794,12 +967,16 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     status_timeline: initial.status_timeline || [],
     discovered_at: initial.discovered_at,
     updated_at: initial.updated_at,
-    // Preserve kind metadata for dialog mode (not on base type; cast via spread consumers).
+    // Preserve kind + surface metadata for dialog mode.
     ...( {
       finding_kind: raw.__surface_kind || raw.finding_kind || raw.kind || raw.category,
       flag_value: raw.flag_value || extractDetailFlagToken(null, initial) || undefined,
       reproduction: raw.reproduction,
+      location_key: raw.location_key,
+      url: raw.url,
       __surface_kind: raw.__surface_kind,
+      __surface_display: raw.__surface_display,
+      __surface_path: raw.__surface_path,
     } as object),
   } as SecurityVulnerability;
 }

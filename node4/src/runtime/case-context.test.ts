@@ -42,18 +42,42 @@ const ctx = parseCaseContext({
     ],
     goal: { status: "running", terminal: null as unknown as undefined },
   },
+  scope_intel: {
+    version: 1,
+    hosts: [
+      {
+        id: "asset-1",
+        address: "host.docker.internal",
+        name: "本机docker",
+        ports: ["3000"],
+        on_ledger: true,
+        services: [{ port: "3000", name: "http", note: "JuiceShop" }],
+      },
+    ],
+    prior_findings: { total: 50, open_or_retest: 40, by_severity: { critical: 10, high: 15 } },
+    high_priority_sample: [
+      { id: "v1", severity: "critical", title: "SQLi login", location: "/rest/user/login" },
+    ],
+    surface_sketch: { known_paths: ["/rest/user/login", "/api/Users"], this_case_surface_count: 0 },
+  },
 });
 
 assert.ok(ctx);
 assert.ok(ctx!.next_work);
 assert.equal(ctx!.next_work!.workset_open_count, 2);
 assert.equal(ctx!.next_work!.workset_open?.[0]?.id, "w1");
+assert.ok(ctx!.scope_intel);
+assert.equal(ctx!.scope_intel!.hosts?.[0]?.address, "host.docker.internal");
 const block = formatCaseContextInjection(ctx);
 assert.match(block, /Case work-group context/);
 assert.match(block, /Please audit the dumped source/);
 assert.match(block, /RCE via upload/);
-assert.match(block, /re-verify open ones/);
-assert.match(block, /rediscovery/);
+assert.match(block, /Scope Host memory/);
+assert.match(block, /host\.docker\.internal/);
+assert.match(block, /Prior findings/);
+assert.match(block, /SQLi login/);
+assert.match(block, /Known path sketch/);
+assert.match(block, /This Case findings board/);
 assert.match(block, /finding\(confirm\)/);
 assert.match(block, /this Case/i);
 assert.match(block, /ev_src_1/);
@@ -74,4 +98,10 @@ const onlyNext = parseCaseContext({
 });
 assert.ok(onlyNext);
 assert.equal(onlyNext!.next_work!.workset_open?.[0]?.id, "x");
+// scope_intel alone is enough to parse
+const onlyIntel = parseCaseContext({
+  scope_intel: { hosts: [{ address: "lab.local", on_ledger: true }] },
+});
+assert.ok(onlyIntel);
+assert.equal(onlyIntel!.scope_intel!.hosts?.[0]?.address, "lab.local");
 console.log("case-context.test.ts ok");

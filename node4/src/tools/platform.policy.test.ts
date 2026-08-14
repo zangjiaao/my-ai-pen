@@ -8,7 +8,10 @@ import { resolveRolePack } from "../roles/index.js";
 import { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } from "../roles/default.js";
 import { toolNamesForPack } from "./index.js";
 
-assert.equal(isHostCreateAttempt("create_host", {}), true);
+// Dedicated create tool is allowed (server requires user-request reason).
+assert.equal(isHostCreateAttempt("create_host", {}), false);
+assert.equal(isHostCreateAttempt("platform_create_asset", {}), false);
+// enrich must not smuggle create
 assert.equal(isHostCreateAttempt("enrich_asset", { create_host: true }), true);
 assert.equal(isHostCreateAttempt("enrich_asset", { address: "evil.example", ports: [80] }), true);
 assert.equal(isHostCreateAttempt("enrich_asset", { asset_id: "abc", ports: [80] }), false);

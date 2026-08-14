@@ -15,10 +15,14 @@ Pure functions (no DB) so unit tests can drive the real shipped logic.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
+
+# Agent platform_create_asset hard cap per call (covers /24; blocks /16 dumps).
+MAX_AGENT_HOST_CREATE = 256
 
 SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
 
@@ -394,6 +398,7 @@ def parse_import_lines(text: object) -> list[dict[str, str]]:
     Parse paste/CSV into asset rows: address[,name[,system]].
 
     Skips blank lines and header row if first cell looks like 'address'.
+    Prefer parse_host_service_import_lines for address+port+protocol bulk create.
     """
     raw = str(text or "")
     rows: list[dict[str, str]] = []
@@ -409,16 +414,190 @@ def parse_import_lines(text: object) -> list[dict[str, str]]:
         if parts[0].lower() in {"address", "ip", "host", "url", "地址"}:
             continue
         address = parts[0]
-        if not is_valid_ledger_address(address):
+        if not is_valid_ledger_address(address) and not split_host_port(address)[0]:
+            continue
+        host, _ = split_host_port(address)
+        if not host and is_valid_ledger_address(address):
+            host = normalize_address(address)
+        if not host:
             continue
         name = parts[1] if len(parts) > 1 else ""
         system = parts[2] if len(parts) > 2 else ""
         rows.append({
-            "address": normalize_address(address),
-            "name": name or normalize_address(address),
+            "address": normalize_address(host),
+            "name": name or normalize_address(host),
             "system": system,
         })
     return rows
+
+
+def parse_host_service_import_lines(text: object) -> list[dict[str, Any]]:
+    """Parse bulk CSV for Host × optional Service (port/protocol/name).
+
+    Supported columns (header optional, order flexible with header):
+      address | ip | host | 地址
+      port | 端口
+      protocol | proto | 协议
+      name | service | 服务名
+      tags | 标签
+
+    Row shapes without header (positional):
+      address
+      address,port
+      address,port,protocol
+      address,port,protocol,name
+      address,port,protocol,name,tags
+
+    Port may be written ``80`` or ``80/tcp`` / ``443/https``.
+    Address may include ``host:443`` (port extracted).
+    Same host on multiple lines merges into one Host with many Services.
+
+    Returns list of host dicts:
+      { address, tags: [...], services: [{port, protocol?, name?}, ...] }
+    """
+    raw = str(text or "")
+    lines = raw.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    header_map: dict[str, int] | None = None
+    # address -> accumulated
+    by_host: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _cell(parts: list[str], key: str, idx: int | None) -> str:
+        if header_map is not None and key in header_map:
+            i = header_map[key]
+            return parts[i] if i < len(parts) else ""
+        if idx is not None and idx < len(parts):
+            return parts[idx]
+        return ""
+
+    def _split_port_proto(cell: str) -> tuple[str | None, str]:
+        text = (cell or "").strip()
+        if not text:
+            return None, ""
+        if "/" in text:
+            left, right = text.split("/", 1)
+            return normalize_port(left), right.strip().lower()
+        return normalize_port(text), ""
+
+    HEADER_ALIASES = {
+        "address": {"address", "ip", "host", "hostname", "url", "地址", "主机"},
+        "port": {"port", "ports", "端口"},
+        "protocol": {"protocol", "proto", "协议"},
+        "name": {"name", "service", "svc", "服务", "服务名"},
+        "tags": {"tags", "tag", "标签"},
+    }
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip().strip('"').strip("'") for p in re.split(r"[,;\t]", line)]
+        # Keep empty middle cells when header-driven; drop trailing empties only for positional.
+        while parts and parts[-1] == "":
+            parts.pop()
+        if not parts:
+            continue
+
+        lower0 = parts[0].lower()
+        # Header row detection
+        if header_map is None and any(
+            lower0 in aliases or any(p.lower() in aliases for p in parts)
+            for aliases in HEADER_ALIASES.values()
+        ):
+            # Only treat as header if first cell looks like a column name, not an IP.
+            joined = {p.lower() for p in parts}
+            if lower0 in HEADER_ALIASES["address"] or "address" in joined or "ip" in joined or "地址" in joined:
+                header_map = {}
+                for i, cell in enumerate(parts):
+                    c = cell.lower()
+                    for key, aliases in HEADER_ALIASES.items():
+                        if c in aliases and key not in header_map:
+                            header_map[key] = i
+                            break
+                if "address" in header_map:
+                    continue
+
+        if header_map is not None:
+            addr_raw = _cell(parts, "address", 0)
+            port_raw = _cell(parts, "port", None)
+            proto_raw = _cell(parts, "protocol", None).lower()
+            name_raw = _cell(parts, "name", None)
+            tags_raw = _cell(parts, "tags", None)
+        else:
+            addr_raw = parts[0]
+            port_raw = parts[1] if len(parts) > 1 else ""
+            proto_raw = parts[2].lower() if len(parts) > 2 else ""
+            name_raw = parts[3] if len(parts) > 3 else ""
+            tags_raw = parts[4] if len(parts) > 4 else ""
+
+        host, addr_port = split_host_port(addr_raw)
+        if not host:
+            if is_valid_ledger_address(addr_raw):
+                host = normalize_address(addr_raw)
+            else:
+                continue
+        host = normalize_address(host)
+
+        port_n, proto_from_port = _split_port_proto(port_raw)
+        if not port_n and addr_port:
+            port_n = normalize_port(addr_port)
+        # Prefer protocol embedded in port (80/tcp); bare 3rd column may be service name.
+        known_proto = {
+            "tcp",
+            "udp",
+            "sctp",
+            "http",
+            "https",
+            "tls",
+            "ssl",
+            "ssh",
+            "ftp",
+            "smtp",
+            "dns",
+            "rdp",
+            "smb",
+            "mysql",
+            "postgres",
+            "redis",
+            "mongodb",
+        }
+        protocol = (proto_from_port or "").strip().lower()
+        svc_name = (name_raw or "").strip()
+        if proto_raw:
+            if proto_from_port:
+                # e.g. 22/tcp,ssh → keep tcp, name=ssh
+                if not svc_name:
+                    svc_name = proto_raw
+            elif proto_raw in known_proto:
+                protocol = proto_raw
+            elif not svc_name:
+                svc_name = proto_raw
+
+        tags = normalize_tags(re.split(r"[,|，、]+", tags_raw) if tags_raw else [])
+
+        if host not in by_host:
+            by_host[host] = {"address": host, "tags": [], "services": []}
+            order.append(host)
+        entry = by_host[host]
+        if tags:
+            entry["tags"] = merge_tags(entry.get("tags") or [], tags)
+        if port_n:
+            services: list[dict[str, Any]] = entry["services"]
+            existing = next((s for s in services if s.get("port") == port_n), None)
+            if existing:
+                if protocol:
+                    existing["protocol"] = protocol
+                if svc_name:
+                    existing["name"] = svc_name
+            else:
+                row: dict[str, Any] = {"port": port_n}
+                if protocol:
+                    row["protocol"] = protocol
+                if svc_name:
+                    row["name"] = svc_name
+                services.append(row)
+
+    return [by_host[h] for h in order]
 
 
 def build_scope_allow(assets: list[dict[str, Any]]) -> list[str]:
@@ -526,6 +705,81 @@ def identities_summary(identities: list[dict[str, Any]] | None, *, max_items: in
     if extra > 0:
         parts.append(f"+{extra}")
     return " · ".join(parts)
+
+
+def expand_host_specs(
+    specs: list[str] | str | None,
+    *,
+    max_hosts: int = MAX_AGENT_HOST_CREATE,
+    exclude_last_octets: list[int] | None = None,
+) -> list[str]:
+    """Expand IP/domain/CIDR specs into Host addresses (pure; no DB).
+
+    - Single host/domain → one address
+    - host:port → host only (ports applied separately)
+    - IPv4/IPv6 network (e.g. 10.0.0.0/24) → usable host addresses
+      (IPv4 hosts() already drops network/broadcast for mask < 31)
+    - ``exclude_last_octets``: drop IPv4 addresses whose last octet is in the set
+      (e.g. ``[1, 255]`` to skip gateway + broadcast when user asks)
+
+    Raises ValueError when expansion would exceed ``max_hosts``.
+    """
+    if specs is None:
+        return []
+    raw_list = [specs] if isinstance(specs, str) else list(specs)
+    out: list[str] = []
+    seen: set[str] = set()
+    skip_last = {int(x) for x in (exclude_last_octets or []) if str(x).strip().lstrip("-").isdigit()}
+
+    def _add(addr: str) -> None:
+        a = normalize_address(addr)
+        if not a or a in seen:
+            return
+        if not is_valid_ledger_address(a) and not split_host_port(a)[0]:
+            return
+        host, _ = split_host_port(a)
+        host = normalize_address(host or a)
+        if not host or host in seen:
+            return
+        if skip_last and _IPV4.match(host):
+            try:
+                last = int(host.rsplit(".", 1)[-1])
+            except ValueError:
+                last = -1
+            if last in skip_last:
+                return
+        seen.add(host)
+        out.append(host)
+
+    for raw in raw_list:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if "/" in text and not text.lower().startswith("http"):
+            try:
+                net = ipaddress.ip_network(text, strict=False)
+            except ValueError:
+                _add(text)
+                continue
+            # num_addresses includes network+broadcast for IPv4; hosts() excludes them when >2
+            if net.num_addresses > max_hosts + 2:
+                raise ValueError(
+                    f"host create cap {max_hosts} exceeded for {text} "
+                    f"({net.num_addresses} addresses); split the range"
+                )
+            hosts_iter = net.hosts() if net.num_addresses > 2 else list(net)
+            for ip in hosts_iter:
+                if len(out) >= max_hosts:
+                    raise ValueError(
+                        f"host create cap {max_hosts} exceeded for {text}; split the range"
+                    )
+                _add(str(ip))
+            continue
+        _add(text)
+
+    if len(out) > max_hosts:
+        raise ValueError(f"at most {max_hosts} hosts per create call (got {len(out)})")
+    return out
 
 
 def is_valid_ledger_address(value: object) -> bool:
@@ -851,6 +1105,13 @@ def merge_service_lists(existing: object, incoming: object) -> list[dict[str, An
                     cleaned.pop("note", None)
                     cleaned.pop("remark", None)
             cleaned.pop("_note_set", None)
+            if cleaned.get("_tags_set") or "tags" in cleaned:
+                tags = normalize_tags(cleaned.get("tags"))
+                if tags:
+                    cleaned["tags"] = tags
+                else:
+                    cleaned.pop("tags", None)
+            cleaned.pop("_tags_set", None)
             by_port[port] = cleaned
             order.append(port)
             continue
@@ -872,12 +1133,23 @@ def merge_service_lists(existing: object, incoming: object) -> list[dict[str, An
                 prev.pop("note", None)
                 prev.pop("remark", None)
         prev.pop("_note_set", None)
+        # Service tags (#454): only overwrite when incoming explicitly sets tags.
+        if item.get("_tags_set") or "tags" in item:
+            tags = normalize_tags(item.get("tags"))
+            if tags:
+                prev["tags"] = tags
+            else:
+                prev.pop("tags", None)
+        prev.pop("_tags_set", None)
         name = str(prev.get("name") or prev.get("service") or prev.get("product") or "").strip()
         if name:
             prev["name"] = name
         prev["port"] = port
         by_port[port] = prev
-    return [{k: v for k, v in by_port[p].items() if k != "_note_set"} for p in order]
+    return [
+        {k: v for k, v in by_port[p].items() if k not in {"_note_set", "_tags_set"}}
+        for p in order
+    ]
 
 
 def _service_note(item: dict[str, Any]) -> str:
@@ -1020,9 +1292,6 @@ def merge_discover_properties(
 ) -> dict[str, Any]:
     """Merge discover payload; services keyed by port, open_ports derived; urls/apis unioned."""
     base = dict(existing_properties) if isinstance(existing_properties, dict) else {}
-    # Drop multi-host fields — one asset = one host.
-    base.pop("aliases", None)
-    base.pop("identities", None)
 
     existing_services = extract_services(base)
     incoming_services = _normalize_service_list(services) if services is not None else []
@@ -1392,6 +1661,9 @@ def _normalize_service_list(raw: object) -> list[dict[str, Any]]:
         if note_explicit:
             cleaned["note"] = _service_note(item)
             cleaned["_note_set"] = True
+        if "tags" in item:
+            cleaned["tags"] = normalize_tags(item.get("tags"))
+            cleaned["_tags_set"] = True
         out.append(cleaned)
     return out
 
@@ -1416,3 +1688,421 @@ def _parse_dt(value: object) -> datetime | None:
         return dt
     except ValueError:
         return None
+
+
+UNGROUPED_GROUP_ID = ""
+UNGROUPED_GROUP_NAME = "未分组"
+
+
+def normalize_assembly_ports(value: object) -> list[str]:
+    """Normalized unique port list for an assembly subset. Empty = bare Host."""
+    return _normalize_port_list(value)
+
+
+def collect_owner_tags(hosts: list[dict[str, Any]] | None) -> list[str]:
+    """Union of Host tags and Service tags, stable case-insensitive order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for host in hosts or []:
+        if not isinstance(host, dict):
+            continue
+        for tag in normalize_tags(host.get("tags")):
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(tag)
+        for svc in extract_services(host.get("properties") if isinstance(host.get("properties"), dict) else {}):
+            for tag in normalize_tags(svc.get("tags")):
+                key = tag.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(tag)
+    return sorted(out, key=lambda t: t.lower())
+
+
+def apply_service_tags(properties: object, port_tags: object) -> dict[str, Any]:
+    """Set tags on existing services by port. Empty list clears. Does not create ports or Groups."""
+    props = dict(properties) if isinstance(properties, dict) else {}
+    services = [dict(s) for s in extract_services(props)]
+    incoming = port_tags if isinstance(port_tags, dict) else {}
+    want: dict[str, list[str]] = {}
+    for raw_port, raw_tags in incoming.items():
+        port = normalize_port(raw_port)
+        if not port:
+            continue
+        want[port] = normalize_tags(raw_tags)
+    out: list[dict[str, Any]] = []
+    for svc in services:
+        port = normalize_port(svc.get("port"))
+        if not port:
+            continue
+        row = dict(svc)
+        if port in want:
+            tags = want[port]
+            if tags:
+                row["tags"] = tags
+            else:
+                row.pop("tags", None)
+        out.append(row)
+    props["services"] = out
+    props["open_ports"] = [str(s.get("port")) for s in out if s.get("port")]
+    return props
+
+
+def project_owner_ledger(
+    *,
+    hosts: list[dict[str, Any]] | None = None,
+    groups: list[dict[str, Any]] | None = None,
+    assemblies: list[dict[str, Any]] | None = None,
+    keyword: str | None = None,
+    group_ids: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Project Group × Host × Service tree. Search is condition AND; operator searches Hosts.
+
+    Empty assembly ports = bare Host in that Group. Empty Groups still appear
+    (create-group-first). Hosts in no assembly go under 未分组 unless a group_ids filter is set.
+    """
+    host_rows = [h for h in (hosts or []) if isinstance(h, dict) and h.get("id") is not None]
+    by_id: dict[str, dict[str, Any]] = {str(h["id"]): h for h in host_rows}
+    group_rows = [g for g in (groups or []) if isinstance(g, dict) and g.get("id") is not None]
+    group_by_id = {str(g["id"]): g for g in group_rows}
+
+    members: dict[str, list[dict[str, Any]]] = {}
+    assembled_hosts: set[str] = set()
+    for raw in assemblies or []:
+        if not isinstance(raw, dict):
+            continue
+        gid = str(raw.get("group_id") or "")
+        aid = str(raw.get("asset_id") or "")
+        if not gid or not aid or gid not in group_by_id or aid not in by_id:
+            continue
+        ports = _normalize_port_list(raw.get("ports") if raw.get("ports") is not None else [])
+        # Explicit empty list stays empty (bare host). Missing/invalid-only still bare.
+        if raw.get("ports") is None:
+            ports = _normalize_port_list(raw.get("ports") or [])
+        members.setdefault(gid, []).append({"asset_id": aid, "ports": ports})
+        assembled_hosts.add(aid)
+
+    selected_groups: set[str] | None = None
+    if group_ids is not None:
+        selected_groups = {str(g) for g in group_ids if str(g)}
+
+    selected_tags = normalize_tags(tags)
+    keyword_norm = str(keyword or "").strip()
+
+    tree: list[dict[str, Any]] = []
+    named = sorted(group_rows, key=lambda g: (str(g.get("name") or "").lower(), str(g.get("id"))))
+    for group in named:
+        gid = str(group["id"])
+        if selected_groups is not None and gid not in selected_groups:
+            continue
+        visible_hosts: list[dict[str, Any]] = []
+        for member in members.get(gid, []):
+            projected = _project_host_in_assembly(
+                by_id[member["asset_id"]],
+                assembly_ports=member["ports"],
+                group_name=str(group.get("name") or ""),
+                keyword=keyword_norm,
+                selected_tags=selected_tags,
+            )
+            if projected:
+                visible_hosts.append(projected)
+        visible_hosts.sort(key=lambda h: (str(h.get("address") or ""), str(h.get("id") or "")))
+        group_name = str(group.get("name") or "")
+        kw_hits_group = bool(keyword_norm) and keyword_norm.lower() in group_name.lower()
+        keep_empty = (not keyword_norm and not selected_tags) or (kw_hits_group and not selected_tags)
+        if visible_hosts or keep_empty:
+            tree.append({
+                "id": gid,
+                "name": group_name,
+                "hosts": visible_hosts,
+            })
+
+    if selected_groups is None:
+        ungrouped: list[dict[str, Any]] = []
+        for host in host_rows:
+            if str(host["id"]) in assembled_hosts:
+                continue
+            projected = _project_host_in_assembly(
+                host,
+                assembly_ports=None,
+                group_name=UNGROUPED_GROUP_NAME,
+                keyword=keyword_norm,
+                selected_tags=selected_tags,
+            )
+            if projected:
+                ungrouped.append(projected)
+        ungrouped.sort(key=lambda h: (str(h.get("address") or ""), str(h.get("id") or "")))
+        if ungrouped:
+            tree.append({
+                "id": UNGROUPED_GROUP_ID,
+                "name": UNGROUPED_GROUP_NAME,
+                "hosts": ungrouped,
+            })
+    return tree
+
+
+def _project_host_in_assembly(
+    host: dict[str, Any],
+    *,
+    assembly_ports: list[str] | None,
+    group_name: str,
+    keyword: str,
+    selected_tags: list[str],
+) -> dict[str, Any] | None:
+    props = host.get("properties") if isinstance(host.get("properties"), dict) else {}
+    services = extract_services(props)
+    if assembly_ports is not None:
+        if not assembly_ports:
+            services = []
+        else:
+            want = set(assembly_ports)
+            services = [s for s in services if normalize_port(s.get("port")) in want]
+
+    host_tags = normalize_tags(host.get("tags"))
+    host_tag_set = {t.lower() for t in host_tags}
+    selected_l = [t.lower() for t in selected_tags]
+    address = str(host.get("address") or "")
+    name = str(host.get("name") or address)
+    aliases = extract_aliases(props, address)
+
+    kw = keyword.lower()
+    kw_host = False
+    kw_service_ports: set[str] = set()
+    if kw:
+        hay = [address, name, group_name, *aliases, *host_tags]
+        kw_host = any(kw in str(item).lower() for item in hay if item)
+        for svc in services:
+            port = str(svc.get("port") or "")
+            svc_name = str(svc.get("name") or svc.get("service") or svc.get("product") or "")
+            svc_tags = normalize_tags(svc.get("tags"))
+            blob = " ".join([port, svc_name, *svc_tags]).lower()
+            if kw in blob:
+                kw_service_ports.add(port)
+        if not kw_host and not kw_service_ports:
+            return None
+
+    for tag in selected_l:
+        on_host = tag in host_tag_set
+        on_svc = any(
+            tag in {t.lower() for t in normalize_tags(s.get("tags"))}
+            for s in services
+        )
+        if not on_host and not on_svc:
+            return None
+
+    visible = list(services)
+    for tag in selected_l:
+        if tag in host_tag_set:
+            continue
+        visible = [
+            s for s in visible
+            if tag in {t.lower() for t in normalize_tags(s.get("tags"))}
+        ]
+    if kw and not kw_host:
+        visible = [s for s in visible if str(s.get("port") or "") in kw_service_ports]
+
+    if not visible:
+        allow_bare = assembly_ports == [] or (assembly_ports is None and not services)
+        needs_service = False
+        if selected_l and not all(t in host_tag_set for t in selected_l):
+            needs_service = True
+        if kw and not kw_host:
+            needs_service = True
+        if needs_service or (services and not allow_bare):
+            return None
+
+    return {
+        "id": str(host.get("id")),
+        "address": address,
+        "name": name,
+        "tags": host_tags,
+        "aliases": aliases,
+        "services": [_public_service(s) for s in visible],
+    }
+
+
+def _public_service(svc: dict[str, Any]) -> dict[str, Any]:
+    port = normalize_port(svc.get("port")) or str(svc.get("port") or "")
+    name = str(svc.get("name") or svc.get("service") or svc.get("product") or "").strip()
+    out: dict[str, Any] = {"port": port, "name": name}
+    for field in ("protocol", "product", "version", "url", "note"):
+        val = svc.get(field)
+        if val:
+            out[field] = val
+    tags = normalize_tags(svc.get("tags"))
+    if tags:
+        out["tags"] = tags
+    paths = svc.get("paths")
+    if isinstance(paths, list) and paths:
+        out["paths"] = [
+            {"path": str(p.get("path")), "source": str(p.get("source") or "")}
+            if isinstance(p, dict) and p.get("path")
+            else {"path": str(p), "source": ""}
+            for p in paths
+            if (isinstance(p, dict) and p.get("path")) or (not isinstance(p, dict) and p)
+        ]
+    return out
+
+
+# "agent" = user-requested Agent write (platform_create_asset / enrich with ports).
+SERVICE_ADMIT_SOURCES = frozenset({"user", "book", "http_settle", "agent"})
+OWNER_PATH_ADMIT_SOURCES = frozenset({"book", "http_settle"})
+_HTTP_SCHEMES = frozenset({"http", "https"})
+
+
+def service_source_admits(source: object) -> bool:
+    """True only for user add, finding book, or accepted HTTP(S) settle."""
+    return str(source or "").strip().lower() in SERVICE_ADMIT_SOURCES
+
+
+def merge_official_service(existing: object, incoming: object) -> dict[str, Any]:
+    """Same host+port merges; later non-empty fields win. Tags only replace when set."""
+    base = dict(existing) if isinstance(existing, dict) else {}
+    add = dict(incoming) if isinstance(incoming, dict) else {}
+    port = normalize_port(add.get("port") or base.get("port"))
+    if not port:
+        raise ValueError("service requires a port")
+    out = dict(base)
+    out["port"] = port
+    for field in ("name", "protocol", "product", "version", "url", "note", "source"):
+        if add.get(field):
+            out[field] = add[field]
+        elif field not in out and base.get(field):
+            out[field] = base[field]
+    if "tags" in add:
+        tags = normalize_tags(add.get("tags"))
+        if tags:
+            out["tags"] = tags
+        else:
+            out.pop("tags", None)
+    elif base.get("tags"):
+        out["tags"] = normalize_tags(base.get("tags"))
+    paths = add.get("paths") if "paths" in add else base.get("paths")
+    if paths:
+        out["paths"] = list(paths)
+    return _public_service(out) if "name" in out or out.get("port") else out
+
+
+def read_host_services(properties: object, service_rows: object = None) -> list[dict[str, Any]]:
+    """Dual-read: JSON services until rows exist; overlay so JSON-only ports are not lost."""
+    json_svcs = extract_services(properties)
+    rows = [s for s in (service_rows or []) if isinstance(s, dict) and normalize_port(s.get("port"))]
+    if not rows:
+        return [_public_service(s) for s in json_svcs]
+    by_port: dict[str, dict[str, Any]] = {}
+    for svc in json_svcs:
+        port = normalize_port(svc.get("port"))
+        if port:
+            by_port[port] = dict(svc)
+            by_port[port]["port"] = port
+    for row in rows:
+        port = normalize_port(row.get("port"))
+        if not port:
+            continue
+        by_port[port] = merge_official_service(by_port.get(port), row)
+    order = sorted(by_port, key=lambda p: (0, int(p)) if p.isdigit() else (1, p))
+    return [_public_service(by_port[p]) for p in order]
+
+
+def normalize_owner_path(value: object) -> str | None:
+    """Path under a Service. Query/fragment stripped. Scan-tool leftovers rejected."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "${" in raw or "{{" in raw:
+        return None
+    if "://" in raw:
+        try:
+            parsed = urlparse(raw)
+        except ValueError:
+            return None
+        raw = parsed.path or "/"
+    if "?" in raw:
+        raw = raw.split("?", 1)[0]
+    if "#" in raw:
+        raw = raw.split("#", 1)[0]
+    raw = raw.strip()
+    if not raw:
+        return None
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    if len(raw) > 1000:
+        raw = raw[:1000]
+    return raw
+
+
+def owner_target_from_location(value: object) -> dict[str, Any] | None:
+    """HTTP(S) host+port+path. None for non-HTTP or unparseable. Does not create a Host."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    url_token = raw
+    if "://" not in url_token:
+        return None
+    try:
+        parsed = urlparse(url_token)
+    except ValueError:
+        return None
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _HTTP_SCHEMES:
+        return None
+    host = (parsed.hostname or "").lower()
+    if not host or not is_valid_ledger_address(host):
+        return None
+    if parsed.port:
+        port = normalize_port(parsed.port)
+    else:
+        port = "443" if scheme == "https" else "80"
+    if not port:
+        return None
+    path = normalize_owner_path(parsed.path or "/")
+    if not path:
+        path = "/"
+    return {"host": host, "port": port, "path": path, "scheme": scheme}
+
+
+def owner_target_from_surface_row(row: object) -> dict[str, Any] | None:
+    """Map a settled HTTP(S) Surface row to owner host/port/path. Does not mutate the row."""
+    if not isinstance(row, dict):
+        return None
+    origin = str(row.get("origin_key") or row.get("location") or "").strip()
+    target = owner_target_from_location(origin)
+    if not target:
+        return None
+    path = normalize_owner_path(row.get("path_key") or target.get("path"))
+    if path:
+        target = dict(target)
+        target["path"] = path
+    return target
+
+
+def admit_owner_path(
+    existing: object,
+    *,
+    path: object,
+    source: object,
+) -> list[dict[str, Any]] | None:
+    """Append/merge a durable path. Only book / http_settle. No Surface / inventory fields."""
+    if str(source or "").strip().lower() not in OWNER_PATH_ADMIT_SOURCES:
+        return None
+    norm = normalize_owner_path(path)
+    if not norm:
+        return None
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in existing or []:
+        if not isinstance(item, dict):
+            continue
+        p = normalize_owner_path(item.get("path"))
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append({"path": p, "source": str(item.get("source") or source)})
+    if norm in seen:
+        return out
+    out.append({"path": norm, "source": str(source).strip().lower()})
+    return out

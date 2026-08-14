@@ -11,6 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, XAxis, YAxis } from "recharts";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import VulnDetailDialog from "../components/VulnDetailDialog";
 import {
   ChartContainer,
   ChartTooltip,
@@ -18,6 +19,7 @@ import {
   type ChartConfig,
 } from "../components/ui/chart";
 import { authFetch } from "../lib/api";
+import type { SecurityVulnerability } from "../lib/securityTypes";
 
 type FindingItem = {
   id: string;
@@ -234,6 +236,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   /** Empty string = all assets */
   const [chartAssetId, setChartAssetId] = useState("");
+  /** Inline vuln detail — list row opens dialog, not /vulnerabilities. */
+  const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -253,6 +257,20 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, []);
+
+  const openFinding = (f: FindingItem) => {
+    setSelectedVuln({
+      id: f.id,
+      vulnerability_id: f.id,
+      title: f.title,
+      severity: f.severity,
+      status: f.status,
+      status_label: f.status_label,
+      discovered_at: f.discovered_at,
+      conversation_id: f.conversation_id ?? undefined,
+      asset_id: f.asset_id ?? undefined,
+    });
+  };
 
   const openTotal = summary?.vulnerabilities?.open_total ?? summary?.open_total ?? 0;
   const vulnsTotal = summary?.vulnerabilities?.total ?? summary?.vulns_total ?? 0;
@@ -425,7 +443,7 @@ export default function DashboardPage() {
                           <li key={f.id}>
                             <button
                               type="button"
-                              onClick={() => navigate(`/vulnerabilities?highlight=${f.id}`)}
+                              onClick={() => openFinding(f)}
                               className="flex w-full items-start gap-2 py-2 text-left hover:bg-canvas-inset"
                             >
                               <span
@@ -583,6 +601,13 @@ export default function DashboardPage() {
           )}
         </main>
       </div>
+
+      <VulnDetailDialog
+        open={Boolean(selectedVuln)}
+        vulnerabilityId={selectedVuln?.id || selectedVuln?.vulnerability_id}
+        initial={selectedVuln}
+        onClose={() => setSelectedVuln(null)}
+      />
     </div>
   );
 }

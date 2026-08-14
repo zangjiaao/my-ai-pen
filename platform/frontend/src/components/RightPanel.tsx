@@ -148,6 +148,8 @@ interface Props {
   onReturnToLiveTaskMap?: () => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  /** After user promotes a Surface origin into the owner ledger. */
+  onEnrolledAsset?: (asset: Record<string, unknown>) => void;
   /** Spec #308: open Worker process audit dialog. */
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
   /** Spec #354: Case id for Session Reset/Delete APIs. */
@@ -211,6 +213,7 @@ export default function RightPanel({
   onReturnToLiveTaskMap,
   onOpenVulnerability,
   onOpenAsset,
+  onEnrolledAsset,
   onWorkerClick,
   conversationId = null,
   pendingHandoffExpertIds = [],
@@ -282,6 +285,45 @@ export default function RightPanel({
   const surfaceFindingsTotal = findings.length;
   // Kind chip counts — exclusive, matches Findings group sizes (Vuln / Key / Flags).
   const surfaceKindCounts = findingAttachment.kindCounts;
+  const knownSurfaceAssets = useMemo(
+    () =>
+      assets.map((raw) => {
+        const rec = raw || {};
+        const props = (rec.properties && typeof rec.properties === "object" ? rec.properties : {}) as Record<
+          string,
+          unknown
+        >;
+        const aliasRaw = rec.aliases || props.aliases;
+        const aliases = Array.isArray(aliasRaw)
+          ? aliasRaw
+              .map((item) => {
+                if (typeof item === "string") return item.trim();
+                if (item && typeof item === "object") {
+                  const row = item as Record<string, unknown>;
+                  return String(row.value || row.address || row.host || "").trim();
+                }
+                return "";
+              })
+              .filter(Boolean)
+          : [];
+        const services = Array.isArray(rec.services) ? rec.services : Array.isArray(props.services) ? props.services : [];
+        const ports = services
+          .map((svc) => (svc && typeof svc === "object" ? String((svc as { port?: unknown }).port || "") : ""))
+          .filter(Boolean);
+        // AssetOut exposes open_ports at top level; snapshot/properties may nest them.
+        const openPortRaw = [
+          ...(Array.isArray(rec.open_ports) ? rec.open_ports : []),
+          ...(Array.isArray(props.open_ports) ? props.open_ports : []),
+        ];
+        const extraPorts = openPortRaw.map((p) => String(p || "").trim()).filter(Boolean);
+        return {
+          address: String(rec.address || rec.host || rec.name || ""),
+          aliases,
+          ports: [...new Set([...ports, ...extraPorts])],
+        };
+      }),
+    [assets],
+  );
   const orderedStrixAgents = orderStrixAgents(strixAgents);
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
@@ -506,7 +548,9 @@ export default function RightPanel({
               findingsTotal={surfaceFindingsTotal}
               kindCounts={surfaceKindCounts}
               unlinked={unlinkedFindings}
+              knownAssets={knownSurfaceAssets}
               onOpenVulnerability={onOpenVulnerability}
+              onEnrolledAsset={onEnrolledAsset}
             />
           )
         )}

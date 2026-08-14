@@ -128,12 +128,12 @@ export default function ExpertPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="搜索专家名、节点、说明…"
-              className="rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+              className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />
             <select
               value={packFilter}
               onChange={(e) => setPackFilter(e.target.value)}
-              className="rounded-md border border-hairline px-3 py-2 text-sm"
+              className="rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               <option value="全部">全部能力包</option>
               {EXPERT_PACKS.filter((p) => p.id !== "consult").map((p) => (
@@ -145,7 +145,7 @@ export default function ExpertPage() {
             <button
               type="button"
               onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-3 py-2 text-sm text-ink-secondary hover:bg-surface-default"
+              className="inline-flex items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink hover:bg-canvas"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               刷新
@@ -153,7 +153,7 @@ export default function ExpertPage() {
             <button
               type="button"
               onClick={() => setShowCreate(true)}
-              className="inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
             >
               <Plus className="h-4 w-4" />
               创建专家
@@ -374,7 +374,7 @@ function CreateExpertDialog({
               maxLength={64}
               onChange={(e) => setName(e.target.value)}
               placeholder="渗透专家"
-              className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+              className="mt-1 w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />
           </label>
           <label className="block text-xs text-ink-secondary">
@@ -382,7 +382,7 @@ function CreateExpertDialog({
             <select
               value={nodeId}
               onChange={(e) => setNodeId(e.target.value)}
-              className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+              className="mt-1 w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               {nodes.map((n) => (
                 <option key={n.id} value={n.id}>
@@ -399,7 +399,7 @@ function CreateExpertDialog({
             <select
               value={packId}
               onChange={(e) => setPackId(e.target.value as ExpertId)}
-              className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+              className="mt-1 w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               {packOptions.map((p) => (
                 <option key={p.id} value={p.id} disabled={!p.installed}>
@@ -584,7 +584,7 @@ function ExpertDetailDialog({
                         setEditingName(false);
                       }
                     }}
-                    className="min-w-0 flex-1 rounded border border-hairline px-2 py-1 text-xl font-semibold focus:outline-none"
+                    className="min-w-0 flex-1 rounded-md border border-hairline bg-surface px-2.5 py-1 text-xl font-semibold text-ink outline-none focus:border-ink"
                   />
                 ) : (
                   <h2 className="min-w-0 truncate text-xl font-semibold text-ink">{expert.name}</h2>
@@ -706,7 +706,7 @@ function ExpertDetailDialog({
                         setNodeId(e.target.value);
                         setSaveOk(false);
                       }}
-                      className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm focus:outline-none"
+                      className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                     >
                       {nodes.map((n) => (
                         <option key={n.id} value={n.id}>
@@ -728,7 +728,7 @@ function ExpertDetailDialog({
                         setPackId(e.target.value);
                         setSaveOk(false);
                       }}
-                      className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm focus:outline-none"
+                      className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
                     >
                       {packOptions.map((p) => (
                         <option key={p.id} value={p.id} disabled={!p.installed && p.id !== packId}>

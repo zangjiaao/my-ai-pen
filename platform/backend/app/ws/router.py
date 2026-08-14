@@ -3097,6 +3097,17 @@ async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None
                 # Hard-cap reject of all new identities — no broadcast payload.
                 return None
             c.context = next_ctx
+            if c.user_id:
+                try:
+                    from app.services.owner_services import attach_http_surfaces_to_owner_ledger
+
+                    await attach_http_surfaces_to_owner_ledger(
+                        db,
+                        user_id=c.user_id,
+                        surfaces=landed,
+                    )
+                except Exception as owner_exc:
+                    print(f"[WS] owner-ledger HTTP settle attach error (non-fatal): {owner_exc}")
             await db.commit()
             ledger = next_ctx.get("surface_ledger") if isinstance(next_ctx, dict) else {}
             updated_at = (
@@ -3718,6 +3729,20 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         merged_hist.append(item)
                 vuln.history = merged_hist[-50:]
                 await db.delete(duplicate)
+
+            try:
+                from app.services.owner_services import attach_book_to_owner_ledger
+
+                await attach_book_to_owner_ledger(
+                    db,
+                    user_id=user_id,
+                    host=host,
+                    port=port or getattr(vuln, "port", None),
+                    location=str(location or msg.get("url") or "") or None,
+                    service_name=str(service_name or "") or None,
+                )
+            except Exception as owner_exc:
+                print(f"[WS] owner-ledger book attach error (non-fatal): {owner_exc}")
 
             await db.commit()
             await _audit(
@@ -5923,6 +5948,14 @@ async def _dispatch_task_assign_to_node(
         expert_id=expert_id,
         same_mode_continue=same_mode_continue,
     )
+    # Free cold continue after fail/incomplete: seed open Case Tasks into TodoStore
+    # when there is no Session-delete hold and no park attach (empty store would
+    # otherwise allow a silent full todo.init that wipes the right-panel plan).
+    task_msg = await _attach_case_open_todo_seed_to_task_assign(
+        conv_id,
+        task_msg,
+        expert_id=expert_id,
+    )
 
     gate_err = await _gate_engagement_for_node(node_id, engagement)
     if gate_err:
@@ -6243,6 +6276,55 @@ async def _attach_pending_handoff_to_task_assign(
             return out
     except Exception as e:
         print(f"[WS] pending handoff attach error: {e}")
+        return task_msg
+
+
+async def _attach_case_open_todo_seed_to_task_assign(
+    conv_id: str | None,
+    task_msg: dict,
+    *,
+    expert_id: str | None,
+) -> dict:
+    """Seed open Free Case Tasks into task_assign for cold continue (no hold, no Graph).
+
+    Spec #313: empty TodoStore on Free cold start allows full todo.init replace.
+    When Tasks already has an open map for this expert (participant / checkpoint),
+    attach it as pending_handoff_todos so Node seedTodoFromHandoff restores the map
+    and silent wipe is denied. Does not set pending_handoff (no hold consume).
+    """
+    if not conv_id:
+        return task_msg
+    # Explicit Session-delete hold already attached — leave it alone.
+    if task_msg.get("pending_handoff") or task_msg.get("pending_handoff_todos"):
+        return task_msg
+    graph_execution = str(task_msg.get("graph_execution") or "").strip().lower()
+    if graph_execution in {"full", "resume"}:
+        return task_msg
+    work_mode = str(task_msg.get("work_mode") or "").strip().lower()
+    if work_mode == "graph":
+        return task_msg
+    eid = str(expert_id or task_msg.get("expert_id") or "").strip()
+    if not eid:
+        return task_msg
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.session_handoff import open_todo_phases_for_expert
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return task_msg
+            ctx = c.context if isinstance(c.context, dict) else {}
+            phases = open_todo_phases_for_expert(ctx, eid)
+            if not phases:
+                return task_msg
+            out = dict(task_msg)
+            out["pending_handoff_todos"] = phases
+            return out
+    except Exception as e:
+        print(f"[WS] case open todo seed attach error: {e}")
         return task_msg
 
 

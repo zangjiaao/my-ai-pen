@@ -982,6 +982,7 @@ assert.equal(
 }
 
 // Spec #354 S4: seedTodoFromHandoff accepts Node snapshot `content` shape
+// and preserves completed siblings when open work remains (cold continue).
 {
   const { seedTodoFromHandoff } = await import("./handoff-todo-seed.js");
   const store = seedTodoFromHandoff({
@@ -1001,7 +1002,9 @@ assert.equal(
   const texts = snap.flatMap((p) => p.tasks.map((t) => t.content));
   assert.ok(texts.includes("keep open"));
   assert.ok(texts.includes("plan title open"));
-  assert.ok(!texts.includes("done item"));
+  assert.ok(texts.includes("done item"), "completed siblings preserved for progress");
+  const done = snap[0]?.tasks.find((t) => t.content === "done item");
+  assert.equal(done?.status, "completed");
 }
 
 console.log("working-session-park.test.ts: Spec #354 fixtures ok");

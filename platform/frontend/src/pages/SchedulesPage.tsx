@@ -3,6 +3,7 @@
  * create form in a modal dialog.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
@@ -222,21 +223,23 @@ export default function SchedulesPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="搜索目标 / pack / 指令"
-                className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+                className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
               />
               <button
                 type="button"
                 onClick={() => void runTick()}
                 disabled={ticking}
-                className="rounded-md border border-hairline px-4 py-2 text-sm text-ink hover:bg-canvas-inset disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-hairline bg-surface px-4 py-2 text-sm text-ink hover:bg-canvas disabled:opacity-50"
               >
+                <RefreshCw className="h-3.5 w-3.5" />
                 {ticking ? "检查中…" : "立即检查到期"}
               </button>
               <button
                 type="button"
                 onClick={openCreateDialog}
-                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink hover:opacity-90"
+                className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
               >
+                <Plus className="h-4 w-4" />
                 新建计划
               </button>
             </div>

@@ -56,6 +56,40 @@ export type CaseNextWork = {
   };
 };
 
+/** Thin cross-Case Host memory (platform scope_intel) — not full prior dumps. */
+export type CaseScopeIntel = {
+  version?: number;
+  discipline?: string;
+  hosts?: Array<{
+    id?: string;
+    address?: string;
+    name?: string;
+    tags?: string[];
+    ports?: string[];
+    services?: Array<{ port?: string; name?: string; note?: string }>;
+    on_ledger?: boolean;
+    note?: string;
+  }>;
+  prior_findings?: {
+    total?: number;
+    open_or_retest?: number;
+    by_severity?: Record<string, number>;
+  };
+  high_priority_sample?: Array<{
+    id?: string;
+    severity?: string;
+    title?: string;
+    location?: string;
+    status?: string;
+    asset_id?: string;
+  }>;
+  surface_sketch?: {
+    known_paths?: string[];
+    sample_urls?: string[];
+    this_case_surface_count?: number;
+  };
+};
+
 export type CaseContext = {
   version?: number;
   conversation_id?: string;
@@ -66,6 +100,8 @@ export type CaseContext = {
   artifact_hints?: string[];
   /** Spec #312: open Workset refs for agent-curated next_steps binds (not a choice UI). */
   next_work?: CaseNextWork;
+  /** Thin Scope Host memory: counts + samples + surface sketch. */
+  scope_intel?: CaseScopeIntel;
 };
 
 const MAX_THREAD_LINES = 50;
@@ -129,7 +165,18 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
       : [];
   const hints = Array.isArray(o.artifact_hints) ? o.artifact_hints.map(String) : [];
   const next_work = parseNextWork(o.next_work);
-  if (!thread.length && !findings.length && !hints.length && !snippets.length && !next_work) {
+  const scope_intel =
+    o.scope_intel && typeof o.scope_intel === "object" && !Array.isArray(o.scope_intel)
+      ? (o.scope_intel as CaseScopeIntel)
+      : undefined;
+  if (
+    !thread.length &&
+    !findings.length &&
+    !hints.length &&
+    !snippets.length &&
+    !next_work &&
+    !scope_intel
+  ) {
     if (!o.note && !o.conversation_id) return undefined;
   }
   return {
@@ -141,6 +188,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     evidence_snippets: snippets,
     artifact_hints: hints,
     next_work,
+    scope_intel,
   };
 }
 
@@ -154,6 +202,77 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
   ];
   if (ctx.conversation_id) {
     lines.push(`Case/conversation id: ${ctx.conversation_id}`);
+  }
+
+  const intel = ctx.scope_intel;
+  if (intel && (intel.hosts?.length || intel.prior_findings || intel.high_priority_sample?.length)) {
+    lines.push("", "### Scope Host memory (thin — not a full prior dump)");
+    lines.push(
+      intel.discipline ||
+        "Host already on owner ledger. Expand untested surface and NEW findings as primary work. " +
+          "Open priors = interleaved re-verify (fresh proof → confirm), not a checklist to finish first. " +
+          "Deep-dive selectively via platform_get_asset / platform_list_vulnerabilities / platform_get_vulnerability.",
+    );
+    for (const h of (intel.hosts || []).slice(0, 5)) {
+      const addr = String(h.address || "").trim() || "?";
+      const name = h.name ? ` «${h.name}»` : "";
+      const id = h.id ? ` id=${h.id}` : "";
+      const tags = Array.isArray(h.tags) && h.tags.length ? ` tags=[${h.tags.slice(0, 6).join(",")}]` : "";
+      const ports = Array.isArray(h.ports) && h.ports.length ? ` ports=${h.ports.slice(0, 12).join(",")}` : "";
+      const on = h.on_ledger === false ? " (not on ledger yet)" : " (on ledger)";
+      lines.push(`- Host ${addr}${name}${id}${ports}${tags}${on}`);
+      if (Array.isArray(h.services) && h.services.length) {
+        const svc = h.services
+          .slice(0, 6)
+          .map((s) => {
+            const p = s.port || "?";
+            const n = s.name || s.note || "";
+            return n ? `${p}/${n}` : String(p);
+          })
+          .join(", ");
+        if (svc) lines.push(`  services: ${svc}`);
+      }
+      if (h.note) lines.push(`  note: ${String(h.note).slice(0, 120)}`);
+    }
+    const pf = intel.prior_findings;
+    if (pf && (pf.total != null || pf.open_or_retest != null)) {
+      const by = pf.by_severity && typeof pf.by_severity === "object" ? pf.by_severity : {};
+      const sevBits = Object.entries(by)
+        .map(([k, v]) => `${k}=${v}`)
+        .slice(0, 6)
+        .join(" ");
+      lines.push(
+        `- Prior findings on Scope Host(s): total=${pf.total ?? "?"} open/retest≈${pf.open_or_retest ?? "?"}` +
+          (sevBits ? ` (${sevBits})` : ""),
+      );
+      lines.push(
+        "  → samples below are refs only; use platform_list_vulnerabilities / get for details you need.",
+      );
+    }
+    const samples = (intel.high_priority_sample || []).slice(0, 8);
+    if (samples.length) {
+      lines.push("- High/critical sample (title+location+id only):");
+      for (const f of samples) {
+        const sev = f.severity ? `[${f.severity}] ` : "";
+        const loc = f.location ? ` @ ${f.location}` : "";
+        const id = f.id ? ` id=${f.id}` : "";
+        lines.push(`  · ${sev}${String(f.title || "finding").slice(0, 100)}${loc}${id}`);
+      }
+    }
+    const sk = intel.surface_sketch;
+    if (sk) {
+      const paths = (sk.known_paths || []).slice(0, 16);
+      if (paths.length) {
+        lines.push(`- Known path sketch (${paths.length}): ${paths.join(" · ")}`);
+      }
+      const urls = (sk.sample_urls || []).slice(0, 6);
+      if (urls.length) {
+        lines.push(`- Sample URLs: ${urls.join(" · ")}`);
+      }
+      if (sk.this_case_surface_count != null) {
+        lines.push(`- This Case surface_ledger rows: ${sk.this_case_surface_count}`);
+      }
+    }
   }
 
   const thread = (ctx.thread || []).slice(-MAX_THREAD_LINES);
@@ -173,8 +292,10 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
   if (findings.length) {
     lines.push(
       "",
-      "### Findings already on ledger (re-verify open ones — do not skip)",
-      "Open priors on this asset are work to re-prove with **fresh** acts, then finding(confirm) with finding_id so **this Case** ledger updates (platform rediscovery merge / vuln_found). Chat “N verified” without confirm is not a Finding. Prefer high/critical first. Interleave with remaining untested surface from recon.",
+      "### This Case findings board",
+      "Findings booked **in this Case** (not the full owner-ledger history). " +
+        "Open items still need fresh proof + finding(confirm) for this Case panel. " +
+        "Prefer high/critical when re-verifying; interleave with untested surface.",
     );
     for (const f of findings) {
       const sev = f.severity ? `[${f.severity}] ` : "";
@@ -248,11 +369,11 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
 
   lines.push(
     "",
-    "Continue this case from the shared findings and evidence above. Prefer evidence paths/excerpts over inventing new dump locations. Large trees are not fully inlined — open or re-fetch only what you need.",
+    "Continue from shared context above. Prefer evidence paths/excerpts over inventing dump locations. Large trees are not fully inlined — open or re-fetch only what you need.",
   );
-  if (findings.length) {
+  if (intel?.prior_findings?.total || findings.length) {
     lines.push(
-      "When open ledger findings exist on Scope assets: **re-verify** them with fresh proof (rediscovery) and booking via finding(confirm) — listing priors or chat summary is not completion and does not fill this Case Findings panel.",
+      "Scope priors (scope_intel) and this-Case board are memory aids: expand attack surface as primary work; re-verify open high/critical interleaved. Chat “N verified” without finding(confirm) does not fill this Case Findings panel.",
     );
   }
 

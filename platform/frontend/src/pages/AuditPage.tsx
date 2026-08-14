@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
@@ -90,7 +90,7 @@ export default function AuditPage() {
             <select
               value={category}
               onChange={(event) => setCategory(event.target.value)}
-              className="rounded-md border border-hairline px-3 py-2 text-sm"
+              className="rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               {CATEGORIES.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -101,7 +101,7 @@ export default function AuditPage() {
             <select
               value={status}
               onChange={(event) => setStatus(event.target.value)}
-              className="rounded-md border border-hairline px-3 py-2 text-sm"
+              className="rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             >
               {STATUSES.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -114,8 +114,9 @@ export default function AuditPage() {
               onClick={() => {
                 void load();
               }}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
             >
+              <RefreshCw className="h-4 w-4" />
               刷新
             </button>
           </div>

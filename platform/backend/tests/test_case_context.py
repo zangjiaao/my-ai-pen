@@ -4,9 +4,11 @@ from app.services.case_context import (
     build_case_context_payload,
     build_evidence_snippets,
     build_findings_summary,
+    build_scope_intel_card,
     build_thread_from_messages,
     excerpt_from_properties,
     evidence_role,
+    extract_hosts_from_task,
     path_or_url_from_properties,
 )
 
@@ -204,6 +206,63 @@ def test_payload_has_version_and_evidence_snippets():
     assert payload["evidence_snippets"][0]["id"] == "ev_src"
     assert "source_dump" in (payload["evidence_snippets"][0].get("path_or_url") or "")
     assert any("source_dump" in h or "HANDOFF" in h for h in payload["artifact_hints"])
+
+
+def test_extract_hosts_from_task_target_and_scope():
+    hosts = extract_hosts_from_task(
+        {
+            "target": {"type": "url", "value": "http://host.docker.internal:3000"},
+            "scope": {"allow": ["http://host.docker.internal:3000", "10.0.0.1"]},
+        }
+    )
+    assert "host.docker.internal" in hosts
+    assert "10.0.0.1" in hosts
+    # Port is not part of address key
+    assert not any("3000" in h for h in hosts)
+
+
+def test_scope_intel_card_is_thin_and_disciplined():
+    card = build_scope_intel_card(
+        hosts=[
+            {
+                "id": "a1",
+                "address": "host.docker.internal",
+                "name": "本机docker",
+                "ports": ["3000", "8080"],
+                "on_ledger": True,
+            }
+        ],
+        prior_counts={"total": 211, "open_or_retest": 180, "by_severity": {"critical": 40, "high": 50}},
+        high_sample=[
+            {"id": "v1", "severity": "critical", "title": "SQLi login", "location": "/rest/user/login"},
+        ],
+        surface_paths=["/rest/user/login", "/file-upload", "/api/Users"],
+        sample_urls=["http://host.docker.internal:3000/api/Users"],
+        this_case_surface_n=0,
+    )
+    assert card is not None
+    assert card["hosts"][0]["address"] == "host.docker.internal"
+    assert card["prior_findings"]["total"] == 211
+    assert len(card["high_priority_sample"]) == 1
+    assert "known_paths" in card["surface_sketch"]
+    assert "expand" in card["discipline"].lower() or "Primary work" in card["discipline"]
+    # No PoC field in sample
+    assert "poc" not in card["high_priority_sample"][0]
+
+
+def test_payload_includes_scope_intel():
+    payload = build_case_context_payload(
+        messages=[],
+        findings=[],
+        conversation_id="conv-x",
+        scope_intel=build_scope_intel_card(
+            hosts=[{"address": "lab.local", "on_ledger": True, "ports": ["80"]}],
+            prior_counts={"total": 3, "open_or_retest": 2, "by_severity": {"high": 2}},
+        ),
+    )
+    assert payload.get("scope_intel")
+    assert payload["scope_intel"]["hosts"][0]["address"] == "lab.local"
+    assert "scope_intel" in payload["note"]
 
 
 def test_excerpt_and_role_helpers():

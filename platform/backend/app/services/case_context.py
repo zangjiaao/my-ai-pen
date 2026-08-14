@@ -40,6 +40,13 @@ DEFAULT_LINE_CHARS = 800
 DEFAULT_EXCERPT_CHARS = 480
 DEFAULT_TOTAL_CHARS = 14000
 
+# Thin Scope intel (cross-Case Host memory) — caps keep injection small.
+SCOPE_INTEL_MAX_HOSTS = 5
+SCOPE_INTEL_HIGH_SAMPLE = 8
+SCOPE_INTEL_PATH_SAMPLE = 16
+SCOPE_INTEL_URL_SAMPLE = 12
+SCOPE_INTEL_SERVICE_SAMPLE = 8
+
 # Meta tools that should not dominate collab context (unless finding-linked).
 # Note: source_tool "finding" is *book-time product proof* (emitCaseEvidence) — not meta noise.
 _TRACE_SOURCE_TOOLS = frozenset({
@@ -458,6 +465,90 @@ def build_evidence_snippets(
     return out
 
 
+def extract_hosts_from_task(task: dict | None) -> list[str]:
+    """Pull normalized host keys from structured task target/scope (no NLP invent)."""
+    from app.services.asset_ledger import normalize_address
+
+    if not isinstance(task, dict):
+        return []
+    hosts: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: object) -> None:
+        h = normalize_address(raw)
+        if not h or h in seen:
+            return
+        seen.add(h)
+        hosts.append(h)
+
+    target = task.get("target")
+    if isinstance(target, dict):
+        _add(target.get("value") or target.get("url") or target.get("host") or target.get("address"))
+    elif isinstance(target, str):
+        _add(target)
+
+    scope = task.get("scope")
+    if isinstance(scope, dict):
+        for key in ("allow", "hosts", "targets"):
+            arr = scope.get(key)
+            if isinstance(arr, list):
+                for item in arr:
+                    if isinstance(item, dict):
+                        _add(item.get("value") or item.get("url") or item.get("host") or item.get("address"))
+                    else:
+                        _add(item)
+    elif isinstance(scope, list):
+        for item in scope:
+            _add(item)
+
+    for key in ("url", "host", "address", "target_url"):
+        if task.get(key) is not None:
+            _add(task.get(key))
+    return hosts
+
+
+def build_scope_intel_card(
+    *,
+    hosts: list[dict[str, Any]],
+    prior_counts: dict[str, Any] | None = None,
+    high_sample: list[dict[str, Any]] | None = None,
+    surface_paths: list[str] | None = None,
+    sample_urls: list[str] | None = None,
+    this_case_surface_n: int | None = None,
+) -> dict[str, Any] | None:
+    """Pure thin Scope intel card for injection (no PoC bodies)."""
+    if not hosts and not prior_counts and not high_sample and not surface_paths:
+        return None
+    card: dict[str, Any] = {
+        "version": 1,
+        "discipline": (
+            "Scope Hosts already on the owner ledger — thin memory only. "
+            "Primary work remains attack-surface expansion and NEW ledger identities. "
+            "Open priors are an interleaved re-verify stream (fresh proof → finding(confirm)), "
+            "not a checklist to finish first. Do not dump full prior lists into reasoning. "
+            "Deep-dive selectively: platform_get_asset / "
+            "platform_list_vulnerabilities(asset_id=…) / platform_get_vulnerability. "
+            "Honest counts: 重新验证 N = confirms this session only."
+        ),
+    }
+    if hosts:
+        card["hosts"] = hosts[:SCOPE_INTEL_MAX_HOSTS]
+    if isinstance(prior_counts, dict) and prior_counts:
+        card["prior_findings"] = prior_counts
+    if high_sample:
+        card["high_priority_sample"] = high_sample[:SCOPE_INTEL_HIGH_SAMPLE]
+    surface: dict[str, Any] = {}
+    if surface_paths:
+        surface["known_paths"] = surface_paths[:SCOPE_INTEL_PATH_SAMPLE]
+    if sample_urls:
+        surface["sample_urls"] = sample_urls[:SCOPE_INTEL_URL_SAMPLE]
+    if this_case_surface_n is not None:
+        surface["this_case_surface_count"] = int(this_case_surface_n)
+    if surface:
+        card["surface_sketch"] = surface
+    return card
+
+
 def build_case_context_payload(
     *,
     messages: list[dict],
@@ -468,11 +559,15 @@ def build_case_context_payload(
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
     workset: dict | None = None,
+    scope_intel: dict | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
     Spec #311: when workset is provided, attach a thin next_work brief (refs only),
     not a fat dump of every Case field every turn.
+
+    scope_intel: thin cross-Case Host memory (counts + samples + surface sketch) —
+    never full PoC dumps.
     """
     thread = build_thread_from_messages(messages, limit=thread_limit)
     findings_list = findings or []
@@ -525,16 +620,20 @@ def build_case_context_payload(
         "evidence_snippets": evidence_snippets,
         "artifact_hints": hints[:16],
         "note": (
-            "Same case work-group. findings_summary includes this Case and prior ledger "
-            "findings on Case assets. Open priors are a re-verify workstream: re-run minimal "
-            "proof, then finding(confirm) with fresh tool-output (platform rediscovery merge; "
-            "do not invent a second row for the same asset+path/module). Interleave with "
-            "untested surface — do not skip priors just because they are already listed. "
-            "Honest counts: rediscovery N = confirms this session only; 新发现 only for new "
-            "ledger identities (not same-path merge). Never claim 全部重新验证 from list length. "
-            "Use paths/excerpts to continue; large files are not fully inlined."
+            "Same case work-group. findings_summary = this Case's booked findings (board). "
+            "scope_intel (when present) = thin owner-ledger memory for Scope Hosts "
+            "(counts, high/crit samples, surface sketch) — not a full prior dump; "
+            "deep-dive with platform.* tools when useful. "
+            "Primary work: expand untested surface and NEW ledger identities. "
+            "Open priors: interleaved re-verify with fresh proof → finding(confirm) "
+            "(rediscovery merge; same asset+path/module ≠ second row). "
+            "Honest counts: 重新验证 N = confirms this session only; 新发现 only for new "
+            "identities. Never claim 全部重新验证 from list length. "
+            "Large files are not fully inlined."
         ),
     }
+    if isinstance(scope_intel, dict) and scope_intel:
+        payload["scope_intel"] = scope_intel
     # Spec #311: thin Workset brief at assign boundary (not every mid-turn).
     if isinstance(workset, dict) and (workset.get("items") or workset.get("goal")):
         try:
@@ -566,6 +665,288 @@ def build_case_context_payload(
     return payload
 
 
+async def _load_scope_intel(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> dict[str, Any] | None:
+    """Thin cross-Case Host memory from structured task target/scope + sticky assets."""
+    from sqlalchemy import func, or_, select
+
+    from app.models.asset import Asset
+    from app.models.vulnerability import Vulnerability
+    from app.services.asset_ledger import extract_services, normalize_address
+
+    task = {}
+    if isinstance(conv_context, dict):
+        raw_task = conv_context.get("task")
+        if isinstance(raw_task, dict):
+            task = raw_task
+    host_keys = extract_hosts_from_task(task)
+
+    # Resolve Assets: scope host match (user-wide) + this-Case sticky.
+    assets: list = []
+    seen_ids: set = set()
+    try:
+        if host_keys and uid is not None:
+            q = (
+                select(Asset)
+                .where(
+                    or_(Asset.user_id == uid, Asset.user_id.is_(None)),
+                    Asset.address.in_(host_keys),
+                )
+                .limit(SCOPE_INTEL_MAX_HOSTS)
+            )
+            for a in (await db.execute(q)).scalars().all():
+                if a.id not in seen_ids:
+                    seen_ids.add(a.id)
+                    assets.append(a)
+        sticky_q = select(Asset).where(Asset.conversation_id == cid).limit(SCOPE_INTEL_MAX_HOSTS)
+        if uid is not None:
+            sticky_q = sticky_q.where(or_(Asset.user_id == uid, Asset.user_id.is_(None)))
+        for a in (await db.execute(sticky_q)).scalars().all():
+            if a.id not in seen_ids:
+                seen_ids.add(a.id)
+                assets.append(a)
+    except Exception:
+        assets = []
+
+    if not assets and not host_keys:
+        return None
+
+    # Official services for ports/notes
+    official: dict = {}
+    if assets:
+        try:
+            from app.services.owner_services import load_official_services
+
+            official = await load_official_services(db, [a.id for a in assets])
+        except Exception:
+            official = {}
+
+    host_rows: list[dict[str, Any]] = []
+    sample_urls: list[str] = []
+    url_seen: set[str] = set()
+    for a in assets[:SCOPE_INTEL_MAX_HOSTS]:
+        props = a.properties if isinstance(a.properties, dict) else {}
+        svcs = official.get(a.id) if official else None
+        if not svcs:
+            svcs = extract_services(props)
+        svc_brief: list[dict[str, Any]] = []
+        ports: list[str] = []
+        for s in (svcs or [])[:SCOPE_INTEL_SERVICE_SAMPLE]:
+            if not isinstance(s, dict):
+                continue
+            port = str(s.get("port") or "").strip()
+            name = str(s.get("name") or s.get("product") or "").strip()
+            note = str(s.get("note") or "").strip()
+            if port and port not in ports:
+                ports.append(port)
+            row: dict[str, Any] = {}
+            if port:
+                row["port"] = port
+            if name:
+                row["name"] = name[:40]
+            if note:
+                row["note"] = note[:60]
+            if row:
+                svc_brief.append(row)
+        # Also open_ports from properties
+        for p in props.get("open_ports") or []:
+            ps = str(p).strip()
+            if ps and ps not in ports:
+                ports.append(ps)
+        for u in props.get("urls") or []:
+            us = str(u or "").strip()
+            if not us or us in url_seen:
+                continue
+            # Prefer short path-ish samples for surface sketch
+            url_seen.add(us)
+            sample_urls.append(us[:200])
+            if len(sample_urls) >= SCOPE_INTEL_URL_SAMPLE:
+                break
+        host_rows.append({
+            "id": str(a.id),
+            "address": str(a.address or ""),
+            "name": str(a.name or a.address or "")[:80],
+            "tags": list(a.tags or [])[:8],
+            "ports": ports[:16],
+            "services": svc_brief,
+            "on_ledger": True,
+        })
+
+    # Unmatched scope hosts (target named but not on ledger yet)
+    ledger_addrs = {normalize_address(h.get("address")) for h in host_rows}
+    for hk in host_keys:
+        if hk not in ledger_addrs:
+            host_rows.append({
+                "address": hk,
+                "on_ledger": False,
+                "note": "not on owner ledger yet — do not invent Host rows without user request",
+            })
+
+    asset_ids = [a.id for a in assets]
+    prior_counts: dict[str, Any] = {}
+    high_sample: list[dict[str, Any]] = []
+    surface_paths: list[str] = []
+    if asset_ids and uid is not None:
+        try:
+            total = int(
+                (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(Vulnerability)
+                        .where(
+                            Vulnerability.asset_id.in_(asset_ids),
+                            or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            by_sev: dict[str, int] = {}
+            sev_rows = (
+                await db.execute(
+                    select(Vulnerability.severity, func.count())
+                    .where(
+                        Vulnerability.asset_id.in_(asset_ids),
+                        or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                    )
+                    .group_by(Vulnerability.severity)
+                )
+            ).all()
+            for sev, cnt in sev_rows:
+                key = _normalize_finding_severity(sev) or str(sev or "unknown").lower()
+                by_sev[key] = by_sev.get(key, 0) + int(cnt or 0)
+            open_n = int(
+                (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(Vulnerability)
+                        .where(
+                            Vulnerability.asset_id.in_(asset_ids),
+                            or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                            func.lower(func.coalesce(Vulnerability.status, "")).in_(
+                                [
+                                    "open",
+                                    "to_fix",
+                                    "unverified",
+                                    "retest",
+                                    "needs_reverify",
+                                    "candidate",
+                                ]
+                            ),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            prior_counts = {
+                "total": total,
+                "open_or_retest": open_n,
+                "by_severity": by_sev,
+            }
+
+            # High/crit sample refs only (no PoC)
+            high_q = (
+                select(Vulnerability)
+                .where(
+                    Vulnerability.asset_id.in_(asset_ids),
+                    or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                    func.lower(func.coalesce(Vulnerability.severity, "")).in_(
+                        ["critical", "high"]
+                    ),
+                )
+                .order_by(Vulnerability.updated_at.desc())
+                .limit(SCOPE_INTEL_HIGH_SAMPLE)
+            )
+            for v in (await db.execute(high_q)).scalars().all():
+                high_sample.append({
+                    "id": str(v.id),
+                    "severity": _normalize_finding_severity(v.severity) or str(v.severity or ""),
+                    "title": _clip(str(v.title or "Untitled"), 120),
+                    "location": _clip(
+                        str(
+                            getattr(v, "location_key", None)
+                            or getattr(v, "port", None)
+                            or ""
+                        ),
+                        120,
+                    ),
+                    "status": str(v.status or "")[:32],
+                    "asset_id": str(v.asset_id) if v.asset_id else None,
+                })
+
+            # Distinct known paths from prior findings (surface sketch)
+            path_q = (
+                select(Vulnerability.location_key)
+                .where(
+                    Vulnerability.asset_id.in_(asset_ids),
+                    or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                    Vulnerability.location_key.isnot(None),
+                    Vulnerability.location_key != "",
+                )
+                .order_by(Vulnerability.updated_at.desc())
+                .limit(SCOPE_INTEL_PATH_SAMPLE * 3)
+            )
+            path_seen: set[str] = set()
+            for (lk,) in (await db.execute(path_q)).all():
+                p = str(lk or "").strip()
+                if not p or p in path_seen:
+                    continue
+                path_seen.add(p)
+                surface_paths.append(p[:160])
+                if len(surface_paths) >= SCOPE_INTEL_PATH_SAMPLE:
+                    break
+        except Exception:
+            prior_counts = {}
+            high_sample = []
+            surface_paths = []
+
+    this_case_surface_n = None
+    if isinstance(conv_context, dict):
+        sl = conv_context.get("surface_ledger")
+        if isinstance(sl, dict) and isinstance(sl.get("surfaces"), list):
+            this_case_surface_n = len(sl["surfaces"])
+            # Mix a few this-Case surface paths into sketch if we still have room
+            for s in sl["surfaces"][:8]:
+                if not isinstance(s, dict):
+                    continue
+                p = str(s.get("path_key") or s.get("location") or s.get("path") or "").strip()
+                if p and p not in surface_paths:
+                    surface_paths.append(p[:160])
+                if len(surface_paths) >= SCOPE_INTEL_PATH_SAMPLE:
+                    break
+
+    # Prefer path-only samples from full URLs for compactness
+    url_paths: list[str] = []
+    for u in sample_urls:
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(u if "://" in u else f"http://{u}")
+            path = (parsed.path or "/").strip() or "/"
+            if path and path not in surface_paths and path not in url_paths:
+                url_paths.append(path[:160])
+        except Exception:
+            continue
+        if len(url_paths) >= min(8, SCOPE_INTEL_URL_SAMPLE):
+            break
+    # Keep a few full sample URLs too (short)
+    short_urls = [u for u in sample_urls if len(u) < 120][:6]
+
+    return build_scope_intel_card(
+        hosts=host_rows,
+        prior_counts=prior_counts or None,
+        high_sample=high_sample or None,
+        surface_paths=(surface_paths + url_paths)[:SCOPE_INTEL_PATH_SAMPLE] or None,
+        sample_urls=short_urls or None,
+        this_case_surface_n=this_case_surface_n,
+    )
+
+
 async def load_case_context_for_conversation(
     db,
     conversation_id,
@@ -575,15 +956,17 @@ async def load_case_context_for_conversation(
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
 ) -> dict[str, Any]:
-    """Load messages + vulns + evidence from DB and build case_context."""
+    """Load messages + this-Case findings + thin scope_intel + evidence snippets."""
     import uuid as uuid_mod
 
     from sqlalchemy import select
 
+    from app.models.conversation import Conversation
     from app.models.evidence import Evidence
     from app.models.message import Message
     from app.models.vulnerability import Vulnerability
     from app.services.conversation_snapshot import message_summary
+    from app.services.finding_dedupe import discovery_count, rediscovery_count
 
     cid = conversation_id if isinstance(conversation_id, uuid_mod.UUID) else uuid_mod.UUID(str(conversation_id))
     result = await db.execute(
@@ -593,55 +976,44 @@ async def load_case_context_for_conversation(
     )
     messages = [message_summary(m) for m in result.scalars().all()]
 
+    uid = None
+    if user_id is not None:
+        uid = user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
+
+    conv = None
+    conv_context: dict = {}
+    try:
+        cr = await db.execute(select(Conversation).where(Conversation.id == cid))
+        conv = cr.scalar_one_or_none()
+        if conv is not None and isinstance(conv.context, dict):
+            conv_context = conv.context
+        if uid is None and conv is not None and getattr(conv, "user_id", None):
+            uid = conv.user_id
+    except Exception:
+        conv = None
+        conv_context = {}
+
+    # findings_summary board: **this Case only** (avoid dumping cross-Case priors here).
     findings: list[dict] = []
     try:
-        from app.models.asset import Asset
-        from app.services.finding_dedupe import discovery_count, rediscovery_count
-
-        uid = None
-        if user_id is not None:
-            uid = user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
-
-        # This Case's findings + prior ledger findings on assets used by this Case
-        # so joining experts see "already booked" surface before re-booking.
-        asset_ids: list = []
-        try:
-            aq = select(Asset.id).where(Asset.conversation_id == cid)
-            if uid is not None:
-                aq = aq.where(Asset.user_id == uid)
-            asset_ids = list((await db.execute(aq.limit(40))).scalars().all())
-        except Exception:
-            asset_ids = []
-
-        from sqlalchemy import or_
-
-        conds = [Vulnerability.conversation_id == cid]
-        if asset_ids:
-            conds.append(Vulnerability.asset_id.in_(asset_ids))
-        q = select(Vulnerability).where(or_(*conds))
+        q = select(Vulnerability).where(Vulnerability.conversation_id == cid)
         if uid is not None:
             q = q.where(Vulnerability.user_id == uid)
-        q = q.order_by(Vulnerability.updated_at.desc()).limit(max(findings_limit * 3, 40))
-        vulns = (await db.execute(q)).scalars().all()
-        seen: set[str] = set()
-        for v in vulns:
-            vid = str(getattr(v, "id", "") or "")
-            if vid and vid in seen:
-                continue
-            if vid:
-                seen.add(vid)
+        q = q.order_by(Vulnerability.updated_at.desc()).limit(max(findings_limit * 2, 30))
+        for v in (await db.execute(q)).scalars().all():
             hist = getattr(v, "history", None)
             rcount = rediscovery_count(hist)
+            loc = (
+                getattr(v, "location_key", None)
+                or getattr(v, "poc", None)
+                or ""
+            )
             findings.append({
-                "id": vid,
+                "id": str(getattr(v, "id", "") or ""),
                 "title": getattr(v, "title", None) or "Untitled",
                 "severity": _normalize_finding_severity(getattr(v, "severity", None)) or "",
                 "status": getattr(v, "status", None) or "",
-                "location": getattr(v, "location", None)
-                or getattr(v, "affected_asset", None)
-                or getattr(v, "url", None)
-                or getattr(v, "poc", None)
-                or "",
+                "location": loc,
                 "description": getattr(v, "description", None) or "",
                 "poc": getattr(v, "poc", None) or "",
                 "evidence_ids": list(getattr(v, "evidence_ids", None) or []),
@@ -664,10 +1036,8 @@ async def load_case_context_for_conversation(
     evidence_rows: list[dict] = []
     try:
         eq = select(Evidence).where(Evidence.conversation_id == cid)
-        if user_id is not None:
-            uid = user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
+        if uid is not None:
             eq = eq.where(Evidence.user_id == uid)
-        # Pull a wider window; snippet builder ranks/filter
         eq = eq.order_by(Evidence.created_at.desc()).limit(max(80, evidence_limit * 6))
         for e in (await db.execute(eq)).scalars().all():
             evidence_rows.append({
@@ -684,15 +1054,20 @@ async def load_case_context_for_conversation(
 
     workset_blob = None
     try:
-        from app.models.conversation import Conversation
         from app.services.case_workset import get_workset
 
-        cr = await db.execute(select(Conversation).where(Conversation.id == cid))
-        conv = cr.scalar_one_or_none()
         if conv is not None:
-            workset_blob = get_workset(conv.context if isinstance(conv.context, dict) else {})
+            workset_blob = get_workset(conv_context if isinstance(conv_context, dict) else {})
     except Exception:
         workset_blob = None
+
+    scope_intel = None
+    try:
+        scope_intel = await _load_scope_intel(
+            db, cid=cid, uid=uid, conv_context=conv_context
+        )
+    except Exception:
+        scope_intel = None
 
     return build_case_context_payload(
         messages=messages,
@@ -703,4 +1078,5 @@ async def load_case_context_for_conversation(
         findings_limit=findings_limit,
         evidence_limit=evidence_limit,
         workset=workset_blob,
+        scope_intel=scope_intel,
     )

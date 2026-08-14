@@ -11,6 +11,8 @@ from app.api.audit import router as audit_router
 api_router.include_router(audit_router)
 from app.api.assets import router as assets_router
 api_router.include_router(assets_router)
+from app.api.asset_groups import router as asset_groups_router
+api_router.include_router(asset_groups_router)
 from app.api.vulnerabilities import router as vulns_router
 api_router.include_router(vulns_router)
 from app.api.dashboard import router as dashboard_router

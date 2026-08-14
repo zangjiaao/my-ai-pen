@@ -1,12 +1,31 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Clock,
+  History,
+  Network,
+  Pencil,
+  Plus,
+  Server,
+  ShieldAlert,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
-import { casePath } from "../lib/caseRoutes";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { buildRiskChips } from "../components/cards/FindingCard";
+import GroupLedgerDialog from "../components/GroupLedgerDialog";
+import ServiceLedgerDialog from "../components/ServiceLedgerDialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import { buildRiskChips, type RiskChip } from "../components/cards/FindingCard";
+import { parseBulkHostCsv, summarizeBulkGroups } from "../lib/bulkHostImport";
 
 type RelatedVuln = {
   id: string;
@@ -18,143 +37,255 @@ type RelatedVuln = {
   description?: string | null;
 };
 
-type RiskSummary = {
-  open_total: number;
-  by_severity: Record<string, number>;
-  highest: string;
-  label: string;
-};
-
 type Service = {
   port: string;
   name?: string;
   protocol?: string | null;
-  product?: string | null;
-  version?: string | null;
-  url?: string | null;
+  tags?: string[];
+  paths?: { path: string; source?: string }[];
   note?: string | null;
 };
 
 type Asset = {
   id: string;
-  conversation_id?: string | null;
-  node_id?: string | null;
   name: string;
   address: string;
   type: string;
-  type_label?: string;
   tags: string[];
   properties: Record<string, unknown>;
   source: string;
-  source_label?: string;
-  open_ports?: string[];
   services?: Service[];
-  ports_summary?: string;
-  tech_summary?: string;
-  risk?: RiskSummary;
+  aliases?: string[];
   related_vulnerabilities: RelatedVuln[];
   created_at?: string | null;
   updated_at?: string | null;
 };
 
-type Conversation = { id: string; title?: string };
-
-/** Sentinel: asset selected as host-only (no port inventory yet). */
-const HOST_ONLY = "__host__";
-
-const EMPTY_FORM = { address: "", tags: "" };
-const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
-/**
- * Consumed by ConversationPage after Asset「创建任务」.
- * Creates a Case with prefilled target/scope + composer draft — does **not** auto-send
- * so the user can pick @专家 before dispatch.
- */
-export const PENDING_ASSET_TASK_KEY = "pending_asset_task";
-
-export type PendingAssetTask = {
-  text: string;
-  target: { type: string; value: string };
-  scope: { allow: string[]; deny: string[] };
-  /** Conversation created for this launch — must win over restore races. */
-  conversationId: string;
-  /** When false/omitted, open Case + draft only; user sends after choosing expert. */
-  autoSend?: boolean;
+type RiskSummary = {
+  open_total: number;
+  highest?: string;
+  label?: string;
 };
 
+type TreeHost = {
+  id: string;
+  address: string;
+  name: string;
+  tags: string[];
+  aliases: string[];
+  services: Service[];
+  source_label?: string;
+  risk?: RiskSummary;
+  related_vulnerabilities?: RelatedVuln[];
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+/** Host list sort modes (UI filter bar). Icons carry direction / meaning; no parenthetical copy. */
+type HostSortKey = "address" | "created_desc" | "created_asc" | "ports_desc" | "vulns_desc";
+
+const HOST_SORT_OPTIONS: { value: HostSortKey; label: string; Icon: LucideIcon }[] = [
+  { value: "address", label: "地址", Icon: Network },
+  { value: "created_desc", label: "最新添加", Icon: History },
+  { value: "created_asc", label: "最早添加", Icon: Clock },
+  { value: "ports_desc", label: "端口数", Icon: Server },
+  { value: "vulns_desc", label: "漏洞数", Icon: ShieldAlert },
+];
+
+type TreeGroup = {
+  id: string;
+  name: string;
+  hosts: TreeHost[];
+};
+
+type AssetTree = {
+  groups: TreeGroup[];
+  all_groups: { id: string; name: string }[];
+  all_tags: string[];
+};
+
+type AssetGroup = {
+  id: string;
+  name: string;
+  members: { asset_id: string; ports: string[] }[];
+};
+
+const EMPTY_FORM = { address: "", tags: "", groupIds: [] as string[] };
+const ALL_SECTION = "all";
+const BULK_PLACEHOLDER = `address,port,protocol,name
+10.0.0.1,80,tcp,http
+10.0.0.1,443,tcp,https
+pay.example.com,8080,tcp,http
+10.0.0.2,22,tcp,ssh
+# 同一主机多行 = 多端口；port 也可写 80/tcp
+# 协议可选 tcp/udp/http/https…；仅主机一行也可
+`;
+
+function isGroupId(id: string) {
+  return Boolean(id) && id !== ALL_SECTION;
+}
+
+/** IPv4 → [a,b,c,d] for numeric compare; null if not IPv4. */
+function parseIPv4(address: string): number[] | null {
+  const s = String(address || "").trim();
+  // Strip optional brackets / zone / trailing port only when clearly IPv4 host:port
+  const host = s.includes(":") && /^\d+\.\d+\.\d+\.\d+:\d+$/.test(s) ? s.split(":")[0] : s;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return null;
+  const parts = m.slice(1, 5).map((x) => Number(x));
+  if (parts.some((n) => n > 255)) return null;
+  return parts;
+}
+
+/** Default address order: IPv4 by octet, then domains A–Z (case-insensitive). IPs before domains. */
+function compareHostAddress(a: string, b: string): number {
+  const ia = parseIPv4(a);
+  const ib = parseIPv4(b);
+  if (ia && ib) {
+    for (let i = 0; i < 4; i++) {
+      if (ia[i] !== ib[i]) return ia[i] - ib[i];
+    }
+    return 0;
+  }
+  if (ia && !ib) return -1;
+  if (!ia && ib) return 1;
+  return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+}
+
+function hostPortCount(h: TreeHost): number {
+  return (h.services || []).length;
+}
+
+function hostVulnCount(h: TreeHost): number {
+  return (h.related_vulnerabilities || []).length || h.risk?.open_total || 0;
+}
+
+function hostCreatedMs(h: TreeHost): number {
+  const raw = h.created_at || h.updated_at;
+  if (!raw) return 0;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function sortHosts(hosts: TreeHost[], key: HostSortKey): TreeHost[] {
+  const list = [...hosts];
+  list.sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case "created_desc":
+        cmp = hostCreatedMs(b) - hostCreatedMs(a);
+        break;
+      case "created_asc":
+        cmp = hostCreatedMs(a) - hostCreatedMs(b);
+        break;
+      case "ports_desc":
+        cmp = hostPortCount(b) - hostPortCount(a);
+        break;
+      case "vulns_desc":
+        cmp = hostVulnCount(b) - hostVulnCount(a);
+        break;
+      case "address":
+      default:
+        cmp = compareHostAddress(a.address, b.address);
+        break;
+    }
+    if (cmp !== 0) return cmp;
+    // Stable tie-break: numeric IP / alpha address, then id.
+    const addr = compareHostAddress(a.address, b.address);
+    if (addr !== 0) return addr;
+    return a.id.localeCompare(b.id);
+  });
+  return list;
+}
+
 export default function AssetPage() {
-  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedPorts, setSelectedPorts] = useState<string[]>([]);
-  const [selectedServices, setSelectedServices] = useState<string[]>([]);
-  const [openMenu, setOpenMenu] = useState<"tag" | "port" | "service" | null>(null);
+  const [hostSort, setHostSort] = useState<HostSortKey>("address");
+  const [openMenu, setOpenMenu] = useState<"tag" | "move" | null>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState<Asset | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [tree, setTree] = useState<TreeGroup[]>([]);
   const [allTags, setAllTags] = useState<string[]>([]);
-  const [allPorts, setAllPorts] = useState<string[]>([]);
-  const [allServices, setAllServices] = useState<string[]>([]);
+  const [allGroups, setAllGroups] = useState<{ id: string; name: string }[]>([]);
+  const [groupRows, setGroupRows] = useState<AssetGroup[]>([]);
+  const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [launching, setLaunching] = useState(false);
+  /** single = one host field; bulk = CSV multi host/port/protocol */
+  const [createMode, setCreateMode] = useState<"single" | "bulk">("single");
+  const [bulkText, setBulkText] = useState("");
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupFormName, setGroupFormName] = useState("");
+  const [groupFormError, setGroupFormError] = useState("");
+  const [savingGroup, setSavingGroup] = useState(false);
+  const [activeSectionId, setActiveSectionId] = useState<string>(ALL_SECTION);
+  const [hostId, setHostId] = useState<string | null>(null);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [serviceKey, setServiceKey] = useState<{ assetId: string; port: string } | null>(null);
+  const [addPortHostId, setAddPortHostId] = useState<string | null>(null);
+  const [addPortForm, setAddPortForm] = useState({ port: "", name: "" });
+  const [addPortError, setAddPortError] = useState("");
+  const [addingPort, setAddingPort] = useState(false);
+  const [deleteHost, setDeleteHost] = useState<{ id: string; address: string } | null>(null);
+  const [deletingHost, setDeletingHost] = useState(false);
+  const [deleteHostError, setDeleteHostError] = useState("");
+  const [deletePort, setDeletePort] = useState<{ assetId: string; port: string; address: string } | null>(null);
+  const [deletingPort, setDeletingPort] = useState(false);
+  const [deletePortError, setDeletePortError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState("");
+  /** Multi-select: remove from assembly (→ 未分组), not hard-delete Host. */
+  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false);
+  const [removingBulk, setRemovingBulk] = useState(false);
+  const [bulkRemoveError, setBulkRemoveError] = useState("");
+  /** Multi-select: hard-delete Hosts from ledger (all Groups lose them). */
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deletingBulk, setDeletingBulk] = useState(false);
   const [bulkDeleteError, setBulkDeleteError] = useState("");
-
-  /** assetId → selected ports (or HOST_ONLY). */
-  const [checkedPorts, setCheckedPorts] = useState<Record<string, string[]>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const params = useMemo(() => {
     const p = new URLSearchParams();
     if (search.trim()) p.set("search", search.trim());
     for (const t of selectedTags) p.append("tag", t);
-    for (const port of selectedPorts) p.append("port", port);
-    for (const svc of selectedServices) p.append("service", svc);
-    p.set("limit", "100");
     return p;
-  }, [search, selectedTags, selectedPorts, selectedServices]);
+  }, [search, selectedTags]);
 
   const load = async () => {
     setError("");
     try {
-      const res = await authFetch<Asset[]>(`/api/assets?${params}`);
-      setAssets(res);
-      if (selected) {
-        const fresh = res.find((item) => item.id === selected.id);
-        if (fresh) setSelected(fresh);
-      }
+      const [treeRes, catalog, groups] = await Promise.all([
+        authFetch<AssetTree>(`/api/assets/tree?${params}`),
+        authFetch<Asset[]>("/api/assets?limit=2000"),
+        authFetch<AssetGroup[]>("/api/asset-groups").catch(() => [] as AssetGroup[]),
+      ]);
+      const nextTree = treeRes.groups || [];
+      const nextGroups = treeRes.all_groups || [];
+      setTree(nextTree);
+      setAllGroups(nextGroups);
+      setAllTags(treeRes.all_tags || []);
+      setAssets(catalog);
+      setGroupRows(groups);
+      // Drop only vanished Hosts (deleted). Keep selection across search/tag filters.
+      const live = new Set(catalog.map((a) => a.id));
+      setSelectedIds((prev) => prev.filter((id) => live.has(id)));
+      const navIds = [
+        ALL_SECTION,
+        ...nextGroups.map((g) => g.id),
+        ...(nextTree.some((s) => !s.id) ? [""] : []),
+      ];
+      setActiveSectionId((prev) => (navIds.includes(prev) ? prev : ALL_SECTION));
     } catch (err) {
       setError(err instanceof Error ? err.message : "资产加载失败");
-    }
-  };
-
-  const loadFilterOptions = async () => {
-    try {
-      const [tags, ports, services] = await Promise.all([
-        authFetch<string[]>("/api/assets/tags").catch(() => [] as string[]),
-        authFetch<string[]>("/api/assets/ports").catch(() => [] as string[]),
-        authFetch<string[]>("/api/assets/services").catch(() => [] as string[]),
-      ]);
-      setAllTags(tags);
-      setAllPorts(ports);
-      setAllServices(services);
-    } catch {
-      /* optional filter source */
     }
   };
 
   useEffect(() => {
     void load();
   }, [params.toString()]);
-
-  useEffect(() => {
-    void loadFilterOptions();
-  }, []);
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -164,41 +295,150 @@ export default function AssetPage() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  const toggleInList = (list: string[], value: string, setList: (next: string[]) => void) => {
-    setList(list.includes(value) ? list.filter((x) => x !== value) : [...list, value]);
+  const assetById = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
+  const selectedHost = hostId ? assetById.get(hostId) || null : null;
+  const selectedGroup = groupId ? groupRows.find((g) => g.id === groupId) || null : null;
+  const groupTabs = useMemo(() => {
+    const byId = new Map(tree.map((s) => [s.id, s]));
+    const items = allGroups.map((g) => ({
+      id: g.id,
+      name: g.name,
+      count: byId.get(g.id)?.hosts.length ?? 0,
+    }));
+    const ungrouped = byId.get("");
+    if (ungrouped) items.push({ id: "", name: "未分组", count: ungrouped.hosts.length });
+    return items;
+  }, [tree, allGroups]);
+  const enrichHost = (host: TreeHost): TreeHost => {
+    const catalog = assetById.get(host.id);
+    return {
+      ...host,
+      aliases: host.aliases?.length ? host.aliases : aliasesFromAsset(catalog),
+      services: catalog?.services?.length ? catalog.services : host.services || [],
+      related_vulnerabilities: host.related_vulnerabilities?.length
+        ? host.related_vulnerabilities
+        : catalog?.related_vulnerabilities,
+      created_at: host.created_at || catalog?.created_at || null,
+      updated_at: host.updated_at || catalog?.updated_at || null,
+    };
   };
 
-  const multiLabel = (
-    selected: string[],
-    allLabel: string,
-    options: { value: string; label: string }[],
-  ) => {
-    if (!selected.length) return allLabel;
-    if (selected.length === 1) {
-      return options.find((o) => o.value === selected[0])?.label || selected[0];
+  const allViewHosts = useMemo(() => {
+    const seen = new Map<string, TreeHost>();
+    for (const section of tree) {
+      for (const host of section.hosts) {
+        if (seen.has(host.id)) continue;
+        seen.set(host.id, enrichHost(host));
+      }
     }
-    return `${selected.length} 项`;
-  };
+    return sortHosts([...seen.values()], hostSort);
+  }, [tree, assetById, hostSort]);
+  const isAll = activeSectionId === ALL_SECTION;
+  const isUngrouped = activeSectionId === "";
+  const activeSection = useMemo(() => {
+    if (isAll) {
+      return { id: ALL_SECTION, name: "全部", hosts: allViewHosts };
+    }
+    const section = tree.find((s) => s.id === activeSectionId);
+    const raw = section?.hosts || [];
+    const hosts = sortHosts(raw.map(enrichHost), hostSort);
+    return {
+      id: activeSectionId,
+      name: section?.name || groupTabs.find((n) => n.id === activeSectionId)?.name || "未分组",
+      hosts,
+    };
+  }, [isAll, allViewHosts, tree, activeSectionId, groupTabs, hostSort, assetById]);
+  const cardColumns = useCardColumns();
+  const hostColumns = useMemo(
+    () => splitRoundRobin(activeSection.hosts, cardColumns),
+    [activeSection.hosts, cardColumns],
+  );
+  const moveTargets = useMemo(() => {
+    const groups = allGroups.filter((g) => g.id !== activeSectionId);
+    if (isAll || isGroupId(activeSectionId)) groups.push({ id: "", name: "未分组" });
+    return groups;
+  }, [allGroups, activeSectionId, isAll]);
 
-  const openAsset = async (id: string) => {
-    const detail = await authFetch<Asset>(`/api/assets/${id}`);
-    setSelected(detail);
-  };
+  // Selection is sticky across search / tags / tab changes so multi-step pick works
+  // (filter → select → refilter → select more → move). Only cleared by 取消, after
+  // bulk ops, or when a Host is deleted from the ledger.
 
-  const openCreateDialog = () => {
-    setForm(EMPTY_FORM);
-    setFormError("");
-    setShowForm(true);
-  };
+  const bulkPreview = useMemo(() => parseBulkHostCsv(bulkText), [bulkText]);
 
-  const closeCreateDialog = () => {
-    if (saving) return;
-    setShowForm(false);
-    setForm(EMPTY_FORM);
-    setFormError("");
+  const attachToGroups = async (assetId: string, ports: string[]) => {
+    for (const gid of form.groupIds) {
+      await authFetch(`/api/asset-groups/${gid}/hosts/${assetId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ports }),
+      });
+    }
   };
 
   const createAsset = async () => {
+    if (createMode === "bulk") {
+      const parsed = parseBulkHostCsv(bulkText);
+      if (!parsed.groups.length) {
+        setFormError(
+          parsed.errors.length
+            ? parsed.errors.slice(0, 3).join("；")
+            : "请粘贴 CSV：address,port,protocol,name",
+        );
+        return;
+      }
+      setSaving(true);
+      setFormError("");
+      try {
+        let ok = 0;
+        const fail: string[] = [];
+        for (const group of parsed.groups) {
+          try {
+            const created = await authFetch<Asset>("/api/assets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                address: group.address,
+                tags: group.tags,
+                ports: group.services.map((s) => s.port),
+                services: group.services.map((s) => ({
+                  port: s.port,
+                  protocol: s.protocol || undefined,
+                  name: s.name || undefined,
+                })),
+                group_ids: form.groupIds,
+              }),
+            });
+            await attachToGroups(
+              created.id,
+              group.services.map((s) => s.port),
+            );
+            ok += 1;
+          } catch (err) {
+            fail.push(
+              `${group.address}: ${err instanceof Error ? err.message : "失败"}`,
+            );
+          }
+        }
+        if (!ok && fail.length) {
+          setFormError(fail.slice(0, 4).join("；"));
+          return;
+        }
+        setShowForm(false);
+        setForm(EMPTY_FORM);
+        setBulkText("");
+        setCreateMode("single");
+        if (fail.length) {
+          setError(`已创建 ${ok} 台，部分失败：${fail.slice(0, 3).join("；")}`);
+        }
+        await load();
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : "批量创建失败");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!form.address.trim()) {
       setFormError("请填写 IP 或域名");
       return;
@@ -206,7 +446,7 @@ export default function AssetPage() {
     setSaving(true);
     setFormError("");
     try {
-      await authFetch("/api/assets", {
+      const created = await authFetch<Asset>("/api/assets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -215,12 +455,13 @@ export default function AssetPage() {
             .split(/[,，;；\n]+/)
             .map((t) => t.trim())
             .filter(Boolean),
+          group_ids: form.groupIds,
         }),
       });
+      await attachToGroups(created.id, []);
       setShowForm(false);
       setForm(EMPTY_FORM);
       await load();
-      void loadFilterOptions();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "创建失败");
     } finally {
@@ -228,311 +469,329 @@ export default function AssetPage() {
     }
   };
 
-  const selectedSummary = useMemo(() => {
-    let assetsCount = 0;
-    let portsCount = 0;
-    const ids: string[] = [];
-    for (const [assetId, ports] of Object.entries(checkedPorts)) {
-      if (!ports.length) continue;
-      assetsCount += 1;
-      ids.push(assetId);
-      if (ports.includes(HOST_ONLY)) {
-        // host-only counts as one target, not a port
-      } else {
-        portsCount += ports.length;
-      }
-    }
-    return { assetsCount, portsCount, ids };
-  }, [checkedPorts]);
-
-  const bulkDeleteTargets = useMemo(() => {
-    const byId = new Map(assets.map((a) => [a.id, a]));
-    return selectedSummary.ids
-      .map((id) => byId.get(id))
-      .filter((a): a is Asset => Boolean(a));
-  }, [assets, selectedSummary.ids]);
-
-  const bulkDeleteDescription = useMemo(() => {
-    const n = bulkDeleteTargets.length;
-    if (!n) return "请先勾选要删除的资产。";
-    const labels = bulkDeleteTargets.map((a) => a.address || a.name || a.id);
-    const preview = labels.slice(0, 8).map((x) => `· ${x}`).join("\n");
-    const more = labels.length > 8 ? `\n· …共 ${labels.length} 个` : "";
-    return (
-      `确定删除以下 ${n} 个主机资产？\n\n${preview}${more}\n\n` +
-      "关联漏洞仅解绑，不会删除。此操作不可撤销。"
-    );
-  }, [bulkDeleteTargets]);
-
-  const toggleExpand = (assetId: string, e: { stopPropagation: () => void }) => {
-    e.stopPropagation();
-    setExpanded((prev) => ({ ...prev, [assetId]: !prev[assetId] }));
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
-  const selectAllPortsForAsset = (asset: Asset) => {
-    const ports = listPorts(asset);
-    return ports.length ? ports : [HOST_ONLY];
-  };
-
-  const isAssetFullySelected = (asset: Asset) => {
-    const sel = checkedPorts[asset.id] || [];
-    if (!sel.length) return false;
-    const ports = listPorts(asset);
-    if (!ports.length) return sel.includes(HOST_ONLY);
-    return ports.every((p) => sel.includes(p));
-  };
-
-  const isAssetPartiallySelected = (asset: Asset) => {
-    const sel = checkedPorts[asset.id] || [];
-    if (!sel.length) return false;
-    if (isAssetFullySelected(asset)) return false;
-    return true;
-  };
-
-  const toggleAsset = (asset: Asset) => {
-    setCheckedPorts((prev) => {
-      const next = { ...prev };
-      const ports = listPorts(asset);
-      const sel = prev[asset.id] || [];
-      const fully =
-        ports.length > 0
-          ? ports.every((p) => sel.includes(p))
-          : sel.includes(HOST_ONLY);
-      if (fully) {
-        delete next[asset.id];
-      } else {
-        next[asset.id] = ports.length ? [...ports] : [HOST_ONLY];
-      }
-      return next;
-    });
-  };
-
-  const togglePort = (asset: Asset, port: string) => {
-    setCheckedPorts((prev) => {
-      const current = new Set((prev[asset.id] || []).filter((p) => p !== HOST_ONLY));
-      if (current.has(port)) current.delete(port);
-      else current.add(port);
-      const next = { ...prev };
-      if (!current.size) delete next[asset.id];
-      else next[asset.id] = [...current];
-      return next;
-    });
-    // Auto-expand when picking individual ports
-    setExpanded((prev) => ({ ...prev, [asset.id]: true }));
-  };
-
-  const allFullySelected =
-    assets.length > 0 && assets.every((a) => isAssetFullySelected(a));
-  const someSelected = assets.some(
-    (a) => (checkedPorts[a.id] || []).length > 0,
+  const sectionHostIds = useMemo(
+    () => activeSection.hosts.map((h) => h.id),
+    [activeSection.hosts],
   );
+  const selectedInViewCount = useMemo(
+    () => sectionHostIds.filter((id) => selectedIds.includes(id)).length,
+    [sectionHostIds, selectedIds],
+  );
+  const selectedOutsideViewCount = selectedIds.length - selectedInViewCount;
+  const allSectionSelected =
+    sectionHostIds.length > 0 && sectionHostIds.every((id) => selectedIds.includes(id));
+  const someSectionSelected =
+    sectionHostIds.some((id) => selectedIds.includes(id)) && !allSectionSelected;
 
-  const toggleAllAssets = () => {
-    if (allFullySelected) {
-      setCheckedPorts({});
+  /** Toggle only the current filtered list; other selected ids stay (accumulate across filters). */
+  const toggleSelectAllSection = () => {
+    if (allSectionSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !sectionHostIds.includes(id)));
       return;
     }
-    const next: Record<string, string[]> = {};
-    for (const a of assets) {
-      next[a.id] = selectAllPortsForAsset(a);
-    }
-    setCheckedPorts(next);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of sectionHostIds) next.add(id);
+      return [...next];
+    });
   };
 
-  const clearSelection = () => setCheckedPorts({});
-
-  const buildTaskPayload = (): Omit<PendingAssetTask, "conversationId"> | null => {
-    // scope.allow must be host / origin level (http://host:port), NEVER deep paths.
-    // Service.url notes like …/vulnerabilities/brute/ are focus hints only — if they go
-    // into allow, the agent correctly refuses to leave that single path (one-vuln trap).
-    const allow: string[] = [];
-    const lines: string[] = [];
-    const pushAllow = (entry: string) => {
-      const e = String(entry || "").trim();
-      if (!e || allow.includes(e)) return;
-      allow.push(e);
-    };
-    for (const asset of assets) {
-      const sel = checkedPorts[asset.id];
-      if (!sel?.length) continue;
-      const host = asset.address;
-      const ports = listPorts(asset);
-      const services = asset.services || [];
-      const notesByPort = Object.fromEntries(
-        services.filter((s) => s.port && s.note).map((s) => [s.port, String(s.note)]),
-      );
-
-      if (sel.includes(HOST_ONLY) || (ports.length && ports.every((p) => sel.includes(p)))) {
-        // Whole host (+ origins for each known port)
-        pushAllow(host);
-        if (ports.length) {
-          for (const p of ports) {
-            const origin = scopeOriginForPort(asset, p);
-            pushAllow(origin);
-            const focus = serviceFocusPath(asset, p);
-            const note = notesByPort[p];
-            const label = origin;
-            const extra = [focus && focus !== origin ? `入口：${focus}` : "", note ? `备注：${note}` : ""]
-              .filter(Boolean)
-              .join("；");
-            lines.push(extra ? `- ${label}（${extra}）` : `- ${label}`);
-          }
-        } else {
-          lines.push(`- ${host}（全部端口/服务，以资产台账为准）`);
-        }
-      } else {
-        // Selected ports only — still host:port / origin scope, not module path
-        pushAllow(host);
-        for (const p of sel) {
-          const origin = scopeOriginForPort(asset, p);
-          pushAllow(origin);
-          const focus = serviceFocusPath(asset, p);
-          const note = notesByPort[p];
-          const svc = services.find((s) => s.port === p);
-          const svcLabel = svc?.name ? `${p}/${svc.name}` : p;
-          const extra = [focus && focus !== origin ? `优先入口：${focus}` : "", note ? `备注：${note}` : ""]
-            .filter(Boolean)
-            .join("；");
-          lines.push(
-            extra
-              ? `- ${host} · ${svcLabel} · ${origin}（${extra}）`
-              : `- ${host} · ${svcLabel} · ${origin}`,
-          );
-        }
-      }
+  const assemblyPortsFor = (hostId: string, host: TreeHost | undefined) => {
+    if (isGroupId(activeSectionId)) {
+      const member = groupRows
+        .find((g) => g.id === activeSectionId)
+        ?.members.find((m) => m.asset_id === hostId);
+      return member?.ports ?? [];
     }
-    if (!allow.length) return null;
-    // Prefer origin URL as primary target when present
-    const primary = allow.find((a) => a.startsWith("http")) || allow[0]!;
-    const text =
-      "请对以下授权目标进行安全测试。\n\n" +
-      "**Scope（scope.allow）是主机/源站级边界**（host 或 http(s)://host:port），" +
-      "同一源站下的路径与模块均在授权范围内，不要把备注里的「优先入口」当成唯一可测路径。\n\n" +
-      "目标清单：\n" +
-      lines.join("\n") +
-      "\n\n若条目含「优先入口」或端口备注，请优先覆盖该入口，但仍应做合理同源扩展（同端口下的其他攻击面），除非用户明确禁止。";
+    return (host?.services || []).map((s) => s.port);
+  };
+
+  const resolveHostForPorts = (id: string): TreeHost | undefined => {
+    const fromView =
+      activeSection.hosts.find((h) => h.id === id) || allViewHosts.find((h) => h.id === id);
+    if (fromView) return fromView;
+    const a = assetById.get(id);
+    if (!a) return undefined;
     return {
-      text,
-      target: { type: primary.startsWith("http") ? "url" : "host", value: primary },
-      scope: { allow, deny: [] },
-    };
+      id: a.id,
+      address: a.address,
+      name: a.name,
+      tags: a.tags || [],
+      aliases: aliasesFromAsset(a),
+      services: a.services || [],
+    } as TreeHost;
   };
 
-  const launchTask = async () => {
-    const payload = buildTaskPayload();
-    if (!payload) {
-      setError("请先勾选资产或端口");
-      return;
+  const portsByAssetForSelection = (ids: string[]) => {
+    const ports_by_asset: Record<string, string[]> = {};
+    for (const id of ids) {
+      ports_by_asset[id] = assemblyPortsFor(id, resolveHostForPorts(id));
     }
-    setLaunching(true);
-    setError("");
-    setNotice("");
+    return ports_by_asset;
+  };
+
+  const moveSelectedTo = async (targetId: string) => {
+    if (!selectedIds.length) return;
+    setMoving(true);
+    setMoveError("");
     try {
-      const conv = await authFetch<Conversation>("/api/conversations", {
+      // One request / one DB transaction — not N× PUT+DELETE (was ~30s for /24).
+      await authFetch("/api/asset-groups/batch-move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: selectedIds,
+          target_group_id: targetId || null,
+          source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+          remove_from_all_groups: Boolean(isAll && !targetId),
+          ports_by_asset: portsByAssetForSelection(selectedIds),
+          default_ports: [],
+        }),
       });
-      // Create Case + draft only — do not auto-dispatch so user can switch @专家 first.
-      const pending: PendingAssetTask = {
-        ...payload,
-        conversationId: conv.id,
-        autoSend: false,
-      };
-      // Pin active conversation before navigation so ConversationPage restore cannot
-      // fall back to a different running session.
-      localStorage.setItem(ACTIVE_CONVERSATION_KEY, conv.id);
-      sessionStorage.setItem(PENDING_ASSET_TASK_KEY, JSON.stringify(pending));
-      setNotice("已创建会话，请选择专家后发送…");
-      navigate(casePath(conv.id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建任务失败");
-    } finally {
-      setLaunching(false);
-    }
-  };
-
-  const openBulkDeleteConfirm = () => {
-    if (!bulkDeleteTargets.length) {
-      setError("请先勾选要删除的资产");
-      return;
-    }
-    setBulkDeleteError("");
-    setConfirmBulkDelete(true);
-  };
-
-  const closeBulkDeleteConfirm = () => {
-    if (bulkDeleting) return;
-    setConfirmBulkDelete(false);
-    setBulkDeleteError("");
-  };
-
-  const confirmBulkDeleteAssets = async () => {
-    const targets = bulkDeleteTargets;
-    if (!targets.length) {
-      setBulkDeleteError("没有可删除的资产");
-      return;
-    }
-    setBulkDeleting(true);
-    setBulkDeleteError("");
-    setError("");
-    const failed: string[] = [];
-    const deletedIds: string[] = [];
-    for (const asset of targets) {
-      try {
-        await authFetch(`/api/assets/${asset.id}`, { method: "DELETE" });
-        deletedIds.push(asset.id);
-      } catch (err) {
-        const label = asset.address || asset.name || asset.id;
-        const msg = err instanceof Error ? err.message : "删除失败";
-        failed.push(`${label}：${msg}`);
-      }
-    }
-    setBulkDeleting(false);
-    if (deletedIds.length) {
-      setCheckedPorts((prev) => {
-        const next = { ...prev };
-        for (const id of deletedIds) delete next[id];
-        return next;
-      });
-      if (selected && deletedIds.includes(selected.id)) {
-        setSelected(null);
-      }
+      setSelectedIds([]);
+      setOpenMenu(null);
+      setActiveSectionId(targetId);
       await load();
-      void loadFilterOptions();
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : "移动失败");
+      await load();
+    } finally {
+      setMoving(false);
     }
-    if (failed.length) {
-      setBulkDeleteError(
-        `成功 ${deletedIds.length} 个，失败 ${failed.length} 个：\n${failed.slice(0, 5).join("\n")}`,
-      );
-      // Keep dialog open so the user can see partial failures.
+  };
+
+  const startAddPort = (host: TreeHost) => {
+    if (addPortHostId === host.id) {
+      setAddPortHostId(null);
+      setAddPortError("");
       return;
     }
-    setConfirmBulkDelete(false);
-    setNotice(`已删除 ${deletedIds.length} 个资产`);
+    setAddPortHostId(host.id);
+    setAddPortForm({ port: "", name: "" });
+    setAddPortError("");
+  };
+
+  const addPortToHost = async (host: TreeHost) => {
+    const port = addPortForm.port.trim();
+    if (!port) {
+      setAddPortError("请填写端口号");
+      return;
+    }
+    if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+      setAddPortError("端口号须为 1–65535 的数字");
+      return;
+    }
+    const portNorm = String(Number(port));
+    if ((host.services || []).some((s) => s.port === portNorm || s.port === port)) {
+      setAddPortError(`端口 ${portNorm} 已存在`);
+      return;
+    }
+    setAddingPort(true);
+    setAddPortError("");
+    try {
+      const name = addPortForm.name.trim();
+      await authFetch(`/api/assets/${host.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          services: [{ port: portNorm, name }],
+        }),
+      });
+      if (isGroupId(activeSectionId)) {
+        const member = groupRows
+          .find((g) => g.id === activeSectionId)
+          ?.members.find((m) => m.asset_id === host.id);
+        const current = member?.ports ?? [];
+        if (!current.includes(portNorm)) {
+          await authFetch(`/api/asset-groups/${activeSectionId}/hosts/${host.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ports: [...current, portNorm] }),
+          });
+        }
+      }
+      setAddPortHostId(null);
+      setAddPortForm({ port: "", name: "" });
+      await load();
+    } catch (err) {
+      setAddPortError(err instanceof Error ? err.message : "添加端口失败");
+    } finally {
+      setAddingPort(false);
+    }
+  };
+
+  const deletePortNow = async () => {
+    if (!deletePort) return;
+    setDeletingPort(true);
+    setDeletePortError("");
+    try {
+      await authFetch(`/api/assets/${deletePort.assetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ remove_ports: [deletePort.port] }),
+      });
+      if (serviceKey?.assetId === deletePort.assetId && serviceKey.port === deletePort.port) {
+        setServiceKey(null);
+      }
+      setDeletePort(null);
+      await load();
+    } catch (err) {
+      setDeletePortError(err instanceof Error ? err.message : "删除端口失败");
+    } finally {
+      setDeletingPort(false);
+    }
+  };
+
+  const deleteHostNow = async () => {
+    if (!deleteHost) return;
+    setDeletingHost(true);
+    setDeleteHostError("");
+    try {
+      await authFetch(`/api/assets/${deleteHost.id}`, { method: "DELETE" });
+      if (hostId === deleteHost.id) setHostId(null);
+      if (serviceKey?.assetId === deleteHost.id) setServiceKey(null);
+      if (addPortHostId === deleteHost.id) setAddPortHostId(null);
+      setSelectedIds((prev) => prev.filter((id) => id !== deleteHost.id));
+      setDeleteHost(null);
+      await load();
+    } catch (err) {
+      setDeleteHostError(err instanceof Error ? err.message : "删除失败");
+    } finally {
+      setDeletingHost(false);
+    }
+  };
+
+  const selectedAddresses = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const a of assets) byId.set(a.id, a.address);
+    for (const h of activeSection.hosts) byId.set(h.id, h.address);
+    return selectedIds.map((id) => byId.get(id) || id);
+  }, [selectedIds, activeSection.hosts, assets]);
+
+  /** Drop assembly membership; Host stays in ledger (lands in 未分组 if no other Group). */
+  const removeSelectedNow = async () => {
+    if (!selectedIds.length) return;
+    // Already ungrouped — nothing to remove from.
+    if (isUngrouped) {
+      setConfirmBulkRemove(false);
+      return;
+    }
+    setRemovingBulk(true);
+    setBulkRemoveError("");
+    try {
+      await authFetch("/api/asset-groups/batch-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: selectedIds,
+          target_group_id: null,
+          // Named group tab: only leave this Group (other Groups keep the Host).
+          source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+          // 全部: strip every assembly → 未分组.
+          remove_from_all_groups: Boolean(isAll),
+          default_ports: [],
+        }),
+      });
+      setSelectedIds([]);
+      setConfirmBulkRemove(false);
+      await load();
+    } catch (err) {
+      setBulkRemoveError(err instanceof Error ? err.message : "移出失败");
+    } finally {
+      setRemovingBulk(false);
+    }
+  };
+
+  /** Permanently delete Hosts from owner ledger (assemblies cascade away). */
+  const deleteSelectedNow = async () => {
+    if (!selectedIds.length) return;
+    setDeletingBulk(true);
+    setBulkDeleteError("");
+    const ids = [...selectedIds];
+    try {
+      await authFetch("/api/assets/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_ids: ids }),
+      });
+      if (hostId && ids.includes(hostId)) setHostId(null);
+      if (serviceKey && ids.includes(serviceKey.assetId)) setServiceKey(null);
+      if (addPortHostId && ids.includes(addPortHostId)) setAddPortHostId(null);
+      setSelectedIds([]);
+      setConfirmBulkDelete(false);
+      await load();
+    } catch (err) {
+      setBulkDeleteError(err instanceof Error ? err.message : "批量删除失败");
+    } finally {
+      setDeletingBulk(false);
+    }
+  };
+
+  const bulkBusy = moving || removingBulk || deletingBulk;
+
+  const createGroup = async () => {
+    const name = groupFormName.trim();
+    if (!name) {
+      setGroupFormError("请填写组名");
+      return;
+    }
+    const attachIds = [...selectedIds];
+    setSavingGroup(true);
+    setGroupFormError("");
+    try {
+      const created = await authFetch<AssetGroup>("/api/asset-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (attachIds.length) {
+        // Create + move selected Hosts into the new Group in one user action.
+        await authFetch("/api/asset-groups/batch-move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            asset_ids: attachIds,
+            target_group_id: created.id,
+            source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+            remove_from_all_groups: false,
+            ports_by_asset: portsByAssetForSelection(attachIds),
+            default_ports: [],
+          }),
+        });
+        setSelectedIds([]);
+      }
+      setShowGroupForm(false);
+      setGroupFormName("");
+      setActiveSectionId(created.id);
+      await load();
+    } catch (err) {
+      setGroupFormError(err instanceof Error ? err.message : "创建失败");
+    } finally {
+      setSavingGroup(false);
+    }
   };
 
   return (
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
-        <div className="flex flex-1 overflow-hidden">
-          <main className="flex-1 overflow-y-auto p-6">
-            <div className="mb-4 flex flex-wrap items-center gap-3" ref={filterBarRef}>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 px-6 pt-6" ref={filterBarRef}>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索 IP / 域名 / 名称"
-                className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+                placeholder="搜索地址 / 别名 / 端口 / 标签"
+                className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
               />
-
               <MultiFilter
                 label="标签"
-                buttonText={multiLabel(
-                  selectedTags,
-                  "全部标签",
-                  allTags.map((t) => ({ value: t, label: t })),
-                )}
+                buttonText={multiLabel(selectedTags, "全部标签", allTags.map((t) => ({ value: t, label: t })))}
                 open={openMenu === "tag"}
                 onToggle={() => setOpenMenu((m) => (m === "tag" ? null : "tag"))}
                 onClear={() => setSelectedTags([])}
@@ -541,487 +800,891 @@ export default function AssetPage() {
                 onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
                 emptyText="暂无标签"
               />
-
-              <MultiFilter
-                label="端口"
-                buttonText={multiLabel(
-                  selectedPorts,
-                  "全部端口",
-                  allPorts.map((p) => ({ value: p, label: p })),
-                )}
-                open={openMenu === "port"}
-                onToggle={() => setOpenMenu((m) => (m === "port" ? null : "port"))}
-                onClear={() => setSelectedPorts([])}
-                options={allPorts.map((p) => ({ value: p, label: p, mono: true }))}
-                selected={selectedPorts}
-                onToggleValue={(v) => toggleInList(selectedPorts, v, setSelectedPorts)}
-                emptyText="暂无端口"
-              />
-
-              <MultiFilter
-                label="服务"
-                buttonText={multiLabel(
-                  selectedServices,
-                  "全部服务",
-                  allServices.map((s) => ({ value: s, label: s })),
-                )}
-                open={openMenu === "service"}
-                onToggle={() => setOpenMenu((m) => (m === "service" ? null : "service"))}
-                onClear={() => setSelectedServices([])}
-                options={allServices.map((s) => ({ value: s, label: s, mono: true }))}
-                selected={selectedServices}
-                onToggleValue={(v) => toggleInList(selectedServices, v, setSelectedServices)}
-                emptyText="暂无服务"
-              />
-
+              <Select
+                value={hostSort}
+                onValueChange={(v) => setHostSort(v as HostSortKey)}
+              >
+                <SelectTrigger
+                  className="w-auto min-w-[9rem] max-w-[16rem] shrink-0"
+                  aria-label="主机列表排序"
+                >
+                  <SelectValue placeholder="排序：地址">
+                    {`排序：${HOST_SORT_OPTIONS.find((o) => o.value === hostSort)?.label || "地址"}`}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {HOST_SORT_OPTIONS.map((opt) => {
+                    const Icon = opt.Icon;
+                    return (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <span className="inline-flex items-center gap-2">
+                          <Icon className="h-3.5 w-3.5 shrink-0 text-ink-muted" aria-hidden />
+                          {opt.label}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
               <button
                 type="button"
-                onClick={openCreateDialog}
-                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink hover:opacity-90"
+                onClick={() => {
+                  setForm({
+                    ...EMPTY_FORM,
+                    groupIds: isGroupId(activeSectionId) ? [activeSectionId] : [],
+                  });
+                  setFormError("");
+                  setCreateMode("single");
+                  setBulkText("");
+                  setShowForm(true);
+                }}
+                className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
               >
-                添加资产
+                <Plus className="h-4 w-4" />
+                添加主机
               </button>
             </div>
 
-            {selectedSummary.assetsCount > 0 && (
-              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-hairline-soft bg-surface-default px-3 py-2">
-                <span className="text-xs text-ink-secondary">
-                  已选 {selectedSummary.assetsCount} 个主机
-                  {selectedSummary.portsCount > 0 ? ` · ${selectedSummary.portsCount} 个端口` : ""}
-                </span>
-                <button
-                  type="button"
-                  disabled={launching || bulkDeleting}
-                  onClick={() => void launchTask()}
-                  className="rounded-md bg-ink px-3 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
-                >
-                  {launching ? "创建中…" : "创建任务"}
-                </button>
-                <button
-                  type="button"
-                  disabled={bulkDeleting || launching}
-                  onClick={openBulkDeleteConfirm}
-                  className="rounded-md border border-severity-critical/40 px-2.5 py-1 text-[11px] font-medium text-severity-critical hover:bg-severity-critical/10 disabled:opacity-50"
-                >
-                  删除
-                </button>
-                <button
-                  type="button"
-                  disabled={bulkDeleting}
-                  onClick={clearSelection}
-                  className="rounded-md border px-2.5 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-50"
-                >
-                  清除选择
-                </button>
-              </div>
-            )}
-
-            {error && (
-              <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
-                {error}
-              </div>
-            )}
-            {notice && (
-              <div className="mb-4 rounded-md border border-hairline-soft bg-surface-default px-4 py-3 text-sm text-ink-secondary">
-                {notice}
-              </div>
-            )}
-
-            <div className="overflow-x-auto rounded-md border border-hairline-soft bg-surface-raised">
-              <table className="w-full min-w-[880px] table-fixed">
-                <thead>
-                  <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
-                    <th className="w-10 px-2 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={allFullySelected}
-                        ref={(el) => {
-                          if (el) el.indeterminate = someSelected && !allFullySelected;
-                        }}
-                        onChange={toggleAllAssets}
-                        className="rounded border-hairline"
-                        aria-label="全选资产"
-                      />
-                    </th>
-                    <th className="w-8 px-1 py-2.5" />
-                    <th className="min-w-0 px-3 py-2.5">IP / 域名</th>
-                    <th className="w-36 px-3 py-2.5">标签</th>
-                    <th className="w-44 px-3 py-2.5">端口 / 服务</th>
-                    <th className="w-48 px-3 py-2.5">风险</th>
-                    <th className="w-20 px-3 py-2.5">来源</th>
-                    <th className="w-24 px-3 py-2.5">更新</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {assets.map((a) => {
-                    const ports = listPorts(a);
-                    const isOpen = Boolean(expanded[a.id]);
-                    const full = isAssetFullySelected(a);
-                    const partial = isAssetPartiallySelected(a);
-                    const sel = checkedPorts[a.id] || [];
-                    return (
-                      <Fragment key={a.id}>
-                        <tr
-                          onClick={() => void openAsset(a.id)}
-                          className="cursor-pointer border-b border-hairline-soft text-sm hover:bg-surface-default"
-                        >
-                          <td
-                            className="px-2 py-2.5"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={full}
-                              ref={(el) => {
-                                if (el) el.indeterminate = partial;
-                              }}
-                              onChange={() => toggleAsset(a)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="rounded border-hairline"
-                              aria-label={`选择 ${a.address}`}
-                            />
-                          </td>
-                          <td className="px-1 py-2.5" onClick={(e) => toggleExpand(a.id, e)}>
-                            <button
-                              type="button"
-                              className="w-6 text-center text-xs text-ink-muted hover:text-ink"
-                              aria-label={isOpen ? "收起端口" : "展开端口"}
-                            >
-                              {isOpen ? "▾" : "▸"}
-                            </button>
-                          </td>
-                          <td className="min-w-0 px-3 py-2.5">
-                            <div className="truncate font-mono text-sm font-medium text-ink">{a.address}</div>
-                            {a.name && a.name !== a.address ? (
-                              <div className="mt-0.5 truncate text-[11px] text-ink-muted">{a.name}</div>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <TagList tags={a.tags || []} />
-                          </td>
-                          <td
-                            className="truncate px-3 py-2.5 font-mono text-xs text-ink-secondary"
-                            title={a.ports_summary || ""}
-                          >
-                            {a.ports_summary || "—"}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <RiskChips findings={a.related_vulnerabilities || []} fallback={a.risk} />
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-ink-muted">{a.source_label || a.source}</td>
-                          <td className="px-3 py-2.5 text-xs text-ink-muted">{formatDate(a.updated_at)}</td>
-                        </tr>
-                        {isOpen && (
-                          <tr className="border-b border-hairline-soft bg-canvas-inset/40">
-                            <td colSpan={8} className="px-4 py-2">
-                              {ports.length ? (
-                                <div className="ml-8 flex flex-wrap gap-2">
-                                  {ports.map((port) => {
-                                    const svc = (a.services || []).find((s) => s.port === port);
-                                    const label = svc?.name ? `${port}/${svc.name}` : port;
-                                    const checked = sel.includes(port);
-                                    return (
-                                      <label
-                                        key={port}
-                                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
-                                          checked
-                                            ? "border-ink bg-canvas text-ink"
-                                            : "border-hairline bg-canvas text-ink-secondary hover:border-ink/40"
-                                        }`}
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() => togglePort(a, port)}
-                                          className="rounded border-hairline"
-                                        />
-                                        <span className="font-mono">{label}</span>
-                                        {svc?.note ? (
-                                          <span
-                                            className="max-w-[8rem] truncate text-[10px] text-ink-muted"
-                                            title={svc.note}
-                                          >
-                                            · {svc.note}
-                                          </span>
-                                        ) : null}
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <p className="ml-8 text-xs text-ink-muted">
-                                  暂无端口清单；勾选主机将按整机目标创建任务（后续 Agent 发现端口会写入台账）。
-                                </p>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                  {!assets.length && (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-ink-muted">
-                        暂无资产。会话测试中 Agent 会按主机自动登记；也可点击「添加资产」录入 IP/域名。
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </main>
-
-          <AssetDetailDialog
-            open={Boolean(selected)}
-            assetId={selected?.id}
-            initial={selected}
-            knownTags={allTags}
-            onClose={() => setSelected(null)}
-            onSaved={() => {
-              void load();
-              void loadFilterOptions();
-            }}
-            onDeleted={(id) => {
-              setSelected(null);
-              setCheckedPorts((prev) => {
-                if (!(id in prev)) return prev;
-                const next = { ...prev };
-                delete next[id];
-                return next;
-              });
-              void load();
-              void loadFilterOptions();
-            }}
-          />
-
-          <ConfirmDialog
-            open={confirmBulkDelete}
-            title={bulkDeleteTargets.length > 1 ? "批量删除资产" : "删除资产"}
-            description={bulkDeleteDescription}
-            busy={bulkDeleting}
-            confirmLabel={bulkDeleteTargets.length > 1 ? `删除 ${bulkDeleteTargets.length} 个` : "删除"}
-            onCancel={closeBulkDeleteConfirm}
-            onConfirm={() => void confirmBulkDeleteAssets()}
-            error={bulkDeleteError || null}
-          />
-
-          {showForm && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4"
-              onClick={closeCreateDialog}
-            >
-              <div
-                className="w-full max-w-md rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
-                onClick={(e) => e.stopPropagation()}
+            <div className="flex items-end gap-4 border-b border-hairline">
+              <button
+                type="button"
+                onClick={() => setActiveSectionId(ALL_SECTION)}
+                className={`shrink-0 border-b-2 pb-2.5 text-sm ${
+                  isAll
+                    ? "border-ink font-medium text-ink"
+                    : "border-transparent text-ink-secondary hover:text-ink"
+                }`}
               >
-                <h2 className="text-lg font-semibold">添加资产</h2>
-                <p className="mt-1 text-xs text-ink-muted">
-                  一个资产对应一个 IP 或域名。端口与漏洞由 Agent 在测试中挂接；标签用于分组。
-                </p>
-                <div className="mt-4 space-y-3">
-                  <Field label="IP / 域名">
+                全部
+                <span className="ml-1.5 text-[11px] font-normal text-ink-muted">{allViewHosts.length}</span>
+              </button>
+              {groupTabs.length ? <span className="mb-2.5 h-3.5 w-px shrink-0 bg-hairline" /> : null}
+              <div className="flex min-w-0 flex-1 gap-5 overflow-x-auto">
+                {groupTabs.map((item) => {
+                  const active = item.id === activeSectionId;
+                  return (
+                    <button
+                      key={item.id || "ungrouped"}
+                      type="button"
+                      onClick={() => setActiveSectionId(item.id)}
+                      className={`shrink-0 border-b-2 pb-2.5 text-sm ${
+                        active
+                          ? "border-ink font-medium text-ink"
+                          : "border-transparent text-ink-secondary hover:text-ink"
+                      }`}
+                    >
+                      {item.name}
+                      <span className="ml-1.5 text-[11px] font-normal text-ink-muted">{item.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex shrink-0 items-center gap-2 pb-2">
+                {activeSection.hosts.length ? (
+                  <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas">
                     <input
-                      value={form.address}
-                      onChange={(e) => setForm({ ...form, address: e.target.value })}
-                      placeholder="例如 10.0.0.8 或 pay.example.com"
-                      className="w-full rounded-md border border-hairline px-3 py-2 text-sm font-mono"
-                      autoFocus
+                      type="checkbox"
+                      checked={allSectionSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSectionSelected;
+                      }}
+                      onChange={toggleSelectAllSection}
+                      className="rounded border-hairline"
+                      aria-label="全选当前列表主机"
                     />
-                  </Field>
-                  <Field label="标签（可选，多个用逗号分隔）">
-                    <input
-                      list="create-tag-options"
-                      value={form.tags}
-                      onChange={(e) => setForm({ ...form, tags: e.target.value })}
-                      placeholder="如：支付系统, 生产"
-                      className="w-full rounded-md border border-hairline px-3 py-2 text-sm"
-                    />
-                    <datalist id="create-tag-options">
-                      {allTags.map((t) => (
-                        <option key={t} value={t} />
-                      ))}
-                    </datalist>
-                  </Field>
-                </div>
-                {formError && <p className="mt-3 text-xs text-severity-critical">{formError}</p>}
-                <div className="mt-6 flex justify-end gap-2 border-t border-hairline-soft pt-4">
+                    <span>
+                      {allSectionSelected
+                        ? "取消当前列表"
+                        : `全选当前列表${activeSection.hosts.length ? ` ${activeSection.hosts.length}` : ""}`}
+                    </span>
+                  </label>
+                ) : null}
+                {selectedIds.length ? (
+                  <div className="flex h-7 items-center gap-2 rounded-md border border-hairline bg-surface px-2 text-xs">
+                    <span className="leading-none text-ink-secondary" title="搜索/筛选不会清空已选；可跨条件累加">
+                      已选 {selectedIds.length}
+                      {selectedOutsideViewCount > 0
+                        ? `（当前列表 ${selectedInViewCount}）`
+                        : ""}
+                    </span>
+                    <span className="h-3 w-px shrink-0 bg-hairline" />
+                    <div className="relative">
+                      <button
+                        type="button"
+                        disabled={bulkBusy || !moveTargets.length}
+                        onClick={() => setOpenMenu((m) => (m === "move" ? null : "move"))}
+                        className="p-0 font-medium leading-none text-ink disabled:opacity-50"
+                      >
+                        {moving ? "移动中…" : "移动到"}
+                      </button>
+                      {openMenu === "move" ? (
+                        <div className="absolute right-0 z-20 mt-1 max-h-60 min-w-[8rem] overflow-y-auto rounded-md border border-hairline-soft bg-canvas py-1 shadow-lg">
+                          {moveTargets.map((g) => (
+                            <button
+                              key={g.id || "ungrouped"}
+                              type="button"
+                              disabled={moving}
+                              onClick={() => void moveSelectedTo(g.id)}
+                              className="block w-full px-3 py-1.5 text-left text-xs hover:bg-surface-default"
+                            >
+                              {g.name}
+                            </button>
+                          ))}
+                          {!moveTargets.length ? (
+                            <p className="px-3 py-2 text-xs text-ink-muted">没有其他组</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    {!isUngrouped ? (
+                      <button
+                        type="button"
+                        disabled={bulkBusy}
+                        onClick={() => {
+                          setBulkRemoveError("");
+                          setConfirmBulkDelete(false);
+                          setConfirmBulkRemove(true);
+                          setOpenMenu(null);
+                        }}
+                        className="p-0 font-medium leading-none text-ink disabled:opacity-50"
+                      >
+                        移出
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={bulkBusy}
+                      onClick={() => {
+                        setBulkDeleteError("");
+                        setConfirmBulkRemove(false);
+                        setConfirmBulkDelete(true);
+                        setOpenMenu(null);
+                      }}
+                      className="p-0 font-medium leading-none text-severity-critical disabled:opacity-50"
+                    >
+                      删除
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkBusy}
+                      onClick={() => {
+                        setSelectedIds([]);
+                        setMoveError("");
+                        setBulkRemoveError("");
+                        setBulkDeleteError("");
+                        setConfirmBulkRemove(false);
+                        setConfirmBulkDelete(false);
+                      }}
+                      className="p-0 leading-none text-ink-muted hover:text-ink"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={bulkBusy || savingGroup}
+                  onClick={() => {
+                    setGroupFormName("");
+                    setGroupFormError("");
+                    setShowGroupForm(true);
+                  }}
+                  className="h-7 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas disabled:opacity-50"
+                >
+                  {selectedIds.length
+                    ? `新建并加入组（${selectedIds.length}）`
+                    : "新建组"}
+                </button>
+                {isGroupId(activeSectionId) ? (
                   <button
                     type="button"
-                    disabled={saving}
-                    onClick={closeCreateDialog}
-                    className="rounded-md border border-hairline px-3 py-1.5 text-xs"
+                    onClick={() => setGroupId(activeSection.id)}
+                    className="h-7 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas"
                   >
-                    取消
+                    编辑组
                   </button>
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => void createAsset()}
-                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
-                  >
-                    {saving ? "保存中…" : "保存"}
-                  </button>
-                </div>
+                ) : null}
               </div>
             </div>
-          )}
-        </div>
+            {error ? <p className="mt-3 text-sm text-severity-critical">{error}</p> : null}
+            {moveError ? <p className="mt-3 text-sm text-severity-critical">{moveError}</p> : null}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            {!activeSection.hosts.length ? (
+              <p className="py-8 text-sm text-ink-muted">
+                {isAll
+                  ? "还没有主机。点右上角添加即可。"
+                  : isUngrouped
+                    ? "没有未分组的主机。"
+                    : "这一组还没有主机。添加主机时选进这个组即可。"}
+              </p>
+            ) : (
+              <div className="flex items-start gap-3">
+                {hostColumns.map((column, colIdx) => (
+                  <div key={colIdx} className="flex min-w-0 flex-1 flex-col gap-3">
+                {column.map((host) => {
+                  const catalog = assetById.get(host.id);
+                  const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(catalog);
+                  const ports = host.services?.length ? host.services : catalog?.services || [];
+                  const vulns = host.related_vulnerabilities?.length
+                    ? host.related_vulnerabilities
+                    : catalog?.related_vulnerabilities || [];
+                  const pathTotal = ports.reduce((n, s) => n + (s.paths?.length || 0), 0);
+                  const displayName = host.name && host.name !== host.address ? host.name : "";
+                  const hostNote = hostNoteFromAsset(catalog) || displayName;
+                  const selected = selectedIds.includes(host.id);
+                  return (
+                    <article
+                      key={host.id}
+                      onClick={() => toggleSelected(host.id)}
+                      className={`flex cursor-pointer flex-col rounded-lg border px-5 py-4 ${
+                        selected ? "border-ink bg-surface" : "border-hairline bg-canvas hover:bg-surface"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSelected(host.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="shrink-0 rounded border-hairline"
+                            aria-label={`选择 ${host.address}`}
+                          />
+                          <div className="truncate font-mono text-base font-medium text-ink">
+                            {host.address}
+                          </div>
+                        </div>
+                        <div
+                          className="flex shrink-0 items-center gap-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            title="编辑"
+                            aria-label="编辑"
+                            onClick={() => setHostId(host.id)}
+                            className="rounded-md p-1 text-ink-muted hover:bg-canvas-inset hover:text-ink"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            title="添加端口"
+                            aria-label="添加端口"
+                            onClick={() => startAddPort(host)}
+                            className="rounded-md p-1 text-ink-muted hover:bg-canvas-inset hover:text-ink"
+                          >
+                            <Plus size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            title="删除主机"
+                            aria-label="删除主机"
+                            onClick={() => {
+                              setDeleteHostError("");
+                              setDeleteHost({ id: host.id, address: host.address });
+                            }}
+                            className="rounded-md p-1 text-ink-muted hover:bg-canvas-inset hover:text-severity-critical"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {aliases.map((alias) => (
+                        <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
+                          {alias}
+                        </div>
+                      ))}
+                      {(host.tags?.length || hostNote) ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          {(host.tags || []).map((tag) => (
+                            <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
+                              {tag}
+                            </span>
+                          ))}
+                          {hostNote ? (
+                            <span className="min-w-0 truncate text-[11px] text-ink-muted">{hostNote}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <p className="mt-2 text-[11px] text-ink-muted">
+                        {[
+                          ports.length ? `${ports.length} 个端口` : "无端口",
+                          pathTotal ? `${pathTotal} 条攻击面` : null,
+                          vulns.length ? `${vulns.length} 条发现` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                      {addPortHostId === host.id ? (
+                        <form
+                          className="mt-3 flex flex-wrap items-end gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void addPortToHost(host);
+                          }}
+                        >
+                          <label className="min-w-[6.5rem] space-y-1">
+                            <span className="block text-[11px] text-ink-muted">端口</span>
+                            <input
+                              value={addPortForm.port}
+                              onChange={(e) =>
+                                setAddPortForm((prev) => ({
+                                  ...prev,
+                                  port: e.target.value.replace(/[^\d]/g, ""),
+                                }))
+                              }
+                              placeholder="8080"
+                              inputMode="numeric"
+                              autoFocus
+                              disabled={addingPort}
+                              className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
+                            />
+                          </label>
+                          <label className="min-w-[8rem] flex-1 space-y-1">
+                            <span className="block text-[11px] text-ink-muted">服务名（可选）</span>
+                            <input
+                              value={addPortForm.name}
+                              onChange={(e) =>
+                                setAddPortForm((prev) => ({ ...prev, name: e.target.value }))
+                              }
+                              placeholder="http / ssh"
+                              disabled={addingPort}
+                              className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            disabled={addingPort}
+                            onClick={() => {
+                              setAddPortHostId(null);
+                              setAddPortError("");
+                            }}
+                            className="rounded-md border border-hairline px-2.5 py-1.5 text-xs"
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={addingPort || !addPortForm.port.trim()}
+                            className="rounded-md bg-ink px-2.5 py-1.5 text-xs font-medium text-on-ink disabled:opacity-50"
+                          >
+                            {addingPort ? "添加中…" : "添加"}
+                          </button>
+                          {addPortError ? (
+                            <p className="w-full text-[11px] text-severity-critical">{addPortError}</p>
+                          ) : null}
+                        </form>
+                      ) : null}
+                      <div className="mt-3 min-w-0 border-t border-hairline-soft pt-2">
+                        {ports.length ? (
+                          ports.map((svc) => {
+                            const portVulns = vulns.filter((v) => String(v.port || "") === String(svc.port));
+                            const portRisk = buildRiskChips(
+                              portVulns.map((v) => ({
+                                id: v.id,
+                                title: v.title,
+                                severity: v.severity,
+                                status: v.status,
+                                confidence: v.confidence,
+                                port: v.port,
+                                description: v.description,
+                              })),
+                            );
+                            const vulnChips = portRisk.filter((c) => c.key.startsWith("sev-"));
+                            const otherChips = portRisk.filter((c) => !c.key.startsWith("sev-"));
+                            return (
+                              <div
+                                key={svc.port}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setServiceKey({ assetId: host.id, port: svc.port });
+                                }}
+                                className="group/port relative -mx-2 grid w-[calc(100%+1rem)] cursor-pointer grid-cols-[minmax(0,42%)_minmax(0,1fr)] items-start gap-3 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
+                              >
+                                <span className="min-w-0">
+                                  <span className="block font-mono text-sm text-ink">
+                                    {svc.name ? `${svc.port} / ${svc.name}` : svc.port}
+                                  </span>
+                                  {(svc.tags?.length || svc.note) ? (
+                                    <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+                                      {(svc.tags || []).map((tag) => (
+                                        <span
+                                          key={tag}
+                                          className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary"
+                                        >
+                                          {tag}
+                                        </span>
+                                      ))}
+                                      {svc.note ? (
+                                        <span className="min-w-0 truncate text-[11px] text-ink-muted">{svc.note}</span>
+                                      ) : null}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="flex min-w-0 flex-col items-end gap-1">
+                                  {vulnChips.length || otherChips.length ? (
+                                    <>
+                                      {vulnChips.length ? (
+                                        <span className="flex min-w-0 flex-wrap justify-end gap-1">
+                                          {vulnChips.map((c) => (
+                                            <RiskChipBadge key={c.key} chip={c} />
+                                          ))}
+                                        </span>
+                                      ) : null}
+                                      {otherChips.length ? (
+                                        <span className="flex min-w-0 flex-wrap justify-end gap-1">
+                                          {otherChips.map((c) => (
+                                            <RiskChipBadge key={c.key} chip={c} />
+                                          ))}
+                                        </span>
+                                      ) : null}
+                                    </>
+                                  ) : (
+                                    <span className="font-mono text-xs text-ink-muted">——</span>
+                                  )}
+                                </span>
+                                <button
+                                  type="button"
+                                  title="删除端口"
+                                  aria-label={`删除端口 ${svc.port}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeletePortError("");
+                                    setDeletePort({
+                                      assetId: host.id,
+                                      port: svc.port,
+                                      address: host.address,
+                                    });
+                                  }}
+                                  className="absolute right-1 top-1/2 z-10 hidden -translate-y-1/2 rounded-md bg-canvas p-1.5 text-ink-muted shadow-sm hover:text-severity-critical group-hover/port:inline-flex"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <p className="text-sm text-ink-muted">{isUngrouped ? "还没有端口" : "裸主机"}</p>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </main>
       </div>
-    </div>
-  );
-}
 
-function listPorts(asset: Asset): string[] {
-  const set = new Set<string>();
-  for (const s of asset.services || []) {
-    if (s.port) set.add(String(s.port));
-  }
-  for (const p of asset.open_ports || []) {
-    if (p) set.add(String(p));
-  }
-  return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
-}
+      <AssetDetailDialog
+        open={Boolean(hostId)}
+        assetId={hostId}
+        initial={selectedHost}
+        knownTags={allTags}
+        onClose={() => setHostId(null)}
+        onSaved={() => void load()}
+        onDeleted={() => {
+          setHostId(null);
+          void load();
+        }}
+      />
 
-/**
- * Scope-safe origin for a port: scheme://host[:port] only.
- * Never return deep paths from service.url (those over-constrain the agent).
- */
-function scopeOriginForPort(asset: Asset, port: string): string {
-  const host = asset.address;
-  const svc = (asset.services || []).find((s) => String(s.port) === String(port));
-  const name = (svc?.name || "").toLowerCase();
-  if (svc?.url) {
-    try {
-      const raw = String(svc.url).trim();
-      const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
-      const u = new URL(withScheme);
-      const h = u.hostname || host;
-      if (u.port) return `${u.protocol}//${h}:${u.port}`;
-      if (u.protocol === "https:") return `https://${h}`;
-      // Default port omitted — keep host-only http/https
-      if (port === "80" || port === "443") return `${u.protocol}//${h}`;
-      return `${u.protocol}//${h}:${port}`;
-    } catch {
-      /* fall through */
-    }
-  }
-  if (port === "443" || name === "https") return `https://${host}`;
-  if (port === "80" || name === "http") return `http://${host}`;
-  if (/^\d+$/.test(port) && Number(port) > 0) {
-    if (name === "https" || port === "8443") return `https://${host}:${port}`;
-    return `http://${host}:${port}`;
-  }
-  return `${host}:${port}`;
-}
+      <GroupLedgerDialog
+        open={Boolean(selectedGroup)}
+        group={selectedGroup}
+        catalog={assets}
+        onClose={() => setGroupId(null)}
+        onSaved={() => void load()}
+        onDeleted={() => {
+          setGroupId(null);
+          setActiveSectionId("");
+          void load();
+        }}
+        onOpenHost={(id) => {
+          setGroupId(null);
+          setHostId(id);
+        }}
+        onOpenService={(assetId, port) => {
+          setGroupId(null);
+          setServiceKey({ assetId, port });
+        }}
+      />
 
-/** Optional deep path from service.url for instruction focus (not scope.allow). */
-function serviceFocusPath(asset: Asset, port: string): string | null {
-  const svc = (asset.services || []).find((s) => String(s.port) === String(port));
-  const raw = String(svc?.url || "").trim();
-  if (!raw) return null;
-  try {
-    const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
-    const u = new URL(withScheme);
-    const path = u.pathname || "/";
-    if (path && path !== "/") return raw.startsWith("http") ? raw : withScheme;
-  } catch {
-    if (raw.includes("/") && !/^[a-z0-9.-]+(?::\d+)?$/i.test(raw)) return raw;
-  }
-  return null;
-}
+      <ServiceLedgerDialog
+        open={Boolean(serviceKey)}
+        assetId={serviceKey?.assetId || null}
+        port={serviceKey?.port || null}
+        knownTags={allTags}
+        onClose={() => setServiceKey(null)}
+        onSaved={() => void load()}
+      />
 
-/** @deprecated prefer scopeOriginForPort for task scope; kept for display callers */
-function serviceUrl(asset: Asset, port: string): string | null {
-  return scopeOriginForPort(asset, port);
-}
+      <ConfirmDialog
+        open={Boolean(deleteHost)}
+        title="删除主机"
+        description={`确定删除主机「${deleteHost?.address || "该主机"}」？关联漏洞仅解绑，不会删除。此操作不可撤销。`}
+        busy={deletingHost}
+        onCancel={() => {
+          if (!deletingHost) {
+            setDeleteHost(null);
+            setDeleteHostError("");
+          }
+        }}
+        onConfirm={() => void deleteHostNow()}
+        error={deleteHostError || null}
+      />
+      <ConfirmDialog
+        open={confirmBulkRemove && selectedIds.length > 0}
+        title={`移出 ${selectedIds.length} 台主机`}
+        description={
+          selectedIds.length
+            ? isAll
+              ? `确定将已选 ${selectedIds.length} 台（${selectedAddresses.slice(0, 3).join("、")}${
+                  selectedAddresses.length > 3 ? " 等" : ""
+                }）从所有组移出？主机仍保留在台账，会进入「未分组」。`
+              : `确定将已选 ${selectedIds.length} 台（${selectedAddresses.slice(0, 3).join("、")}${
+                  selectedAddresses.length > 3 ? " 等" : ""
+                }）从当前组移出？主机仍保留；若不在其他组则进入「未分组」。`
+            : ""
+        }
+        busy={removingBulk}
+        confirmLabel="移出"
+        onCancel={() => {
+          if (!removingBulk) {
+            setConfirmBulkRemove(false);
+            setBulkRemoveError("");
+          }
+        }}
+        onConfirm={() => void removeSelectedNow()}
+        error={bulkRemoveError || null}
+      />
+      <ConfirmDialog
+        open={confirmBulkDelete && selectedIds.length > 0}
+        title={`删除 ${selectedIds.length} 台主机`}
+        description={
+          selectedIds.length
+            ? `确定彻底删除已选 ${selectedIds.length} 台主机（${selectedAddresses.slice(0, 3).join("、")}${
+                selectedAddresses.length > 3 ? " 等" : ""
+              }）？将从台账移除，并从所有组消失。关联漏洞仅解绑，不会删除。此操作不可撤销。`
+            : ""
+        }
+        busy={deletingBulk}
+        confirmLabel="删除"
+        onCancel={() => {
+          if (!deletingBulk) {
+            setConfirmBulkDelete(false);
+            setBulkDeleteError("");
+          }
+        }}
+        onConfirm={() => void deleteSelectedNow()}
+        error={bulkDeleteError || null}
+      />
+      <ConfirmDialog
+        open={Boolean(deletePort)}
+        title="删除端口"
+        description={`确定从「${deletePort?.address || "该主机"}」移除端口 ${deletePort?.port || ""}？关联漏洞不会被删除，仅从端口清单中去掉。`}
+        busy={deletingPort}
+        onCancel={() => {
+          if (!deletingPort) {
+            setDeletePort(null);
+            setDeletePortError("");
+          }
+        }}
+        onConfirm={() => void deletePortNow()}
+        error={deletePortError || null}
+      />
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-ink-secondary">{label}</span>
-      {children}
-    </label>
-  );
-}
+      {showForm ? (
+        <Modal title="添加主机" onClose={() => !saving && setShowForm(false)}>
+          <div className="flex gap-1 rounded-md border border-hairline bg-canvas-inset p-0.5">
+            {(
+              [
+                { id: "single" as const, label: "单台" },
+                { id: "bulk" as const, label: "批量 CSV" },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setCreateMode(tab.id);
+                  setFormError("");
+                }}
+                className={`flex-1 rounded px-2 py-1.5 text-xs font-medium ${
+                  createMode === tab.id ? "bg-canvas text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-function TagList({ tags }: { tags: string[] }) {
-  if (!tags.length) return <span className="text-xs text-ink-muted">—</span>;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {tags.slice(0, 4).map((t) => (
-        <span key={t} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
-          {t}
-        </span>
-      ))}
-      {tags.length > 4 ? <span className="text-[11px] text-ink-muted">+{tags.length - 4}</span> : null}
-    </div>
-  );
-}
+          {createMode === "single" ? (
+            <>
+              <p className="text-xs text-ink-muted">一个主机对应一个 IP 或域名。端口可在卡片上继续添加。</p>
+              <Field label="IP / 域名">
+                <input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="10.0.0.8 或 pay.example.com"
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
+                  autoFocus
+                />
+              </Field>
+              <Field label="标签（可选，逗号分隔）">
+                <input
+                  value={form.tags}
+                  onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <p className="text-xs leading-relaxed text-ink-muted">
+                每行一台主机的一个端口。列：
+                <span className="font-mono text-ink-secondary"> address,port,protocol,name[,tags]</span>
+                。同一 IP 多行会合并；协议如 tcp/udp/http/https；也支持{" "}
+                <span className="font-mono">80/tcp</span> 或 <span className="font-mono">host:443</span>。
+              </p>
+              <Field label="CSV / 粘贴">
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  rows={10}
+                  placeholder={BULK_PLACEHOLDER}
+                  spellCheck={false}
+                  className="w-full resize-y rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-ink"
+                  autoFocus
+                />
+              </Field>
+              {bulkText.trim() ? (
+                <div className="rounded-md border border-hairline-soft bg-canvas-inset px-2.5 py-2 text-[11px] text-ink-secondary">
+                  <p className="font-medium text-ink">{summarizeBulkGroups(bulkPreview.groups)}</p>
+                  {bulkPreview.groups.length ? (
+                    <ul className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono">
+                      {bulkPreview.groups.slice(0, 12).map((g) => (
+                        <li key={g.address}>
+                          {g.address}
+                          {g.services.length
+                            ? ` · ${g.services.map((s) => (s.protocol ? `${s.port}/${s.protocol}` : s.port)).join(", ")}`
+                            : ""}
+                          {g.tags.length ? ` · tags:${g.tags.join("|")}` : ""}
+                        </li>
+                      ))}
+                      {bulkPreview.groups.length > 12 ? (
+                        <li className="text-ink-muted">…另有 {bulkPreview.groups.length - 12} 台</li>
+                      ) : null}
+                    </ul>
+                  ) : null}
+                  {bulkPreview.errors.length ? (
+                    <p className="mt-1 text-severity-critical">
+                      {bulkPreview.errors.slice(0, 3).join("；")}
+                      {bulkPreview.errors.length > 3 ? "…" : ""}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          )}
 
-function RiskChips({
-  findings,
-  fallback,
-}: {
-  findings: RelatedVuln[];
-  fallback?: RiskSummary;
-}) {
-  const chips = buildRiskChips(
-    findings.map((v) => ({
-      id: v.id,
-      title: v.title,
-      severity: v.severity,
-      status: v.status,
-      confidence: v.confidence,
-      port: v.port,
-      description: v.description,
-    })),
-  );
-  if (!chips.length) {
-    if (fallback && fallback.open_total > 0) {
-      return (
-        <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] text-ink-secondary">
-          {fallback.label}
-        </span>
-      );
-    }
-    return <span className="text-xs text-ink-muted">—</span>;
-  }
-  const fullTitle = chips.map((c) => `${c.label} ${c.count}`).join(" · ");
-  // Cap visible chips so the cell stays within ~2 lines; rest in title tooltip.
-  const maxVisible = 4;
-  const visible = chips.slice(0, maxVisible);
-  const extra = chips.length - visible.length;
-  return (
-    <div
-      className="flex max-h-[2.5rem] flex-wrap content-start gap-1 overflow-hidden"
-      title={fullTitle}
-    >
-      {visible.map((c) => (
-        <span
-          key={c.key}
-          className={`inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase leading-tight ${c.badgeClass}`}
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-ink-secondary">放入组（可选）</span>
+            {allGroups.length ? (
+              <div className="flex flex-wrap gap-2">
+                {allGroups.map((g) => {
+                  const on = form.groupIds.includes(g.id);
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          groupIds: on
+                            ? prev.groupIds.filter((id) => id !== g.id)
+                            : [...prev.groupIds, g.id],
+                        }))
+                      }
+                      className={`rounded-full border px-3 py-1 text-xs ${
+                        on ? "border-ink bg-ink text-on-ink" : "border-hairline text-ink-secondary hover:border-ink"
+                      }`}
+                    >
+                      {g.name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-ink-muted">还没有组。可以先新建组，再回来选。</p>
+            )}
+          </div>
+          {formError ? <p className="text-xs text-severity-critical">{formError}</p> : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" disabled={saving} onClick={() => setShowForm(false)} className="rounded-md border px-3 py-1.5 text-xs">
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void createAsset()}
+              className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink"
+            >
+              {saving
+                ? "保存中…"
+                : createMode === "bulk"
+                  ? `创建${bulkPreview.groups.length ? ` ${bulkPreview.groups.length} 台` : ""}`
+                  : "保存"}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {showGroupForm ? (
+        <Modal
+          title={selectedIds.length ? "新建并加入组" : "新建组"}
+          onClose={() => !savingGroup && setShowGroupForm(false)}
         >
-          <span>{c.label}</span>
-          <span className="opacity-80">{c.count}</span>
-        </span>
-      ))}
-      {extra > 0 ? (
-        <span className="inline-flex shrink-0 items-center rounded-md bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] text-ink-muted">
-          +{extra}
-        </span>
+          <Field label="组名">
+            <input
+              value={groupFormName}
+              onChange={(e) => setGroupFormName(e.target.value)}
+              placeholder="XXX公司 / OA"
+              className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
+              autoFocus
+            />
+          </Field>
+          {selectedIds.length ? (
+            <p className="text-xs text-ink-muted">
+              将创建该组，并把已选 {selectedIds.length} 台主机移入（
+              {selectedAddresses.slice(0, 3).join("、")}
+              {selectedAddresses.length > 3 ? " 等" : ""}
+              ）。
+              {isGroupId(activeSectionId) ? " 同时从当前组移出。" : ""}
+            </p>
+          ) : null}
+          {groupFormError ? <p className="text-xs text-severity-critical">{groupFormError}</p> : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" disabled={savingGroup} onClick={() => setShowGroupForm(false)} className="rounded-md border px-3 py-1.5 text-xs">
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={savingGroup}
+              onClick={() => void createGroup()}
+              className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink"
+            >
+              {savingGroup
+                ? selectedIds.length
+                  ? "创建并加入中…"
+                  : "保存中…"
+                : selectedIds.length
+                  ? `创建并加入 ${selectedIds.length} 台`
+                  : "保存"}
+            </button>
+          </div>
+        </Modal>
       ) : null}
     </div>
   );
 }
 
-function formatDate(value?: string | null): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value.slice(0, 10);
-  return d.toLocaleDateString();
+function useCardColumns() {
+  const [count, setCount] = useState(1);
+  useEffect(() => {
+    const lg = window.matchMedia("(min-width: 1024px)");
+    const xl = window.matchMedia("(min-width: 1280px)");
+    const apply = () => setCount(xl.matches ? 3 : lg.matches ? 2 : 1);
+    apply();
+    lg.addEventListener("change", apply);
+    xl.addEventListener("change", apply);
+    return () => {
+      lg.removeEventListener("change", apply);
+      xl.removeEventListener("change", apply);
+    };
+  }, []);
+  return count;
+}
+
+function splitRoundRobin<T>(items: T[], columns: number): T[][] {
+  const n = Math.max(1, columns);
+  const cols: T[][] = Array.from({ length: n }, () => []);
+  items.forEach((item, i) => cols[i % n].push(item));
+  return cols;
+}
+
+function RiskChipBadge({ chip }: { chip: RiskChip }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${chip.badgeClass}`}
+    >
+      {chip.label}
+      {chip.count > 1 ? <span className="opacity-80">{chip.count}</span> : null}
+    </span>
+  );
+}
+
+function hostNoteFromAsset(asset?: Asset): string {
+  if (!asset) return "";
+  const props = asset.properties || {};
+  for (const key of ["note", "remark", "comment"] as const) {
+    const text = String(props[key] ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function aliasesFromAsset(asset?: Asset): string[] {
+  if (!asset) return [];
+  const raw = asset.aliases || (asset.properties as { aliases?: unknown })?.aliases;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        const rec = item as Record<string, unknown>;
+        return String(rec.value || rec.address || rec.host || "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+}
+
+function toggleInList(list: string[], value: string, setList: (next: string[]) => void) {
+  setList(list.includes(value) ? list.filter((x) => x !== value) : [...list, value]);
+}
+
+function multiLabel(selected: string[], allLabel: string, options: { value: string; label: string }[]) {
+  if (!selected.length) return allLabel;
+  if (selected.length === 1) return options.find((o) => o.value === selected[0])?.label || selected[0];
+  return `${selected.length} 项`;
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block space-y-1">
+      <span className="text-xs font-medium text-ink-secondary">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
+      <div className="w-full max-w-md space-y-3 rounded-lg border border-hairline-soft bg-canvas p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function MultiFilter({
@@ -1034,67 +1697,37 @@ function MultiFilter({
   selected,
   onToggleValue,
   emptyText,
-  wide,
 }: {
   label: string;
   buttonText: string;
   open: boolean;
   onToggle: () => void;
   onClear: () => void;
-  options: { value: string; label: string; mono?: boolean }[];
+  options: { value: string; label: string }[];
   selected: string[];
   onToggleValue: (value: string) => void;
   emptyText?: string;
-  wide?: boolean;
 }) {
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="rounded-md border border-hairline px-3 py-2 text-sm hover:bg-surface-default"
-      >
+      <button type="button" onClick={onToggle} className="rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink hover:bg-canvas">
         {label}：{buttonText}
-        {selected.length > 0 ? (
-          <span className="ml-1 rounded bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-muted">
-            {selected.length}
-          </span>
-        ) : null}
+        {selected.length > 0 ? <span className="ml-1 text-[10px] text-ink-muted">{selected.length}</span> : null}
       </button>
-      {open && (
-        <div
-          className={`absolute left-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-md border border-hairline-soft bg-canvas py-1 shadow-lg ${
-            wide ? "w-72" : "min-w-[10rem]"
-          }`}
-        >
-          <button
-            type="button"
-            className="block w-full px-3 py-1.5 text-left text-xs text-ink-muted hover:bg-surface-default"
-            onClick={onClear}
-          >
-            清除选择
+      {open ? (
+        <div className="absolute left-0 z-20 mt-1 max-h-64 min-w-[10rem] overflow-y-auto rounded-md border border-hairline-soft bg-canvas py-1 shadow-lg">
+          <button type="button" className="block w-full px-3 py-1.5 text-left text-xs text-ink-muted hover:bg-surface-default" onClick={onClear}>
+            清除
           </button>
           {options.map((opt) => (
-            <label
-              key={opt.value}
-              className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-surface-default"
-            >
-              <input
-                type="checkbox"
-                checked={selected.includes(opt.value)}
-                onChange={() => onToggleValue(opt.value)}
-                className="rounded border-hairline"
-              />
-              <span className={`min-w-0 truncate ${opt.mono ? "font-mono text-xs" : ""}`}>
-                {opt.label}
-              </span>
+            <label key={opt.value} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-surface-default">
+              <input type="checkbox" checked={selected.includes(opt.value)} onChange={() => onToggleValue(opt.value)} />
+              <span className="truncate">{opt.label}</span>
             </label>
           ))}
-          {!options.length && emptyText ? (
-            <p className="px-3 py-2 text-xs text-ink-muted">{emptyText}</p>
-          ) : null}
+          {!options.length && emptyText ? <p className="px-3 py-2 text-xs text-ink-muted">{emptyText}</p> : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

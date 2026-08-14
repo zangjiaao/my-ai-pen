@@ -1,7 +1,8 @@
-"""Asset API — one host (IP/domain) per asset, ports+services+urls, tags for grouping.
+"""Asset API — Host cards (identity = asset id), ports/services/urls, tags.
 
-Ownership: users create/delete host rows. Agents only enrich surface fields
-(ports, services, URLs, API endpoints) on hosts that already exist.
+Ownership: users create/delete host rows. Same address may exist as multiple
+Hosts (cross-unit). Merge only when address is already a Group member.
+Agents create/enrich via node ledger tools when the user asked.
 """
 from __future__ import annotations
 
@@ -17,10 +18,14 @@ from app.db.base import get_db
 from app.middleware.auth import get_current_user
 from app.models.asset import Asset
 from app.models.audit import AuditLog
+from app.models.owner_ledger import AssetAssembly, AssetGroup
 from app.models.vulnerability import Vulnerability
 from app.models.conversation import Conversation
 from app.services.asset_ledger import (
+    UNGROUPED_GROUP_ID,
     apply_discover_to_asset_fields,
+    apply_service_tags,
+    collect_owner_tags,
     conversation_target_blobs,
     enrich_properties_ports,
     extract_api_endpoints,
@@ -32,9 +37,12 @@ from app.services.asset_ledger import (
     merge_discover_properties,
     merge_tags,
     normalize_address,
+    normalize_assembly_ports,
     normalize_port,
     normalize_tags,
     ports_summary,
+    project_owner_ledger,
+    read_host_services,
     render_remediation_html,
     render_remediation_markdown,
     risk_summary_from_vulns,
@@ -43,18 +51,31 @@ from app.services.asset_ledger import (
     tech_summary,
     type_label,
 )
+from app.services.owner_services import (
+    delete_official_services,
+    load_official_services,
+    upsert_official_service,
+)
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 
 class AssetCreate(BaseModel):
-    """Create/merge one host asset. Address is a single IP or domain."""
+    """Create one Host (identity = asset id). Same address may exist many times.
+
+    Optional group_ids: merge only when this address is already a *member* of
+    one of those Groups (unit-scoped). Cross-unit same IP → new Host.
+    """
     address: str
     name: str | None = None
     tags: list[str] = Field(default_factory=list)
     # Optional initial ports (services without names).
     ports: list[str | int] = Field(default_factory=list)
+    # Optional services with port / protocol / name (CSV bulk create).
+    services: list[dict] = Field(default_factory=list)
     properties: dict = Field(default_factory=dict)
+    # Optional Groups to scope merge (first match wins).
+    group_ids: list[str] = Field(default_factory=list)
 
 
 class AssetUpdate(BaseModel):
@@ -94,6 +115,8 @@ class ServiceOut(BaseModel):
     url: str | None = None
     # User/agent notes about this port — helps agents understand service context.
     note: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    paths: list[dict] = Field(default_factory=list)
 
 
 class ApiEndpointOut(BaseModel):
@@ -195,7 +218,185 @@ async def list_assets(
     assets = assets[offset : offset + limit]
     # related may be broader; re-key for page slice
     page_related = {a.id: related.get(a.id, []) for a in assets}
-    return [_out(a, page_related.get(a.id, [])) for a in assets]
+    official = await load_official_services(db, [a.id for a in assets])
+    return [_out(a, page_related.get(a.id, []), official.get(a.id)) for a in assets]
+
+
+class TreeServiceOut(BaseModel):
+    port: str
+    name: str = ""
+    protocol: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    note: str | None = None
+    paths: list[dict] = Field(default_factory=list)
+
+
+class TreeHostOut(BaseModel):
+    id: str
+    address: str
+    name: str = ""
+    tags: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    services: list[TreeServiceOut] = Field(default_factory=list)
+    source: str = ""
+    source_label: str = ""
+    risk: RiskSummaryOut = Field(default_factory=RiskSummaryOut)
+    related_vulnerabilities: list[RelatedVulnOut] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class TreeGroupOut(BaseModel):
+    id: str
+    name: str
+    hosts: list[TreeHostOut] = Field(default_factory=list)
+
+
+class TreeMetaGroupOut(BaseModel):
+    id: str
+    name: str
+
+
+class AssetTreeOut(BaseModel):
+    groups: list[TreeGroupOut] = Field(default_factory=list)
+    all_groups: list[TreeMetaGroupOut] = Field(default_factory=list)
+    all_tags: list[str] = Field(default_factory=list)
+
+
+@router.get("/tree", response_model=AssetTreeOut)
+async def list_asset_tree(
+    tag: list[str] | None = Query(None, description="AND tags (Host or Service)"),
+    group: list[str] | None = Query(None, description="Group ids to include"),
+    search: str | None = Query(None),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spec #454a scheme B projection. Does not invent Groups or Hosts."""
+    user_id = uuid.UUID(current_user["user_id"])
+    assets = list(
+        (
+            await db.execute(
+                select(Asset).where(Asset.user_id == user_id).order_by(Asset.address.asc())
+            )
+        ).scalars().all()
+    )
+    group_rows = list(
+        (
+            await db.execute(
+                select(AssetGroup).where(AssetGroup.user_id == user_id).order_by(AssetGroup.name.asc())
+            )
+        ).scalars().all()
+    )
+    assembly_rows = []
+    if group_rows:
+        assembly_rows = list(
+            (
+                await db.execute(
+                    select(AssetAssembly).where(
+                        AssetAssembly.group_id.in_([g.id for g in group_rows])
+                    )
+                )
+            ).scalars().all()
+        )
+
+    related = await _related_vulns(db, user_id, [a.id for a in assets])
+    await _hydrate_asset_ports(db, assets, related)
+    official = await load_official_services(db, [a.id for a in assets])
+
+    host_dicts = []
+    for a in assets:
+        props = dict(a.properties or {})
+        props["services"] = read_host_services(props, official.get(a.id))
+        host_dicts.append(
+            {
+                "id": str(a.id),
+                "address": a.address,
+                "name": a.name,
+                "tags": list(a.tags or []),
+                "properties": props,
+            }
+        )
+    projected = project_owner_ledger(
+        hosts=host_dicts,
+        groups=[{"id": str(g.id), "name": g.name} for g in group_rows],
+        assemblies=[
+            {
+                "group_id": str(row.group_id),
+                "asset_id": str(row.asset_id),
+                "ports": normalize_assembly_ports(row.ports or []),
+            }
+            for row in assembly_rows
+        ],
+        keyword=search,
+        group_ids=_split_multi(group) or None,
+        tags=_split_multi(tag) or None,
+    )
+
+    by_id = {a.id: a for a in assets}
+    tree_groups: list[TreeGroupOut] = []
+    for section in projected:
+        hosts_out: list[TreeHostOut] = []
+        for host in section.get("hosts") or []:
+            try:
+                aid = uuid.UUID(str(host.get("id")))
+            except ValueError:
+                continue
+            asset = by_id.get(aid)
+            vulns = related.get(aid, []) if asset else []
+            risk = risk_summary_from_vulns(
+                [
+                    {
+                        "id": v.id,
+                        "title": v.title,
+                        "severity": v.severity,
+                        "status": v.status,
+                        "confidence": v.confidence,
+                        "port": v.port,
+                        "description": v.description,
+                    }
+                    for v in vulns
+                ]
+            )
+            hosts_out.append(
+                TreeHostOut(
+                    id=str(host.get("id")),
+                    address=str(host.get("address") or ""),
+                    name=str(host.get("name") or ""),
+                    tags=list(host.get("tags") or []),
+                    aliases=list(host.get("aliases") or []),
+                    services=[
+                        TreeServiceOut(
+                            port=str(s.get("port") or ""),
+                            name=str(s.get("name") or ""),
+                            protocol=str(s["protocol"]) if s.get("protocol") else None,
+                            tags=list(s.get("tags") or []),
+                            note=str(s["note"]) if s.get("note") else None,
+                            paths=list(s.get("paths") or []),
+                        )
+                        for s in (host.get("services") or [])
+                        if s.get("port")
+                    ],
+                    source=asset.source if asset else "",
+                    source_label=source_label(asset.source) if asset else "",
+                    risk=RiskSummaryOut(**risk),
+                    related_vulnerabilities=vulns,
+                    created_at=asset.created_at.isoformat() if asset and asset.created_at else None,
+                    updated_at=asset.updated_at.isoformat() if asset and asset.updated_at else None,
+                )
+            )
+        tree_groups.append(
+            TreeGroupOut(
+                id=str(section.get("id") or UNGROUPED_GROUP_ID),
+                name=str(section.get("name") or ""),
+                hosts=hosts_out,
+            )
+        )
+
+    return AssetTreeOut(
+        groups=tree_groups,
+        all_groups=[TreeMetaGroupOut(id=str(g.id), name=g.name) for g in group_rows],
+        all_tags=collect_owner_tags(host_dicts),
+    )
 
 
 @router.get("/tags", response_model=list[str])
@@ -203,16 +404,14 @@ async def list_asset_tags(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Distinct tags used on this user's assets (for filter / autocomplete)."""
+    """Distinct Host + Service tags (Spec #454)."""
     user_id = uuid.UUID(current_user["user_id"])
     result = await db.execute(select(Asset).where(Asset.user_id == user_id))
-    tags: set[str] = set()
-    for a in result.scalars().all():
-        for t in a.tags or []:
-            text = str(t).strip()
-            if text:
-                tags.add(text)
-    return sorted(tags, key=lambda x: x.lower())
+    hosts = [
+        {"tags": list(a.tags or []), "properties": a.properties or {}}
+        for a in result.scalars().all()
+    ]
+    return collect_owner_tags(hosts)
 
 
 @router.get("/ports", response_model=list[str])
@@ -267,14 +466,34 @@ async def create_asset(
     if not host:
         raise HTTPException(400, "地址无效：无法解析为 IP 或域名")
 
-    existing = await db.execute(
-        select(Asset).where(Asset.user_id == user_id, Asset.address == host)
-    )
-    a = existing.scalar_one_or_none()
     tags = normalize_tags(body.tags)
     ports = list(body.ports or [])
     if addr_port:
         ports.append(addr_port)
+    # Prefer structured services (port + protocol + name); also accept properties.services.
+    services_in: list[dict] = []
+    for raw in list(body.services or []) + list((body.properties or {}).get("services") or []):
+        if isinstance(raw, dict):
+            services_in.append(dict(raw))
+    for svc in services_in:
+        p = normalize_port(svc.get("port"))
+        if p:
+            ports.append(p)
+
+    # Group-scoped merge only (never global address uniqueness).
+    a: Asset | None = None
+    from app.services.node_ledger import find_group_member_by_address
+
+    for raw_gid in body.group_ids or []:
+        try:
+            gid = uuid.UUID(str(raw_gid))
+        except ValueError:
+            continue
+        a = await find_group_member_by_address(
+            db, user_id=user_id, group_id=gid, address=host
+        )
+        if a:
+            break
 
     if a:
         a.name = (body.name or "").strip() or a.name or host
@@ -282,14 +501,21 @@ async def create_asset(
         a.properties = merge_discover_properties(
             a.properties,
             open_ports=ports or None,
-            services=(body.properties or {}).get("services"),
+            services=services_in or None,
         )
-        await _audit(db, user_id, "asset.update", "asset", a.id, {"address": a.address, "merged": True})
+        await _audit(
+            db,
+            user_id,
+            "asset.update",
+            "asset",
+            a.id,
+            {"address": a.address, "merged": True, "scope": "group_member"},
+        )
     else:
         props = merge_discover_properties(
             body.properties or {},
             open_ports=ports or [],
-            services=(body.properties or {}).get("services"),
+            services=services_in or None,
         )
         a = Asset(
             id=uuid.uuid4(),
@@ -304,10 +530,37 @@ async def create_asset(
         db.add(a)
         await db.flush()
         await _audit(db, user_id, "asset.create", "asset", a.id, {"address": a.address})
+    # Official service rows: prefer full service dicts (protocol/name), then bare ports.
+    seen_ports: set[str] = set()
+    for svc in services_in:
+        p = normalize_port(svc.get("port"))
+        if not p:
+            continue
+        await upsert_official_service(
+            db,
+            asset_id=a.id,
+            port=p,
+            source="user",
+            name=str(svc.get("name") or svc.get("service") or "") or None,
+            protocol=str(svc["protocol"]).strip() if svc.get("protocol") else None,
+            product=str(svc["product"]) if svc.get("product") else None,
+            version=str(svc["version"]) if svc.get("version") else None,
+            url=str(svc["url"]) if svc.get("url") else None,
+            note=str(svc["note"]) if svc.get("note") else None,
+            tags=svc.get("tags") if "tags" in svc else None,
+        )
+        seen_ports.add(p)
+    for p in ports:
+        pn = normalize_port(p)
+        if not pn or pn in seen_ports:
+            continue
+        seen_ports.add(pn)
+        await upsert_official_service(db, asset_id=a.id, port=pn, source="user")
     await db.commit()
     await db.refresh(a)
     related = await _related_vulns(db, user_id, [a.id])
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
 
 
 @router.get("/{asset_id}/export")
@@ -369,7 +622,8 @@ async def get_asset(
     a = await _get(asset_id, current_user, db)
     related = await _related_vulns(db, user_id, [a.id], include_detail=True)
     await _hydrate_asset_ports(db, [a], related)
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
 
 
 @router.patch("/{asset_id}", response_model=AssetOut)
@@ -387,6 +641,17 @@ async def update_asset(
 
     if "tags" in body:
         a.tags = normalize_tags(body.get("tags"))
+
+    if "note" in body:
+        props = dict(a.properties or {})
+        text = str(body.get("note") or "").strip()
+        if text:
+            props["note"] = text
+        else:
+            props.pop("note", None)
+            props.pop("remark", None)
+            props.pop("comment", None)
+        a.properties = props
 
     if "address" in body and body["address"] is not None:
         if not is_valid_ledger_address(body["address"]):
@@ -411,12 +676,38 @@ async def update_asset(
 
     if "services" in body and isinstance(body["services"], list):
         # Merge into existing so agent rediscover fields + other ports stay.
-        # Used for manual add/update of ports (port, name, note, …).
+        # Used for manual add/update of ports (port, name, note, tags, …).
         a.properties = merge_discover_properties(
             a.properties,
             services=body["services"],
             open_ports=[s.get("port") for s in body["services"] if isinstance(s, dict)],
         )
+        for raw in body["services"]:
+            if not isinstance(raw, dict):
+                continue
+            await upsert_official_service(
+                db,
+                asset_id=a.id,
+                port=raw.get("port"),
+                source="user",
+                name=str(raw.get("name") or raw.get("service") or "") or None,
+                protocol=str(raw["protocol"]) if raw.get("protocol") else None,
+                product=str(raw["product"]) if raw.get("product") else None,
+                version=str(raw["version"]) if raw.get("version") else None,
+                url=str(raw["url"]) if raw.get("url") else None,
+                note=str(raw["note"]) if "note" in raw else None,
+                tags=raw.get("tags") if "tags" in raw else None,
+            )
+    if "service_tags" in body and isinstance(body["service_tags"], dict):
+        a.properties = apply_service_tags(a.properties, body["service_tags"])
+        for raw_port, raw_tags in body["service_tags"].items():
+            await upsert_official_service(
+                db,
+                asset_id=a.id,
+                port=raw_port,
+                source="user",
+                tags=raw_tags,
+            )
     elif "port_notes" in body and isinstance(body["port_notes"], dict):
         # Partial update: { "52799": "CTF web, 9 levels", "22": "SSH bastion" }
         props = dict(a.properties or {})
@@ -458,6 +749,8 @@ async def update_asset(
                     p for p in (props.get("ports") or []) if normalize_port(p) not in drop
                 ]
             a.properties = props
+            await _drop_ports_from_assemblies(db, a.id, drop)
+            await delete_official_services(db, a.id, drop)
     elif (
         "properties" in body
         and isinstance(body["properties"], dict)
@@ -477,7 +770,93 @@ async def update_asset(
     await db.commit()
     await db.refresh(a)
     related = await _related_vulns(db, user_id, [a.id])
-    return _out(a, related.get(a.id, []))
+    official = await load_official_services(db, [a.id])
+    return _out(a, related.get(a.id, []), official.get(a.id))
+
+
+class BatchDeleteIn(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/batch-delete")
+async def batch_delete_assets(
+    body: BatchDeleteIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete many Hosts in one transaction (UI multi-select)."""
+    from sqlalchemy import delete as sa_delete, update
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+    user_id = uuid.UUID(current_user["user_id"])
+    raw_ids = [str(x).strip() for x in (body.asset_ids or []) if str(x or "").strip()]
+    if not raw_ids:
+        raise HTTPException(400, "请选择主机")
+    if len(raw_ids) > 2000:
+        raise HTTPException(400, "一次最多删除 2000 台")
+
+    asset_uuids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in raw_ids:
+        try:
+            aid = uuid.UUID(raw)
+        except ValueError as exc:
+            raise HTTPException(400, f"无效资产 id: {raw}") from exc
+        if aid in seen:
+            continue
+        seen.add(aid)
+        asset_uuids.append(aid)
+
+    rows = list(
+        (
+            await db.execute(
+                select(Asset).where(Asset.user_id == user_id, Asset.id.in_(asset_uuids))
+            )
+        ).scalars().all()
+    )
+    if not rows:
+        raise HTTPException(404, "资产不存在")
+    owned_ids = [r.id for r in rows]
+    addresses = [str(r.address or "") for r in rows]
+
+    try:
+        unlink_result = await db.execute(
+            update(Vulnerability)
+            .where(Vulnerability.asset_id.in_(owned_ids))
+            .values(asset_id=None)
+        )
+        unlinked = int(getattr(unlink_result, "rowcount", 0) or 0)
+        await _audit(
+            db,
+            user_id,
+            "asset.batch_delete",
+            "asset",
+            owned_ids[0],
+            {
+                "count": len(owned_ids),
+                "addresses_sample": addresses[:8],
+                "unlinked_vulnerabilities": unlinked,
+            },
+        )
+        await db.execute(sa_delete(Asset).where(Asset.user_id == user_id, Asset.id.in_(owned_ids)))
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        detail = str(getattr(exc, "orig", None) or exc)
+        raise HTTPException(
+            409,
+            f"批量删除失败。已尝试解绑关联漏洞。请刷新后重试。{detail[:180]}",
+        ) from exc
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(500, f"资产删除数据库错误：{exc}") from exc
+
+    return {
+        "ok": True,
+        "deleted": len(owned_ids),
+        "unlinked_vulnerabilities": unlinked,
+        "missing": len(asset_uuids) - len(owned_ids),
+    }
 
 
 @router.delete("/{asset_id}")
@@ -648,6 +1027,18 @@ async def upsert_discovered_asset(
     return asset
 
 
+async def _drop_ports_from_assemblies(
+    db: AsyncSession, asset_id: uuid.UUID, ports: set[str]
+) -> None:
+    if not ports:
+        return
+    result = await db.execute(select(AssetAssembly).where(AssetAssembly.asset_id == asset_id))
+    for row in result.scalars().all():
+        kept = [p for p in normalize_assembly_ports(row.ports or []) if p not in ports]
+        if kept != list(row.ports or []):
+            row.ports = kept
+
+
 async def _get(asset_id: str, current_user: dict, db: AsyncSession) -> Asset:
     result = await db.execute(
         select(Asset).where(
@@ -784,7 +1175,11 @@ async def _hydrate_asset_ports(
                 a.properties = enriched
 
 
-def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
+def _out(
+    a: Asset,
+    related: list[RelatedVulnOut] | None = None,
+    official_services: list[dict] | None = None,
+) -> AssetOut:
     related = related or []
     props = a.properties or {}
     # Display-time merge (even if hydrate could not persist).
@@ -810,7 +1205,7 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
         for v in related
     ]
     risk = risk_summary_from_vulns(vuln_dicts)
-    services_raw = extract_services(props)
+    services_raw = read_host_services(props, official_services)
     services = [
         ServiceOut(
             port=str(s.get("port") or ""),
@@ -820,6 +1215,8 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
             version=str(s["version"]) if s.get("version") else None,
             url=_service_url(s, a.address),
             note=(str(s.get("note") or s.get("remark") or "").strip() or None),
+            tags=normalize_tags(s.get("tags")),
+            paths=list(s.get("paths") or []),
         )
         for s in services_raw
         if s.get("port")
