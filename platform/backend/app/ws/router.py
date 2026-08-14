@@ -2760,27 +2760,15 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             # Legacy alias: older nodes may still emit task_incomplete. Prefer a single
             # task_complete(status=incomplete) channel going forward.
             msg_type = "status"
-            content = {
-                "text": "Task incomplete",
-                "status": "incomplete",
-                "summary": msg.get("summary", {}),
-                "audit": msg.get("audit"),
-            }
+            content = _package_settle_status_content(
+                {**msg, "status": msg.get("status") or "incomplete"}
+            )
         elif msg_type == "task_complete":
             msg_type = "status"
-            terminal = str(msg.get("status") or "completed").strip().lower()
-            if terminal in {"incomplete", "blocked"}:
-                content = {
-                    "text": "Task incomplete" if terminal == "incomplete" else "Task blocked",
-                    "status": terminal,
-                    "summary": msg.get("summary", {}),
-                    "audit": msg.get("audit"),
-                }
-            else:
-                content = {"text": "Task complete", "status": "completed", "summary": msg.get("summary", {})}
+            content = _package_settle_status_content(msg)
         elif msg_type == "task_error":
             msg_type = "status"
-            content = {"text": f"Task failed: {msg.get('message', msg.get('error', ''))}"}
+            content = _package_error_status_content(msg)
         elif msg_type == "engagement_closeout":
             from app.services.engagement_closeout import (
                 accept_engagement_closeout,
@@ -5730,20 +5718,77 @@ def _goal_objective_from_message(msg: dict, *, fallback: str | None = None) -> s
     return str(fallback or "").strip()
 
 
+def _is_session_continue_package(msg: dict | None) -> bool:
+    """True when this package is same-Session continue (Spec #455)."""
+    if not isinstance(msg, dict):
+        return False
+    return msg.get("parked_continue") is True or msg.get("session_continue") is True
+
+
+def _package_settle_status_content(msg: dict) -> dict:
+    """Persist package settle as segment status — not Case/Session death (Spec #455 P2)."""
+    session_cont = _is_session_continue_package(msg)
+    terminal = str(msg.get("status") or "completed").strip().lower()
+    summary = msg.get("summary", {})
+    audit = msg.get("audit")
+    if terminal in {"incomplete", "blocked"}:
+        if session_cont:
+            text = (
+                "Session continue blocked"
+                if terminal == "blocked"
+                else "Session continue paused"
+            )
+        else:
+            text = "Package blocked" if terminal == "blocked" else "Package incomplete"
+        out: dict = {"text": text, "status": terminal, "summary": summary}
+        if audit is not None:
+            out["audit"] = audit
+        if session_cont:
+            out["parked_continue"] = True
+            out["session_continue"] = True
+        return out
+    text = "Session continue settled" if session_cont else "Package complete"
+    out = {"text": text, "status": "completed", "summary": summary}
+    if audit is not None:
+        out["audit"] = audit
+    if session_cont:
+        out["parked_continue"] = True
+        out["session_continue"] = True
+    return out
+
+
+def _package_error_status_content(msg: dict) -> dict:
+    """Persist package error as segment fail (Spec #455 P2)."""
+    session_cont = _is_session_continue_package(msg)
+    detail = msg.get("message", msg.get("error", ""))
+    prefix = "Session segment failed: " if session_cont else "Package failed: "
+    out: dict = {"text": f"{prefix}{detail}"}
+    if session_cont:
+        out["parked_continue"] = True
+        out["session_continue"] = True
+    return out
+
+
 def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
+    """Restore sticky target/scope/goal for same-Session continue (Spec #455 S1).
+
+    Dialogue turn text is the operator utterance only. Do **not** rewrap sticky
+    prior instruction as an engagement book (`User continuation:` glue).
+    """
     task_context = _task_context_from_snapshot(resume_context)
     if not task_context.get("target"):
         return None, False
 
-    base_instruction = str(task_context.get("instruction") or "")
-    continue_instruction = str(msg.get("text") or "")
-    combined_instruction = f"{base_instruction}\n\nUser continuation: {continue_instruction}".strip()
+    # Spec #455 L1/L2: model-visible turn = operator utterance (or ChoiceCard confirm text).
+    continue_instruction = str(msg.get("text") or "").strip()
     out = {
         **msg,
         "target": task_context.get("target") or {},
         "scope": task_context.get("scope") or {},
-        "text": combined_instruction,
-        "initial_instruction": combined_instruction,
+        "text": continue_instruction,
+        "initial_instruction": continue_instruction,
+        # Spec #455: Task package is accounting; Session is dialogue owner.
+        "session_continue": True,
     }
     # Preserve prior structured goal seed on resume unless the new message overrides.
     prior_goal = str(task_context.get("goal_objective") or "").strip()
@@ -5757,6 +5802,37 @@ def _resume_message_from_context(msg: dict, resume_context: dict, *, include_che
             checkpoint = task_context.get("checkpoint") or {}
         out["checkpoint"] = checkpoint or {}
     return out, True
+
+
+def _should_session_continue_sticky(
+    *,
+    is_default: bool,
+    conversation_status: str | None,
+    has_resume_task: bool,
+    msg: dict,
+) -> bool:
+    """True when this turn is same-Session continue with sticky engagement (Spec #455).
+
+    Uses conversation status + durable sticky target — not free-text intent NLP to invent
+    engagement. Short continue phrases and missing-target steers both restore structure.
+    """
+    if is_default or not has_resume_task:
+        return False
+    status = str(conversation_status or "").lower()
+    # Terminal / idle package states where the next user turn is still the same Session.
+    # running is excluded (steer path handles in-flight). created = brand-new Case.
+    if status not in {
+        "failed",
+        "incomplete",
+        "paused",
+        "canceled",
+        "cancelled",
+        "completed",
+    }:
+        return False
+    # Durable sticky target exists (caller already checked has_resume_task).
+    # Operator utterance may or may not carry a new target; either way this is Session dialogue.
+    return True
 
 
 def _message_with_decision_target(msg: dict, decision) -> dict:
@@ -5937,6 +6013,9 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_id"] = expert_id
     if expert_name:
         task_msg["expert_name"] = expert_name
+    # Spec #455: package is accounting; Session owns dialogue. Flag for Node/FE honesty.
+    if same_mode_continue or msg.get("session_continue") is True:
+        task_msg["session_continue"] = True
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
     # Spec #354 S4: same-expert auto-handoff of pending incomplete Todo map.
@@ -6062,15 +6141,19 @@ async def _dispatch_task_assign_to_node(
 def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
     task_target = msg.get("target") or {}
     task_scope = msg.get("scope") or {"allow": [task_target.get("value")] if task_target else []}
+    # Prefer explicit initial_instruction when present (already utterance-only after #455 S1).
+    turn_text = str(msg.get("initial_instruction") or msg.get("text") or "")
     out = {
         "type": "task_assign",
         "conversation_id": conv_id,
         "task_id": task_id,
         "target": task_target,
         "scope": task_scope,
-        "initial_instruction": msg.get("text", ""),
+        "initial_instruction": turn_text,
         "snapshot": msg.get("snapshot") or {},
     }
+    if msg.get("session_continue") is True:
+        out["session_continue"] = True
     goal_objective = _goal_objective_from_message(msg)
     if goal_objective:
         out["goal_objective"] = goal_objective
@@ -6879,21 +6962,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         }, "agent")
                         continue
 
-                    # Resume after terminal: short continue + resumable target → re-dispatch with context.
+                    # Spec #455: same-Session continue — sticky structure + utterance only
+                    # (no engagement-book rewrap). Task package remains accounting only.
                     has_resume_task = _has_resumable_task(resume_context)
                     same_mode_continue = False
-                    if (
-                        not is_default
-                        and str(conversation_status or "").lower()
-                        in {"failed", "incomplete", "paused", "canceled", "cancelled"}
-                        and has_resume_task
-                        and _looks_like_continue_request(str(msg.get("text") or ""))
+                    if _should_session_continue_sticky(
+                        is_default=is_default,
+                        conversation_status=conversation_status,
+                        has_resume_task=has_resume_task,
+                        msg=msg,
                     ):
-                        resumed_msg, resumed = _resume_message_from_context(msg, resume_context)
-                        if resumed_msg:
-                            msg = resumed_msg
-                            # Spec #277 A1: same-mode continue — Session work_mode wins over sticky Graph.
-                            same_mode_continue = True
+                        msg = await _hydrate_sticky_expert_on_message(conv_id, msg)
+                        if not _message_has_task_target(msg):
+                            resumed_msg, resumed = _resume_message_from_context(
+                                msg, resume_context
+                            )
+                            if resumed_msg:
+                                msg = resumed_msg
+                        else:
+                            # Own target this turn; still mark Session continue for work envelope.
+                            msg = {**msg, "session_continue": True}
+                        # Spec #277 A1: same-mode continue — Session work_mode wins over sticky Graph.
+                        same_mode_continue = True
 
                     # Resolve engagement for Node seat.
                     if is_default:

@@ -24,6 +24,9 @@ import {
     "running still blue",
   );
   assert.equal(packageStatusTitle("paused", true), "等待授权");
+  // Spec #455: package light is segment status, not Case death.
+  assert.equal(packageStatusTitle("failed"), "本段错误");
+  assert.equal(packageStatusTitle("canceled"), "本段已中止");
   assert.equal(
     resolvePackageLightStatus({ packageStatus: "paused", working: true }),
     "paused",

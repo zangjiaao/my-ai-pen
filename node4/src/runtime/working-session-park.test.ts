@@ -625,10 +625,33 @@ assert.equal(
   assert.equal(out1.reparked, true, "Issue1: re-park after natural settle");
   assert.equal(disposed, 0, "Issue1: dispose must not run on incomplete Graph continue");
   assert.ok(session.messages.some((m: any) => m?.content === "继续"), "continue text prompted");
+  // Spec #455 S2/S3: park-hit prompts utterance only — no engagement-book / case_context block.
+  const prompted = session.messages.filter((m: any) => m?.role === "user").map((m: any) => String(m?.content || ""));
+  assert.ok(
+    prompted.every((t) => t === "继续" || t === "prior"),
+    "park continue must not rewrap prior instruction or inject case_context into turn body",
+  );
+  assert.ok(
+    !prompted.some((t) => t.includes("User continuation:") || t.includes("Case evidence") || t.includes("### User message")),
+    "park-hit turn body stays thin (no cold first-turn rebuild)",
+  );
   assert.ok(todo.openCount() >= 1, "todos not wiped by continue runner");
   assert.ok(
     sent.some((m: any) => m?.type === "task_start" && m?.parked_continue === true),
     "task_start marks parked_continue",
+  );
+  assert.ok(
+    sent.some(
+      (m: any) =>
+        m?.type === "task_start" && m?.parked_continue === true && m?.session_continue === true,
+    ),
+    "Spec #455: park task_start also marks session_continue",
+  );
+  assert.ok(
+    sent.some(
+      (m: any) => m?.type === "task_complete" && m?.session_continue === true && m?.parked_continue === true,
+    ),
+    "Spec #455: park settle carries session_continue for package status copy",
   );
   const startPanel = (sent.find((m: any) => m?.type === "task_start") as any)?.panel_agents?.[0];
   assert.equal(

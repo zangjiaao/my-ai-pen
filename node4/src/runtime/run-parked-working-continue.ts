@@ -77,6 +77,9 @@ async function reemitParkedTodos(
 
 /**
  * Prompt the parked captain with the continue message; re-park when incomplete.
+ *
+ * Spec #455 S2: turn body is `task.instruction` (operator utterance) only —
+ * no cold multi-block user prompt rebuild / case_context re-inject here.
  */
 export async function runParkedWorkingContinue(options: {
   config: Node4Config;
@@ -162,6 +165,8 @@ export async function runParkedWorkingContinue(options: {
     graph_id: parked.graphId,
     panel_agents: panel.list(),
     parked_continue: true,
+    // Spec #455: park attach is always same-Session continue (package = accounting).
+    session_continue: true,
     stage_id: parked.stageId,
   } as any);
 
@@ -175,6 +180,7 @@ export async function runParkedWorkingContinue(options: {
     status: "running",
     work_mode: workMode === "graph" ? `hard_graph:${parked.graphId || "graph"}:parked` : "free",
     parked_continue: true,
+    session_continue: true,
   } as any);
 
   await reemitParkedTodos(platform, task, parked);
@@ -340,6 +346,7 @@ export async function runParkedWorkingContinue(options: {
     stop_reason: aborted ? "aborted" : "parked_continue",
     work_mode: workMode,
     parked_continue: true,
+    session_continue: true,
     reparked,
     end_time: endTime,
     started_at: startedAt,

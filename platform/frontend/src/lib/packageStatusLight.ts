@@ -99,9 +99,10 @@ export function packageStatusTitle(
   ) {
     return "运行中";
   }
-  if (s === "failed") return "错误";
+  // Spec #455 / #354: package segment light — not Case death.
+  if (s === "failed") return "本段错误";
   if (s === "canceled" || s === "cancelled" || s === "stopped" || s === "aborted") {
-    return "已中止";
+    return "本段已中止";
   }
   if (s === "completed" || s === "done" || s === "finished" || s === "success" || s === "idle") {
     return "空闲";

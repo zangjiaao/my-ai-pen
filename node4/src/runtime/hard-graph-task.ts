@@ -340,6 +340,8 @@ export async function runHardGraphExpertTask(options: {
     graph_label: graph.label,
     engagement_template: graph.id,
     panel_agents: panel.list(),
+    // Spec #455: same-Session continue cold Graph reseed (if platform flagged).
+    ...(task.sessionContinue ? { session_continue: true as const } : {}),
   } as PlatformMessage);
 
   const startMsg: PlatformMessage = {
