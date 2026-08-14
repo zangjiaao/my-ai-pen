@@ -48,6 +48,7 @@ export function humanizeToolName(tool: string): string {
     platform_update_finding_status: "更新漏洞状态",
     platform_enrich_asset: "补充资产信息",
     platform_conversation_snapshot: "读取会话快照",
+    platform_set_conversation_title: "更新会话标题",
     platform_list_reports: "查询报告列表",
     platform_create_report: "生成交付报告",
     request_user_decision: "请求用户授权",

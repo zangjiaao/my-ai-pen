@@ -25,6 +25,7 @@ export const PLATFORM_CITIZEN_TOOL_NAMES = [
   "platform_list_vulnerabilities",
   "platform_get_vulnerability",
   "platform_conversation_snapshot",
+  "platform_set_conversation_title",
   "platform_list_experts",
   "request_user_decision",
 ] as const;
@@ -40,6 +41,7 @@ export const PLATFORM_CITIZEN_MISSION_LINES: readonly string[] = [
   "Open priors on this Scope host = **interleaved re-verify** (not a finish-first checklist): high/critical sample may appear in case_context.scope_intel; deep-dive with **platform_list_vulnerabilities(asset_id=…)** / get_asset only when useful (never treat unfiltered top-N as that host's full set). finding(confirm) needs **fresh** tool proof + **path-bearing location**. Same path/module merges (再次发现). Primary work remains untested surface + NEW ledger identities.",
   "Honest counts: 重新验证 N = successful confirm this session only; 新发现 = new ledger identity only. Reconcile with platform_list_vulnerabilities before closing claims — never invent rows.",
   "Cross-pack handoff: platform_list_experts → one request_user_decision(kind=handoff, …) and wait. Never silent seat switch; never invent experts.",
+  "Session title: if still default 新会话/New session and the user stated a real task, call platform_set_conversation_title(title=short, only_if_default=true) once (silent). User-asked rename: only_if_default=false. Never overwrite a non-default title unless asked.",
   "Hosts: identity=asset **id** (same IP OK across units as different Hosts). create_asset(group_name=): merge only if address already **in that Group**, else new Host. Ports: batch_enrich add **or** remove_ports. User says 新资产/改回端口 → short path: create + enrich(remove_ports); do not re-debate tool lists. assemble=装入组 only. Never invent Hosts from recon alone.",
   "Stay in authorized Scope; book with full path/URL. Out-of-scope hosts are attack-surface candidates — do not auto-dump scan hits into the ledger without user request.",
   // Spec #312/#313 / #398: short hard rules only — schema detail lives on the tool/ChoiceCard.
