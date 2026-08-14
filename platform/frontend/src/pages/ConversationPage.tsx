@@ -354,7 +354,13 @@ export default function ConversationPage() {
   /** User preference: hide Status panel (like sidebar collapse). Independent of content availability. */
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(readRightPanelCollapsed);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
+  /** Case-scoped snapshot assets (agent/session read-model; may be empty). */
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
+  /**
+   * Owner-ledger hosts (user-scoped GET /api/assets) for Surface 「已纳入」.
+   * Spec #454: enroll chip matches library host:port, not Case-only assets.
+   */
+  const [ownerLedgerAssets, setOwnerLedgerAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
@@ -1934,6 +1940,16 @@ export default function ConversationPage() {
     setInterrupting(false);
   }, []);
 
+  /** Owner ledger for Surface 已纳入 (user-scoped; independent of Case snapshot assets). */
+  const loadOwnerLedgerAssets = useCallback(async () => {
+    try {
+      const rows = await authFetch<Array<Record<string, unknown>>>("/api/assets?limit=200");
+      setOwnerLedgerAssets(Array.isArray(rows) ? rows : []);
+    } catch {
+      /* non-fatal: enroll chip falls back to case assets / local enrolledKeys */
+    }
+  }, []);
+
   const loadConversation = useCallback(async (id: string | null) => {
     stateRefreshSeqRef.current += 1;
     setLiveStreams(clearLiveStreams());
@@ -1966,6 +1982,8 @@ export default function ConversationPage() {
     setActiveConversationNodeId(conversations.find(c => c.id === id)?.node_id || null);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     send({ type: "subscribe", conversation_id: id });
+    // Spec #454: Surface 已纳入 uses owner ledger host:port, not Case-only assets.
+    void loadOwnerLedgerAssets();
 
     const conversationStatus = conversations.find(c => c.id === id)?.status || "created";
     const fallbackState = snapshotFromMessages([], conversationStatus);
@@ -1994,7 +2012,7 @@ export default function ConversationPage() {
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
     }
-  }, [applyConversationState, conversations, fetchAll, navigate, queryClient, resetConversationState, send]);
+  }, [applyConversationState, conversations, fetchAll, loadOwnerLedgerAssets, navigate, queryClient, resetConversationState, send]);
   loadConversationRef.current = loadConversation;
 
   useEffect(() => {
@@ -3506,7 +3524,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               trafficExchanges={trafficExchanges}
               surfaceLedger={surfaceLedger}
               findings={findings}
-              assets={assets}
+              assets={ownerLedgerAssets.length ? ownerLedgerAssets : assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
               conversationId={activeId}
@@ -3538,6 +3556,11 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
+              onEnrolledAsset={(asset) => {
+                const row = { ...asset, id: asset.id || asset.asset_id };
+                setAssets((prev) => upsertBy(prev, row, "address"));
+                setOwnerLedgerAssets((prev) => upsertBy(prev, row, "address"));
+              }}
               onWorkerClick={(agent, workerOrdinal) => {
                 // Prefer bare sub_* id for Case frames (panel may use root-prefixed ids).
                 const rawId = String(agent.id || "").trim();

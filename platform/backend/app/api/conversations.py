@@ -295,7 +295,7 @@ async def delete_participant_session(
             open_todos = raw
     ctx = dict(c.context) if isinstance(c.context, dict) else {}
     if not open_todos:
-        open_todos = _open_todos_from_context(ctx)
+        open_todos = _open_todos_from_context(ctx, expert_id=expert_id or None)
 
     if expert_id:
         ctx = put_pending_handoff(ctx, expert_id=expert_id, open_todos=open_todos, source="session_delete")
@@ -1003,29 +1003,21 @@ def _active_expert_id(c: Conversation) -> str | None:
     return eid or None
 
 
-def _open_todos_from_context(ctx: dict) -> list:
-    """Build incomplete Todo-phase snapshot from platform plan_tree for handoff hold."""
+def _open_todos_from_context(ctx: dict, expert_id: object = None) -> list:
+    """Build incomplete Todo-phase snapshot from Case Tasks for handoff hold / seed."""
+    from app.services.session_handoff import open_todo_phases_for_expert, open_todo_phases_from_plan_tree
+
+    if expert_id is not None and str(expert_id or "").strip():
+        return open_todo_phases_for_expert(ctx, expert_id)
+    # No expert: flatten any participant / checkpoint tree still open.
+    phases = open_todo_phases_for_expert(ctx, "")
+    if phases:
+        return phases
     tree = ctx.get("plan_tree") if isinstance(ctx.get("plan_tree"), list) else []
     if not tree:
         checkpoint = ctx.get("checkpoint") if isinstance(ctx.get("checkpoint"), dict) else {}
         tree = checkpoint.get("plan_tree") if isinstance(checkpoint.get("plan_tree"), list) else []
-    open_items: list[str] = []
-    for node in tree:
-        if not isinstance(node, dict):
-            continue
-        level = str(node.get("level") or "work_item").lower()
-        if level not in {"work_item", "task", ""}:
-            continue
-        status = str(node.get("status") or "").lower()
-        if status in {"done", "failed", "skipped", "blocked"}:
-            continue
-        title = str(node.get("title") or node.get("name") or "").strip()
-        if title:
-            open_items.append(title)
-    if not open_items:
-        return []
-    return [{"name": "Handoff", "tasks": [{"title": t, "status": "pending"} for t in open_items]}]
-
+    return open_todo_phases_from_plan_tree(tree)
 
 async def _notify_node_case_session_release(node_id: object, conversation_id: str) -> dict:
     """Spec #354: structured Case close → Node release all captains.

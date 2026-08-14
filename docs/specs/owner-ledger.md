@@ -100,8 +100,8 @@ Worked example (system Groups): filter Group=`系统2` AND tag=`数据库服务�
 ### UI (页内 Tab + 资产卡)
 
 ```
-[搜索]  [标签]                         [新建组] [添加主机]
-XXX公司  XXX系统1  未分组                         编辑组
+[搜索]  [标签]                                      [添加主机]
+全部 | XXX公司  XXX系统1  未分组              新建组  编辑组
 ────────────────────────────────────────────────
 ┌ 1.1.1.1              80 / http     系统1     ┐
 │ example.com          443 / https   系统2     │
@@ -110,9 +110,12 @@ XXX公司  XXX系统1  未分组                         编辑组
 ```
 
 1. Same page chrome as 漏洞/专家：TopBar + filter + actions. **No second sidebar.**  
-2. Groups are **page tabs** (underline, same as the Case right-panel tabs). Click to switch the card list.  
+2. Groups are **page tabs**. **全部** is always first (unique Hosts, full ports). Named groups then 未分组. Click to switch the card list.  
 3. Each Host is one Expert-style card: one hairline. Left identity (primary, aliases, Host tags); right one port per row (port, Service tags). No inner frames.  
-4. 「编辑组」opens the Group dialog. Click Host / port → that object’s dialog.
+4. 「编辑组」opens the Group dialog. Pencil on a Host card → Host dialog（**编辑 / 端口 / 情报 / 漏洞**）。端口 tab 勾选后批量删除。Click port → Service dialog。
+5. Host 卡右上角图标：编辑 / 添加端口 / 删除主机。添加端口在卡内展开一行；当前组会把新端口收进该组装。删除主机走确认框。端口行 hover 右侧出删除，确认后从主机移除该端口。
+6. 点击卡片选中（可多选），不进编辑。选中后「移动到」把主机从当前组装挪到目标组（带走当前端口子集）；移到「未分组」只拆当前组装。
+7. 右侧 Case Surface 树的 origin 行（hover「纳入」）是用户 promote：确认后 POST Host + 该 origin 的端口。不改 #368 树，不把路径抄进 Service 攻击面。**已入库判断 = Owner ledger（用户 `GET /api/assets` host:port）**，不是 Case snapshot 的 `conversation_id` 资产列表；已入库的 host:port 显示「已纳入」。
 
 A Host can still belong to many Groups; the tab shows that Group’s port subset. Surface tab stays #368. No Service-cluster chrome.
 
@@ -187,3 +190,10 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-13 | UI 方案 A 资产卡：组抽屉 + Host 卡（左身份/别名/tag，右端口一行一个）。 |
 | 2026-08-13 | UI 档案布局：左分组列表，右当前组资产卡。 |
 | 2026-08-13 | UI：去掉第二侧栏。组用页内 Tab；Host 用单层卡片。 |
+| 2026-08-13 | UI：Host 卡右上角「添加端口」「删除主机」。当前组组装收进新端口。 |
+| 2026-08-13 | UI：Host 对话框只留 编辑 / 情报 / 漏洞。端口与攻击面在卡和 Service 对话框。 |
+| 2026-08-13 | UI：卡右上角改图标；点击卡片选中并可移动到其他组。 |
+| 2026-08-13 | UI：Host 对话框加回端口 tab，勾选后批量删除。 |
+| 2026-08-13 | UI：组 Tab 常驻「全部」；筛选与组操作分行。 |
+| 2026-08-14 | UI：右侧 Surface origin 可用户确认纳入资产库（Host + 该端口）。 |
+| 2026-08-14 | Surface「已纳入」对照 Owner ledger（`GET /api/assets`），不限本 Case `conversation_id`。 |

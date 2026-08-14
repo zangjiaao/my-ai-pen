@@ -171,8 +171,10 @@ export async function runNode4Task(
   });
   const sessionWorkModeForPark: "free" | "graph" =
     workPath.path === "hard" && hardResolved.mode === "hard" ? "graph" : "free";
-  // Spec #354 S4: platform handoff after Session Delete must not revive a ghost park.
-  if (task.pendingHandoffTodos != null || (task as { pendingHandoff?: boolean }).pendingHandoff) {
+  // Spec #354 S4: Session Delete handoff must not revive a ghost park.
+  // Only `pendingHandoff` (hold consume) drops park — bare `pendingHandoffTodos`
+  // is also used for Free cold-continue seed and must not kill a live park attach.
+  if ((task as { pendingHandoff?: boolean }).pendingHandoff === true) {
     await dropParkedSession(task.conversationId, task.expertId || pack.id);
   }
 
