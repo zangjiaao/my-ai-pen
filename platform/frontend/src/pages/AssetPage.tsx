@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Clock,
+  History,
+  Network,
+  Pencil,
+  Plus,
+  Server,
+  ShieldAlert,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
@@ -7,7 +17,15 @@ import AssetDetailDialog from "../components/AssetDetailDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import GroupLedgerDialog from "../components/GroupLedgerDialog";
 import ServiceLedgerDialog from "../components/ServiceLedgerDialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { buildRiskChips, type RiskChip } from "../components/cards/FindingCard";
+import { parseBulkHostCsv, summarizeBulkGroups } from "../lib/bulkHostImport";
 
 type RelatedVuln = {
   id: string;
@@ -39,6 +57,8 @@ type Asset = {
   services?: Service[];
   aliases?: string[];
   related_vulnerabilities: RelatedVuln[];
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type RiskSummary = {
@@ -57,8 +77,20 @@ type TreeHost = {
   source_label?: string;
   risk?: RiskSummary;
   related_vulnerabilities?: RelatedVuln[];
+  created_at?: string | null;
   updated_at?: string | null;
 };
+
+/** Host list sort modes (UI filter bar). Icons carry direction / meaning; no parenthetical copy. */
+type HostSortKey = "address" | "created_desc" | "created_asc" | "ports_desc" | "vulns_desc";
+
+const HOST_SORT_OPTIONS: { value: HostSortKey; label: string; Icon: LucideIcon }[] = [
+  { value: "address", label: "地址", Icon: Network },
+  { value: "created_desc", label: "最新添加", Icon: History },
+  { value: "created_asc", label: "最早添加", Icon: Clock },
+  { value: "ports_desc", label: "端口数", Icon: Server },
+  { value: "vulns_desc", label: "漏洞数", Icon: ShieldAlert },
+];
 
 type TreeGroup = {
   id: string;
@@ -80,14 +112,96 @@ type AssetGroup = {
 
 const EMPTY_FORM = { address: "", tags: "", groupIds: [] as string[] };
 const ALL_SECTION = "all";
+const BULK_PLACEHOLDER = `address,port,protocol,name
+10.0.0.1,80,tcp,http
+10.0.0.1,443,tcp,https
+pay.example.com,8080,tcp,http
+10.0.0.2,22,tcp,ssh
+# 同一主机多行 = 多端口；port 也可写 80/tcp
+# 协议可选 tcp/udp/http/https…；仅主机一行也可
+`;
 
 function isGroupId(id: string) {
   return Boolean(id) && id !== ALL_SECTION;
 }
 
+/** IPv4 → [a,b,c,d] for numeric compare; null if not IPv4. */
+function parseIPv4(address: string): number[] | null {
+  const s = String(address || "").trim();
+  // Strip optional brackets / zone / trailing port only when clearly IPv4 host:port
+  const host = s.includes(":") && /^\d+\.\d+\.\d+\.\d+:\d+$/.test(s) ? s.split(":")[0] : s;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return null;
+  const parts = m.slice(1, 5).map((x) => Number(x));
+  if (parts.some((n) => n > 255)) return null;
+  return parts;
+}
+
+/** Default address order: IPv4 by octet, then domains A–Z (case-insensitive). IPs before domains. */
+function compareHostAddress(a: string, b: string): number {
+  const ia = parseIPv4(a);
+  const ib = parseIPv4(b);
+  if (ia && ib) {
+    for (let i = 0; i < 4; i++) {
+      if (ia[i] !== ib[i]) return ia[i] - ib[i];
+    }
+    return 0;
+  }
+  if (ia && !ib) return -1;
+  if (!ia && ib) return 1;
+  return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+}
+
+function hostPortCount(h: TreeHost): number {
+  return (h.services || []).length;
+}
+
+function hostVulnCount(h: TreeHost): number {
+  return (h.related_vulnerabilities || []).length || h.risk?.open_total || 0;
+}
+
+function hostCreatedMs(h: TreeHost): number {
+  const raw = h.created_at || h.updated_at;
+  if (!raw) return 0;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function sortHosts(hosts: TreeHost[], key: HostSortKey): TreeHost[] {
+  const list = [...hosts];
+  list.sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case "created_desc":
+        cmp = hostCreatedMs(b) - hostCreatedMs(a);
+        break;
+      case "created_asc":
+        cmp = hostCreatedMs(a) - hostCreatedMs(b);
+        break;
+      case "ports_desc":
+        cmp = hostPortCount(b) - hostPortCount(a);
+        break;
+      case "vulns_desc":
+        cmp = hostVulnCount(b) - hostVulnCount(a);
+        break;
+      case "address":
+      default:
+        cmp = compareHostAddress(a.address, b.address);
+        break;
+    }
+    if (cmp !== 0) return cmp;
+    // Stable tie-break: numeric IP / alpha address, then id.
+    const addr = compareHostAddress(a.address, b.address);
+    if (addr !== 0) return addr;
+    return a.id.localeCompare(b.id);
+  });
+  return list;
+}
+
 export default function AssetPage() {
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [hostSort, setHostSort] = useState<HostSortKey>("address");
   const [openMenu, setOpenMenu] = useState<"tag" | "move" | null>(null);
   const filterBarRef = useRef<HTMLDivElement>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -100,6 +214,9 @@ export default function AssetPage() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState("");
+  /** single = one host field; bulk = CSV multi host/port/protocol */
+  const [createMode, setCreateMode] = useState<"single" | "bulk">("single");
+  const [bulkText, setBulkText] = useState("");
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [groupFormName, setGroupFormName] = useState("");
   const [groupFormError, setGroupFormError] = useState("");
@@ -121,6 +238,14 @@ export default function AssetPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState("");
+  /** Multi-select: remove from assembly (→ 未分组), not hard-delete Host. */
+  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false);
+  const [removingBulk, setRemovingBulk] = useState(false);
+  const [bulkRemoveError, setBulkRemoveError] = useState("");
+  /** Multi-select: hard-delete Hosts from ledger (all Groups lose them). */
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [deletingBulk, setDeletingBulk] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState("");
 
   const params = useMemo(() => {
     const p = new URLSearchParams();
@@ -134,7 +259,7 @@ export default function AssetPage() {
     try {
       const [treeRes, catalog, groups] = await Promise.all([
         authFetch<AssetTree>(`/api/assets/tree?${params}`),
-        authFetch<Asset[]>("/api/assets?limit=200"),
+        authFetch<Asset[]>("/api/assets?limit=2000"),
         authFetch<AssetGroup[]>("/api/asset-groups").catch(() => [] as AssetGroup[]),
       ]);
       const nextTree = treeRes.groups || [];
@@ -144,6 +269,9 @@ export default function AssetPage() {
       setAllTags(treeRes.all_tags || []);
       setAssets(catalog);
       setGroupRows(groups);
+      // Drop only vanished Hosts (deleted). Keep selection across search/tag filters.
+      const live = new Set(catalog.map((a) => a.id));
+      setSelectedIds((prev) => prev.filter((id) => live.has(id)));
       const navIds = [
         ALL_SECTION,
         ...nextGroups.map((g) => g.id),
@@ -181,33 +309,45 @@ export default function AssetPage() {
     if (ungrouped) items.push({ id: "", name: "未分组", count: ungrouped.hosts.length });
     return items;
   }, [tree, allGroups]);
+  const enrichHost = (host: TreeHost): TreeHost => {
+    const catalog = assetById.get(host.id);
+    return {
+      ...host,
+      aliases: host.aliases?.length ? host.aliases : aliasesFromAsset(catalog),
+      services: catalog?.services?.length ? catalog.services : host.services || [],
+      related_vulnerabilities: host.related_vulnerabilities?.length
+        ? host.related_vulnerabilities
+        : catalog?.related_vulnerabilities,
+      created_at: host.created_at || catalog?.created_at || null,
+      updated_at: host.updated_at || catalog?.updated_at || null,
+    };
+  };
+
   const allViewHosts = useMemo(() => {
     const seen = new Map<string, TreeHost>();
     for (const section of tree) {
       for (const host of section.hosts) {
         if (seen.has(host.id)) continue;
-        const catalog = assetById.get(host.id);
-        seen.set(host.id, {
-          ...host,
-          aliases: host.aliases?.length ? host.aliases : aliasesFromAsset(catalog),
-          services: catalog?.services?.length ? catalog.services : host.services,
-          related_vulnerabilities: host.related_vulnerabilities?.length
-            ? host.related_vulnerabilities
-            : catalog?.related_vulnerabilities,
-        });
+        seen.set(host.id, enrichHost(host));
       }
     }
-    return [...seen.values()].sort((a, b) => a.address.localeCompare(b.address));
-  }, [tree, assetById]);
+    return sortHosts([...seen.values()], hostSort);
+  }, [tree, assetById, hostSort]);
   const isAll = activeSectionId === ALL_SECTION;
   const isUngrouped = activeSectionId === "";
-  const activeSection = isAll
-    ? { id: ALL_SECTION, name: "全部", hosts: allViewHosts }
-    : tree.find((s) => s.id === activeSectionId) || {
-        id: activeSectionId,
-        name: groupTabs.find((n) => n.id === activeSectionId)?.name || "未分组",
-        hosts: [] as TreeHost[],
-      };
+  const activeSection = useMemo(() => {
+    if (isAll) {
+      return { id: ALL_SECTION, name: "全部", hosts: allViewHosts };
+    }
+    const section = tree.find((s) => s.id === activeSectionId);
+    const raw = section?.hosts || [];
+    const hosts = sortHosts(raw.map(enrichHost), hostSort);
+    return {
+      id: activeSectionId,
+      name: section?.name || groupTabs.find((n) => n.id === activeSectionId)?.name || "未分组",
+      hosts,
+    };
+  }, [isAll, allViewHosts, tree, activeSectionId, groupTabs, hostSort, assetById]);
   const cardColumns = useCardColumns();
   const hostColumns = useMemo(
     () => splitRoundRobin(activeSection.hosts, cardColumns),
@@ -219,13 +359,86 @@ export default function AssetPage() {
     return groups;
   }, [allGroups, activeSectionId, isAll]);
 
-  useEffect(() => {
-    setSelectedIds([]);
-    setMoveError("");
-    setOpenMenu((m) => (m === "move" ? null : m));
-  }, [activeSectionId]);
+  // Selection is sticky across search / tags / tab changes so multi-step pick works
+  // (filter → select → refilter → select more → move). Only cleared by 取消, after
+  // bulk ops, or when a Host is deleted from the ledger.
+
+  const bulkPreview = useMemo(() => parseBulkHostCsv(bulkText), [bulkText]);
+
+  const attachToGroups = async (assetId: string, ports: string[]) => {
+    for (const gid of form.groupIds) {
+      await authFetch(`/api/asset-groups/${gid}/hosts/${assetId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ports }),
+      });
+    }
+  };
 
   const createAsset = async () => {
+    if (createMode === "bulk") {
+      const parsed = parseBulkHostCsv(bulkText);
+      if (!parsed.groups.length) {
+        setFormError(
+          parsed.errors.length
+            ? parsed.errors.slice(0, 3).join("；")
+            : "请粘贴 CSV：address,port,protocol,name",
+        );
+        return;
+      }
+      setSaving(true);
+      setFormError("");
+      try {
+        let ok = 0;
+        const fail: string[] = [];
+        for (const group of parsed.groups) {
+          try {
+            const created = await authFetch<Asset>("/api/assets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                address: group.address,
+                tags: group.tags,
+                ports: group.services.map((s) => s.port),
+                services: group.services.map((s) => ({
+                  port: s.port,
+                  protocol: s.protocol || undefined,
+                  name: s.name || undefined,
+                })),
+                group_ids: form.groupIds,
+              }),
+            });
+            await attachToGroups(
+              created.id,
+              group.services.map((s) => s.port),
+            );
+            ok += 1;
+          } catch (err) {
+            fail.push(
+              `${group.address}: ${err instanceof Error ? err.message : "失败"}`,
+            );
+          }
+        }
+        if (!ok && fail.length) {
+          setFormError(fail.slice(0, 4).join("；"));
+          return;
+        }
+        setShowForm(false);
+        setForm(EMPTY_FORM);
+        setBulkText("");
+        setCreateMode("single");
+        if (fail.length) {
+          setError(`已创建 ${ok} 台，部分失败：${fail.slice(0, 3).join("；")}`);
+        }
+        await load();
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : "批量创建失败");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!form.address.trim()) {
       setFormError("请填写 IP 或域名");
       return;
@@ -242,15 +455,10 @@ export default function AssetPage() {
             .split(/[,，;；\n]+/)
             .map((t) => t.trim())
             .filter(Boolean),
+          group_ids: form.groupIds,
         }),
       });
-      for (const gid of form.groupIds) {
-        await authFetch(`/api/asset-groups/${gid}/hosts/${created.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ports: [] }),
-        });
-      }
+      await attachToGroups(created.id, []);
       setShowForm(false);
       setForm(EMPTY_FORM);
       await load();
@@ -265,6 +473,33 @@ export default function AssetPage() {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
+  const sectionHostIds = useMemo(
+    () => activeSection.hosts.map((h) => h.id),
+    [activeSection.hosts],
+  );
+  const selectedInViewCount = useMemo(
+    () => sectionHostIds.filter((id) => selectedIds.includes(id)).length,
+    [sectionHostIds, selectedIds],
+  );
+  const selectedOutsideViewCount = selectedIds.length - selectedInViewCount;
+  const allSectionSelected =
+    sectionHostIds.length > 0 && sectionHostIds.every((id) => selectedIds.includes(id));
+  const someSectionSelected =
+    sectionHostIds.some((id) => selectedIds.includes(id)) && !allSectionSelected;
+
+  /** Toggle only the current filtered list; other selected ids stay (accumulate across filters). */
+  const toggleSelectAllSection = () => {
+    if (allSectionSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !sectionHostIds.includes(id)));
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of sectionHostIds) next.add(id);
+      return [...next];
+    });
+  };
+
   const assemblyPortsFor = (hostId: string, host: TreeHost | undefined) => {
     if (isGroupId(activeSectionId)) {
       const member = groupRows
@@ -275,33 +510,48 @@ export default function AssetPage() {
     return (host?.services || []).map((s) => s.port);
   };
 
+  const resolveHostForPorts = (id: string): TreeHost | undefined => {
+    const fromView =
+      activeSection.hosts.find((h) => h.id === id) || allViewHosts.find((h) => h.id === id);
+    if (fromView) return fromView;
+    const a = assetById.get(id);
+    if (!a) return undefined;
+    return {
+      id: a.id,
+      address: a.address,
+      name: a.name,
+      tags: a.tags || [],
+      aliases: aliasesFromAsset(a),
+      services: a.services || [],
+    } as TreeHost;
+  };
+
+  const portsByAssetForSelection = (ids: string[]) => {
+    const ports_by_asset: Record<string, string[]> = {};
+    for (const id of ids) {
+      ports_by_asset[id] = assemblyPortsFor(id, resolveHostForPorts(id));
+    }
+    return ports_by_asset;
+  };
+
   const moveSelectedTo = async (targetId: string) => {
     if (!selectedIds.length) return;
     setMoving(true);
     setMoveError("");
     try {
-      for (const id of selectedIds) {
-        const host = activeSection.hosts.find((h) => h.id === id);
-        const already = targetId
-          ? Boolean(groupRows.find((g) => g.id === targetId)?.members.some((m) => m.asset_id === id))
-          : false;
-        if (targetId && !already) {
-          await authFetch(`/api/asset-groups/${targetId}/hosts/${id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ports: assemblyPortsFor(id, host) }),
-          });
-        }
-        if (isGroupId(activeSectionId)) {
-          await authFetch(`/api/asset-groups/${activeSectionId}/hosts/${id}`, { method: "DELETE" });
-        } else if (isAll && !targetId) {
-          for (const group of groupRows) {
-            if (group.members.some((m) => m.asset_id === id)) {
-              await authFetch(`/api/asset-groups/${group.id}/hosts/${id}`, { method: "DELETE" });
-            }
-          }
-        }
-      }
+      // One request / one DB transaction — not N× PUT+DELETE (was ~30s for /24).
+      await authFetch("/api/asset-groups/batch-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: selectedIds,
+          target_group_id: targetId || null,
+          source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+          remove_from_all_groups: Boolean(isAll && !targetId),
+          ports_by_asset: portsByAssetForSelection(selectedIds),
+          default_ports: [],
+        }),
+      });
       setSelectedIds([]);
       setOpenMenu(null);
       setActiveSectionId(targetId);
@@ -415,12 +665,81 @@ export default function AssetPage() {
     }
   };
 
+  const selectedAddresses = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const a of assets) byId.set(a.id, a.address);
+    for (const h of activeSection.hosts) byId.set(h.id, h.address);
+    return selectedIds.map((id) => byId.get(id) || id);
+  }, [selectedIds, activeSection.hosts, assets]);
+
+  /** Drop assembly membership; Host stays in ledger (lands in 未分组 if no other Group). */
+  const removeSelectedNow = async () => {
+    if (!selectedIds.length) return;
+    // Already ungrouped — nothing to remove from.
+    if (isUngrouped) {
+      setConfirmBulkRemove(false);
+      return;
+    }
+    setRemovingBulk(true);
+    setBulkRemoveError("");
+    try {
+      await authFetch("/api/asset-groups/batch-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_ids: selectedIds,
+          target_group_id: null,
+          // Named group tab: only leave this Group (other Groups keep the Host).
+          source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+          // 全部: strip every assembly → 未分组.
+          remove_from_all_groups: Boolean(isAll),
+          default_ports: [],
+        }),
+      });
+      setSelectedIds([]);
+      setConfirmBulkRemove(false);
+      await load();
+    } catch (err) {
+      setBulkRemoveError(err instanceof Error ? err.message : "移出失败");
+    } finally {
+      setRemovingBulk(false);
+    }
+  };
+
+  /** Permanently delete Hosts from owner ledger (assemblies cascade away). */
+  const deleteSelectedNow = async () => {
+    if (!selectedIds.length) return;
+    setDeletingBulk(true);
+    setBulkDeleteError("");
+    const ids = [...selectedIds];
+    try {
+      await authFetch("/api/assets/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_ids: ids }),
+      });
+      if (hostId && ids.includes(hostId)) setHostId(null);
+      if (serviceKey && ids.includes(serviceKey.assetId)) setServiceKey(null);
+      if (addPortHostId && ids.includes(addPortHostId)) setAddPortHostId(null);
+      setSelectedIds([]);
+      setConfirmBulkDelete(false);
+      await load();
+    } catch (err) {
+      setBulkDeleteError(err instanceof Error ? err.message : "批量删除失败");
+    } finally {
+      setDeletingBulk(false);
+    }
+  };
+
+  const bulkBusy = moving || removingBulk || deletingBulk;
+
   const createGroup = async () => {
     const name = groupFormName.trim();
     if (!name) {
       setGroupFormError("请填写组名");
       return;
     }
+    const attachIds = [...selectedIds];
     setSavingGroup(true);
     setGroupFormError("");
     try {
@@ -429,6 +748,22 @@ export default function AssetPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
+      if (attachIds.length) {
+        // Create + move selected Hosts into the new Group in one user action.
+        await authFetch("/api/asset-groups/batch-move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            asset_ids: attachIds,
+            target_group_id: created.id,
+            source_group_id: isGroupId(activeSectionId) ? activeSectionId : null,
+            remove_from_all_groups: false,
+            ports_by_asset: portsByAssetForSelection(attachIds),
+            default_ports: [],
+          }),
+        });
+        setSelectedIds([]);
+      }
       setShowGroupForm(false);
       setGroupFormName("");
       setActiveSectionId(created.id);
@@ -465,6 +800,32 @@ export default function AssetPage() {
                 onToggleValue={(v) => toggleInList(selectedTags, v, setSelectedTags)}
                 emptyText="暂无标签"
               />
+              <Select
+                value={hostSort}
+                onValueChange={(v) => setHostSort(v as HostSortKey)}
+              >
+                <SelectTrigger
+                  className="w-auto min-w-[9rem] max-w-[16rem] shrink-0"
+                  aria-label="主机列表排序"
+                >
+                  <SelectValue placeholder="排序：地址">
+                    {`排序：${HOST_SORT_OPTIONS.find((o) => o.value === hostSort)?.label || "地址"}`}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {HOST_SORT_OPTIONS.map((opt) => {
+                    const Icon = opt.Icon;
+                    return (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <span className="inline-flex items-center gap-2">
+                          <Icon className="h-3.5 w-3.5 shrink-0 text-ink-muted" aria-hidden />
+                          {opt.label}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
               <button
                 type="button"
                 onClick={() => {
@@ -473,6 +834,8 @@ export default function AssetPage() {
                     groupIds: isGroupId(activeSectionId) ? [activeSectionId] : [],
                   });
                   setFormError("");
+                  setCreateMode("single");
+                  setBulkText("");
                   setShowForm(true);
                 }}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
@@ -517,21 +880,45 @@ export default function AssetPage() {
                 })}
               </div>
               <div className="flex shrink-0 items-center gap-2 pb-2">
+                {activeSection.hosts.length ? (
+                  <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas">
+                    <input
+                      type="checkbox"
+                      checked={allSectionSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSectionSelected;
+                      }}
+                      onChange={toggleSelectAllSection}
+                      className="rounded border-hairline"
+                      aria-label="全选当前列表主机"
+                    />
+                    <span>
+                      {allSectionSelected
+                        ? "取消当前列表"
+                        : `全选当前列表${activeSection.hosts.length ? ` ${activeSection.hosts.length}` : ""}`}
+                    </span>
+                  </label>
+                ) : null}
                 {selectedIds.length ? (
                   <div className="flex h-7 items-center gap-2 rounded-md border border-hairline bg-surface px-2 text-xs">
-                    <span className="leading-none text-ink-secondary">已选 {selectedIds.length}</span>
+                    <span className="leading-none text-ink-secondary" title="搜索/筛选不会清空已选；可跨条件累加">
+                      已选 {selectedIds.length}
+                      {selectedOutsideViewCount > 0
+                        ? `（当前列表 ${selectedInViewCount}）`
+                        : ""}
+                    </span>
                     <span className="h-3 w-px shrink-0 bg-hairline" />
                     <div className="relative">
                       <button
                         type="button"
-                        disabled={moving || !moveTargets.length}
+                        disabled={bulkBusy || !moveTargets.length}
                         onClick={() => setOpenMenu((m) => (m === "move" ? null : "move"))}
                         className="p-0 font-medium leading-none text-ink disabled:opacity-50"
                       >
                         {moving ? "移动中…" : "移动到"}
                       </button>
                       {openMenu === "move" ? (
-                        <div className="absolute right-0 z-20 mt-1 min-w-[8rem] overflow-y-auto rounded-md border border-hairline-soft bg-canvas py-1 shadow-lg">
+                        <div className="absolute right-0 z-20 mt-1 max-h-60 min-w-[8rem] overflow-y-auto rounded-md border border-hairline-soft bg-canvas py-1 shadow-lg">
                           {moveTargets.map((g) => (
                             <button
                               key={g.id || "ungrouped"}
@@ -549,12 +936,44 @@ export default function AssetPage() {
                         </div>
                       ) : null}
                     </div>
+                    {!isUngrouped ? (
+                      <button
+                        type="button"
+                        disabled={bulkBusy}
+                        onClick={() => {
+                          setBulkRemoveError("");
+                          setConfirmBulkDelete(false);
+                          setConfirmBulkRemove(true);
+                          setOpenMenu(null);
+                        }}
+                        className="p-0 font-medium leading-none text-ink disabled:opacity-50"
+                      >
+                        移出
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      disabled={moving}
+                      disabled={bulkBusy}
+                      onClick={() => {
+                        setBulkDeleteError("");
+                        setConfirmBulkRemove(false);
+                        setConfirmBulkDelete(true);
+                        setOpenMenu(null);
+                      }}
+                      className="p-0 font-medium leading-none text-severity-critical disabled:opacity-50"
+                    >
+                      删除
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkBusy}
                       onClick={() => {
                         setSelectedIds([]);
                         setMoveError("");
+                        setBulkRemoveError("");
+                        setBulkDeleteError("");
+                        setConfirmBulkRemove(false);
+                        setConfirmBulkDelete(false);
                       }}
                       className="p-0 leading-none text-ink-muted hover:text-ink"
                     >
@@ -564,14 +983,17 @@ export default function AssetPage() {
                 ) : null}
                 <button
                   type="button"
+                  disabled={bulkBusy || savingGroup}
                   onClick={() => {
                     setGroupFormName("");
                     setGroupFormError("");
                     setShowGroupForm(true);
                   }}
-                  className="h-7 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas"
+                  className="h-7 rounded-md border border-hairline bg-surface px-2 text-xs leading-none text-ink hover:bg-canvas disabled:opacity-50"
                 >
-                  新建组
+                  {selectedIds.length
+                    ? `新建并加入组（${selectedIds.length}）`
+                    : "新建组"}
                 </button>
                 {isGroupId(activeSectionId) ? (
                   <button
@@ -620,38 +1042,22 @@ export default function AssetPage() {
                         selected ? "border-ink bg-surface" : "border-hairline bg-canvas hover:bg-surface"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1 text-left">
-                          <div className="truncate font-mono text-base font-medium text-ink">{host.address}</div>
-                          {aliases.map((alias) => (
-                            <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
-                              {alias}
-                            </div>
-                          ))}
-                          {(host.tags?.length || hostNote) ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-1">
-                              {(host.tags || []).map((tag) => (
-                                <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
-                                  {tag}
-                                </span>
-                              ))}
-                              {hostNote ? (
-                                <span className="min-w-0 truncate text-[11px] text-ink-muted">{hostNote}</span>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          <p className="mt-2 text-[11px] text-ink-muted">
-                            {[
-                              ports.length ? `${ports.length} 个端口` : "无端口",
-                              pathTotal ? `${pathTotal} 条攻击面` : null,
-                              vulns.length ? `${vulns.length} 条发现` : null,
-                            ]
-                              .filter(Boolean)
-                              .join(" · ")}
-                          </p>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSelected(host.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="shrink-0 rounded border-hairline"
+                            aria-label={`选择 ${host.address}`}
+                          />
+                          <div className="truncate font-mono text-base font-medium text-ink">
+                            {host.address}
+                          </div>
                         </div>
                         <div
-                          className="flex shrink-0 items-center gap-0.5 pt-0.5"
+                          className="flex shrink-0 items-center gap-0.5"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <button
@@ -686,6 +1092,32 @@ export default function AssetPage() {
                           </button>
                         </div>
                       </div>
+                      {aliases.map((alias) => (
+                        <div key={alias} className="mt-0.5 truncate font-mono text-xs text-ink-secondary">
+                          {alias}
+                        </div>
+                      ))}
+                      {(host.tags?.length || hostNote) ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          {(host.tags || []).map((tag) => (
+                            <span key={tag} className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
+                              {tag}
+                            </span>
+                          ))}
+                          {hostNote ? (
+                            <span className="min-w-0 truncate text-[11px] text-ink-muted">{hostNote}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <p className="mt-2 text-[11px] text-ink-muted">
+                        {[
+                          ports.length ? `${ports.length} 个端口` : "无端口",
+                          pathTotal ? `${pathTotal} 条攻击面` : null,
+                          vulns.length ? `${vulns.length} 条发现` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
                       {addPortHostId === host.id ? (
                         <form
                           className="mt-3 flex flex-wrap items-end gap-2"
@@ -908,6 +1340,52 @@ export default function AssetPage() {
         error={deleteHostError || null}
       />
       <ConfirmDialog
+        open={confirmBulkRemove && selectedIds.length > 0}
+        title={`移出 ${selectedIds.length} 台主机`}
+        description={
+          selectedIds.length
+            ? isAll
+              ? `确定将已选 ${selectedIds.length} 台（${selectedAddresses.slice(0, 3).join("、")}${
+                  selectedAddresses.length > 3 ? " 等" : ""
+                }）从所有组移出？主机仍保留在台账，会进入「未分组」。`
+              : `确定将已选 ${selectedIds.length} 台（${selectedAddresses.slice(0, 3).join("、")}${
+                  selectedAddresses.length > 3 ? " 等" : ""
+                }）从当前组移出？主机仍保留；若不在其他组则进入「未分组」。`
+            : ""
+        }
+        busy={removingBulk}
+        confirmLabel="移出"
+        onCancel={() => {
+          if (!removingBulk) {
+            setConfirmBulkRemove(false);
+            setBulkRemoveError("");
+          }
+        }}
+        onConfirm={() => void removeSelectedNow()}
+        error={bulkRemoveError || null}
+      />
+      <ConfirmDialog
+        open={confirmBulkDelete && selectedIds.length > 0}
+        title={`删除 ${selectedIds.length} 台主机`}
+        description={
+          selectedIds.length
+            ? `确定彻底删除已选 ${selectedIds.length} 台主机（${selectedAddresses.slice(0, 3).join("、")}${
+                selectedAddresses.length > 3 ? " 等" : ""
+              }）？将从台账移除，并从所有组消失。关联漏洞仅解绑，不会删除。此操作不可撤销。`
+            : ""
+        }
+        busy={deletingBulk}
+        confirmLabel="删除"
+        onCancel={() => {
+          if (!deletingBulk) {
+            setConfirmBulkDelete(false);
+            setBulkDeleteError("");
+          }
+        }}
+        onConfirm={() => void deleteSelectedNow()}
+        error={bulkDeleteError || null}
+      />
+      <ConfirmDialog
         open={Boolean(deletePort)}
         title="删除端口"
         description={`确定从「${deletePort?.address || "该主机"}」移除端口 ${deletePort?.port || ""}？关联漏洞不会被删除，仅从端口清单中去掉。`}
@@ -924,23 +1402,99 @@ export default function AssetPage() {
 
       {showForm ? (
         <Modal title="添加主机" onClose={() => !saving && setShowForm(false)}>
-          <p className="text-xs text-ink-muted">一个主机对应一个 IP 或域名。标签打在主机上，组是另外组装的。</p>
-          <Field label="IP / 域名">
-            <input
-              value={form.address}
-              onChange={(e) => setForm({ ...form, address: e.target.value })}
-              placeholder="10.0.0.8 或 pay.example.com"
-              className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
-              autoFocus
-            />
-          </Field>
-          <Field label="标签（可选，逗号分隔）">
-            <input
-              value={form.tags}
-              onChange={(e) => setForm({ ...form, tags: e.target.value })}
-              className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
-            />
-          </Field>
+          <div className="flex gap-1 rounded-md border border-hairline bg-canvas-inset p-0.5">
+            {(
+              [
+                { id: "single" as const, label: "单台" },
+                { id: "bulk" as const, label: "批量 CSV" },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  setCreateMode(tab.id);
+                  setFormError("");
+                }}
+                className={`flex-1 rounded px-2 py-1.5 text-xs font-medium ${
+                  createMode === tab.id ? "bg-canvas text-ink shadow-sm" : "text-ink-secondary hover:text-ink"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {createMode === "single" ? (
+            <>
+              <p className="text-xs text-ink-muted">一个主机对应一个 IP 或域名。端口可在卡片上继续添加。</p>
+              <Field label="IP / 域名">
+                <input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="10.0.0.8 或 pay.example.com"
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
+                  autoFocus
+                />
+              </Field>
+              <Field label="标签（可选，逗号分隔）">
+                <input
+                  value={form.tags}
+                  onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                  className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <p className="text-xs leading-relaxed text-ink-muted">
+                每行一台主机的一个端口。列：
+                <span className="font-mono text-ink-secondary"> address,port,protocol,name[,tags]</span>
+                。同一 IP 多行会合并；协议如 tcp/udp/http/https；也支持{" "}
+                <span className="font-mono">80/tcp</span> 或 <span className="font-mono">host:443</span>。
+              </p>
+              <Field label="CSV / 粘贴">
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  rows={10}
+                  placeholder={BULK_PLACEHOLDER}
+                  spellCheck={false}
+                  className="w-full resize-y rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-ink"
+                  autoFocus
+                />
+              </Field>
+              {bulkText.trim() ? (
+                <div className="rounded-md border border-hairline-soft bg-canvas-inset px-2.5 py-2 text-[11px] text-ink-secondary">
+                  <p className="font-medium text-ink">{summarizeBulkGroups(bulkPreview.groups)}</p>
+                  {bulkPreview.groups.length ? (
+                    <ul className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono">
+                      {bulkPreview.groups.slice(0, 12).map((g) => (
+                        <li key={g.address}>
+                          {g.address}
+                          {g.services.length
+                            ? ` · ${g.services.map((s) => (s.protocol ? `${s.port}/${s.protocol}` : s.port)).join(", ")}`
+                            : ""}
+                          {g.tags.length ? ` · tags:${g.tags.join("|")}` : ""}
+                        </li>
+                      ))}
+                      {bulkPreview.groups.length > 12 ? (
+                        <li className="text-ink-muted">…另有 {bulkPreview.groups.length - 12} 台</li>
+                      ) : null}
+                    </ul>
+                  ) : null}
+                  {bulkPreview.errors.length ? (
+                    <p className="mt-1 text-severity-critical">
+                      {bulkPreview.errors.slice(0, 3).join("；")}
+                      {bulkPreview.errors.length > 3 ? "…" : ""}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          )}
+
           <div className="space-y-1.5">
             <span className="text-xs font-medium text-ink-secondary">放入组（可选）</span>
             {allGroups.length ? (
@@ -983,14 +1537,21 @@ export default function AssetPage() {
               onClick={() => void createAsset()}
               className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink"
             >
-              {saving ? "保存中…" : "保存"}
+              {saving
+                ? "保存中…"
+                : createMode === "bulk"
+                  ? `创建${bulkPreview.groups.length ? ` ${bulkPreview.groups.length} 台` : ""}`
+                  : "保存"}
             </button>
           </div>
         </Modal>
       ) : null}
 
       {showGroupForm ? (
-        <Modal title="新建组" onClose={() => !savingGroup && setShowGroupForm(false)}>
+        <Modal
+          title={selectedIds.length ? "新建并加入组" : "新建组"}
+          onClose={() => !savingGroup && setShowGroupForm(false)}
+        >
           <Field label="组名">
             <input
               value={groupFormName}
@@ -1000,6 +1561,15 @@ export default function AssetPage() {
               autoFocus
             />
           </Field>
+          {selectedIds.length ? (
+            <p className="text-xs text-ink-muted">
+              将创建该组，并把已选 {selectedIds.length} 台主机移入（
+              {selectedAddresses.slice(0, 3).join("、")}
+              {selectedAddresses.length > 3 ? " 等" : ""}
+              ）。
+              {isGroupId(activeSectionId) ? " 同时从当前组移出。" : ""}
+            </p>
+          ) : null}
           {groupFormError ? <p className="text-xs text-severity-critical">{groupFormError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" disabled={savingGroup} onClick={() => setShowGroupForm(false)} className="rounded-md border px-3 py-1.5 text-xs">
@@ -1011,7 +1581,13 @@ export default function AssetPage() {
               onClick={() => void createGroup()}
               className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink"
             >
-              {savingGroup ? "保存中…" : "保存"}
+              {savingGroup
+                ? selectedIds.length
+                  ? "创建并加入中…"
+                  : "保存中…"
+                : selectedIds.length
+                  ? `创建并加入 ${selectedIds.length} 台`
+                  : "保存"}
             </button>
           </div>
         </Modal>

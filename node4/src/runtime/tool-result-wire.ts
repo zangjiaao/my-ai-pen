@@ -21,6 +21,9 @@ export function isShellToolResultPayload(p: Record<string, unknown>): boolean {
     || p.reports != null
     || p.findings != null
     || p.items != null
+    || p.groups != null
+    || p.updated != null
+    || p.attached != null
   ) {
     return false;
   }
@@ -116,19 +119,54 @@ function clipShellResultTextForWire(p: Record<string, unknown>, max: number): st
   return s.slice(0, max);
 }
 
+/** Prefer compact Group rows (addresses + counts) before dropping whole groups. */
+function compactGroupsForWire(groups: unknown[]): unknown[] {
+  return groups.map((g) => {
+    if (!g || typeof g !== "object" || Array.isArray(g)) return g;
+    const row = g as Record<string, unknown>;
+    const members = Array.isArray(row.members) ? row.members : [];
+    const addresses = Array.isArray(row.addresses)
+      ? row.addresses
+      : members
+          .map((m) =>
+            m && typeof m === "object" && !Array.isArray(m)
+              ? String((m as Record<string, unknown>).address || "")
+              : "",
+          )
+          .filter(Boolean);
+    return {
+      id: row.id,
+      name: row.name,
+      member_count: row.member_count ?? addresses.length ?? members.length,
+      addresses,
+      // Drop bulky members; agent should use addresses / batch tools.
+    };
+  });
+}
+
 /** Ledger lists / platform JSON: keep valid JSON; shrink large arrays (never empty-shell rewrite). */
 function clipGenericJsonResultForWire(p: Record<string, unknown>, max: number): string {
   const body: Record<string, unknown> = { ...p, wire_truncated: true };
+  // Groups with hundreds of nested members blow the wire — compact first.
+  if (Array.isArray(body.groups) && body.groups.length) {
+    body.groups = compactGroupsForWire(body.groups as unknown[]);
+  }
+  // Assets list: keep address/id/ports summary if still huge later via array shrink.
   let s = JSON.stringify(body);
   if (s.length <= max) return s;
 
   for (const key of Object.keys(body)) {
     if (!Array.isArray(body[key])) continue;
     const arr = body[key] as unknown[];
+    // Prefer shrinking assets/updated/attached sample arrays, never empty groups without totals.
     let n = arr.length;
     while (n > 0) {
       body[key] = arr.slice(0, n);
       body[`${key}_wire_total`] = arr.length;
+      if (key === "groups" && n < arr.length) {
+        body.groups_note =
+          "groups array truncated on wire; each remaining row still has addresses+member_count when compact";
+      }
       s = JSON.stringify(body);
       if (s.length <= max) return s;
       n = Math.floor(n / 2);

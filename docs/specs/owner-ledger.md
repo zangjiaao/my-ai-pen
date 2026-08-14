@@ -1,6 +1,6 @@
 # Spec: Owner ledger (Group × Host × Service assembly)
 
-**Status:** Living Spec — **locked model**. **#454a / #454b / #454c shipped**. Intel is not this Spec.  
+**Status:** Living Spec — **locked model**. **#454a / #454b / #454c shipped**; product Asset UI + Agent inventory path **ready for acceptance** (batch/select/identity/group tools). Intel is not this Spec.  
 **Tracker:** [#454](https://github.com/zangjiaao/my-ai-pen/issues/454)  
 **Supersedes:** [#322](https://github.com/zangjiaao/my-ai-pen/issues/322) and implementation tickets [#340](https://github.com/zangjiaao/my-ai-pen/issues/340)–[#345](https://github.com/zangjiaao/my-ai-pen/issues/345). Do **not** amend or revive `docs/specs/asset-inventory.md` (deleted with the #322 revert).  
 **Related:** Case Surface [`case-surface-ledger.md`](case-surface-ledger.md) / [#368](https://github.com/zangjiaao/my-ai-pen/issues/368); NEW precipitation [#410](https://github.com/zangjiaao/my-ai-pen/issues/410) / [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md); product-state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); finding identity [#275](https://github.com/zangjiaao/my-ai-pen/issues/275).
@@ -53,7 +53,7 @@ Same Host `1.1.1.1` in two Groups with **different Service subsets**. That is as
 | # | Lock |
 |---|------|
 | **Group** | User-owned named bucket. No required kind. Independent of Host and Service. |
-| **Host** | One owner-enrolled address card: primary IP **or** domain + optional **aliases** (child addresses). Agent treats aliases as the same machine. Agent **never** creates Hosts. |
+| **Host** | Owner-enrolled machine card keyed by **asset id** (not bare address). Primary IP **or** domain + optional **aliases** (same machine only). **Same address string may exist as multiple Hosts** when they belong to different units (Group-scoped collision). Ungrouped also allows multiple cards with the same IP if ids differ. |
 | **Service** | That Host + one port. Proto/name are display. No Service without a Host. Same IP two ports = two Services. |
 | **Assembly** | Explicit user relation: **Group + Host + a chosen subset of that Host’s Services**. Empty port subset = bare Host in that Group (show the Host, no ports). |
 | **Tag** | Label on a **Host** or a **Service**. Not required to assemble, book, or admit. |
@@ -74,7 +74,7 @@ Do **not** auto-merge a vhost into an IP Host. Do **not** invent a Service clust
 
 | # | Lock |
 |---|------|
-| **Host** | User create / authorize-register / promote (existing). Agent enrich ports/notes on an existing Host only. |
+| **Host** | User create / authorize-register / promote, **or Agent `platform_create_asset` when the user explicitly asked** (reason required; CIDR ≤256/call). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `platform_enrich_asset` / **`platform_batch_enrich_assets`**. Never invent Hosts from recon alone. `platform_assemble_group` ports = Group **view subset** only. |
 | **Service row** | User adds a port on a Host, **or** book / accepted HTTP(S) settle names that `host:port` on an existing Host. nmap-sized dumps do not become Service rows. |
 | **Group** | User create / rename / delete. Agent does **not** create Groups. |
 | **Assembly** | User puts a Host into a Group and picks which Services belong there. Adding a Host to a Group does **not** imply every port. Removing the last Service from an assembly leaves a bare Host in the Group or removes the Host from the Group (UI: user chooses). |
@@ -111,10 +111,10 @@ Worked example (system Groups): filter Group=`系统2` AND tag=`数据库服务�
 
 1. Same page chrome as 漏洞/专家：TopBar + filter + actions. **No second sidebar.**  
 2. Groups are **page tabs**. **全部** is always first (unique Hosts, full ports). Named groups then 未分组. Click to switch the card list.  
-3. Each Host is one Expert-style card: one hairline. Left identity (primary, aliases, Host tags); right one port per row (port, Service tags). No inner frames.  
+3. Each Host is one Expert-style card: one hairline. Left identity (primary, aliases, Host tags); right one port per row (port, Service tags). No inner frames. Filter bar **排序**: default 地址（IPv4 按 octet 数值序，避免 `10.0.0.10` 排在 `10.0.0.2` 前；域名字母序，IP 在域名前）；可选添加时间 / 端口数 / 漏洞数。  
 4. 「编辑组」opens the Group dialog. Pencil on a Host card → Host dialog（**编辑 / 端口 / 情报 / 漏洞**）。端口 tab 勾选后批量删除。Click port → Service dialog。
 5. Host 卡右上角图标：编辑 / 添加端口 / 删除主机。添加端口在卡内展开一行；当前组会把新端口收进该组装。删除主机走确认框。端口行 hover 右侧出删除，确认后从主机移除该端口。
-6. 点击卡片选中（可多选），不进编辑。选中后「移动到」把主机从当前组装挪到目标组（带走当前端口子集）；移到「未分组」只拆当前组装。
+6. 点击卡片选中（可多选），不进编辑。选中后「移动到」把主机从当前组装挪到目标组（带走当前端口子集）。有选中时「新建组」变为「新建并加入组」：创建 Group 后立刻 `batch-move` 已选主机入组（命名组 tab 下会从当前组移出）。多选条「移出」只拆组装（不删 Host）；「删除」彻底删台账 Host（二次确认；`POST /api/assets/batch-delete`）。批量移动/装入/移出走 `POST /api/asset-groups/batch-move`（单事务）。**多选跨搜索/标签/Tab 保留**；仅「取消」、批量操作成功、或 Host 删除后清空。
 7. 右侧 Case Surface 树的 origin 行（hover「纳入」）是用户 promote：确认后 POST Host + 该 origin 的端口。不改 #368 树，不把路径抄进 Service 攻击面。**已入库判断 = Owner ledger（用户 `GET /api/assets` host:port）**，不是 Case snapshot 的 `conversation_id` 资产列表；已入库的 host:port 显示「已纳入」。
 
 A Host can still belong to many Groups; the tab shows that Group’s port subset. Surface tab stays #368. No Service-cluster chrome.
@@ -156,7 +156,7 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 
 | Seam | Prove |
 |------|--------|
-| **S1 Host** | One address one Host; aliases merge onto the same card; `a.example.com` and `10.1.1.1` stay two Hosts. Agent cannot create Hosts. |
+| **S1 Host** | Identity = asset id. Same address may be many Hosts across Groups; merge only group-member address. Aliases = same machine only. `a.example.com` and `10.1.1.1` stay two Hosts unless aliases. |
 | **S2 Service** | Same host+port merges; different ports distinct; two ports keep separate tags. Scan-sized enrich does not admit. |
 | **S3 Assembly** | Group1+Host1+{80,443} and Group2+Host1+{8080} coexist; opening Group2 does not show :80/:443. |
 | **S4 Tags** | Host tag + Service tag AND filter matches sample (部门1 ∧ 系统2 → Host + :443 only). Tag write does not create a Group. |
@@ -193,7 +193,15 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-13 | UI：Host 卡右上角「添加端口」「删除主机」。当前组组装收进新端口。 |
 | 2026-08-13 | UI：Host 对话框只留 编辑 / 情报 / 漏洞。端口与攻击面在卡和 Service 对话框。 |
 | 2026-08-13 | UI：卡右上角改图标；点击卡片选中并可移动到其他组。 |
+| 2026-08-14 | UI multi-select: `POST /api/asset-groups/batch-move` + `POST /api/assets/batch-delete` (one txn; was N× HTTP ~30s for /24). |
+| 2026-08-14 | Host identity = id; Group-scoped merge only (cross-unit same IP = multiple Hosts; 未分组 may show two same IPs). |
 | 2026-08-13 | UI：Host 对话框加回端口 tab，勾选后批量删除。 |
 | 2026-08-13 | UI：组 Tab 常驻「全部」；筛选与组操作分行。 |
 | 2026-08-14 | UI：右侧 Surface origin 可用户确认纳入资产库（Host + 该端口）。 |
 | 2026-08-14 | Surface「已纳入」对照 Owner ledger（`GET /api/assets`），不限本 Case `conversation_id`。 |
+| 2026-08-14 | 添加主机支持批量 CSV：`address,port,protocol,name[,tags]`；同一主机多行合并端口。 |
+| 2026-08-14 | Agent chat-only 可只读 owner ledger（platform_list_assets）；与用户资产管理共用 Host 库；禁 recon 不禁 inventory。 |
+| 2026-08-14 | 用户主动要求时 Agent 可 `platform_create_asset` 写 Host（含 CIDR≤256）；需 reason；enrich 仍不可偷建。 |
+| 2026-08-14 | Agent: list_assets total/has_more；create/list groups；assemble；batch_enrich + remove_ports；identity=asset id（同 IP 跨单位可多 Host）。 |
+| 2026-08-14 | UI: 全选/跨筛选 sticky 多选、移出 vs 删除、新建并加入组、排序（含 IP）、shadcn Select。 |
+| 2026-08-14 | Agent 可见/装入 Group：`platform_list_groups` / `create_group` / `assemble_group`；create_asset 支持 group_name。 |

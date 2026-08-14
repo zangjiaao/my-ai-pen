@@ -15,10 +15,14 @@ Pure functions (no DB) so unit tests can drive the real shipped logic.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
+
+# Agent platform_create_asset hard cap per call (covers /24; blocks /16 dumps).
+MAX_AGENT_HOST_CREATE = 256
 
 SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
 
@@ -394,6 +398,7 @@ def parse_import_lines(text: object) -> list[dict[str, str]]:
     Parse paste/CSV into asset rows: address[,name[,system]].
 
     Skips blank lines and header row if first cell looks like 'address'.
+    Prefer parse_host_service_import_lines for address+port+protocol bulk create.
     """
     raw = str(text or "")
     rows: list[dict[str, str]] = []
@@ -409,16 +414,190 @@ def parse_import_lines(text: object) -> list[dict[str, str]]:
         if parts[0].lower() in {"address", "ip", "host", "url", "地址"}:
             continue
         address = parts[0]
-        if not is_valid_ledger_address(address):
+        if not is_valid_ledger_address(address) and not split_host_port(address)[0]:
+            continue
+        host, _ = split_host_port(address)
+        if not host and is_valid_ledger_address(address):
+            host = normalize_address(address)
+        if not host:
             continue
         name = parts[1] if len(parts) > 1 else ""
         system = parts[2] if len(parts) > 2 else ""
         rows.append({
-            "address": normalize_address(address),
-            "name": name or normalize_address(address),
+            "address": normalize_address(host),
+            "name": name or normalize_address(host),
             "system": system,
         })
     return rows
+
+
+def parse_host_service_import_lines(text: object) -> list[dict[str, Any]]:
+    """Parse bulk CSV for Host × optional Service (port/protocol/name).
+
+    Supported columns (header optional, order flexible with header):
+      address | ip | host | 地址
+      port | 端口
+      protocol | proto | 协议
+      name | service | 服务名
+      tags | 标签
+
+    Row shapes without header (positional):
+      address
+      address,port
+      address,port,protocol
+      address,port,protocol,name
+      address,port,protocol,name,tags
+
+    Port may be written ``80`` or ``80/tcp`` / ``443/https``.
+    Address may include ``host:443`` (port extracted).
+    Same host on multiple lines merges into one Host with many Services.
+
+    Returns list of host dicts:
+      { address, tags: [...], services: [{port, protocol?, name?}, ...] }
+    """
+    raw = str(text or "")
+    lines = raw.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    header_map: dict[str, int] | None = None
+    # address -> accumulated
+    by_host: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _cell(parts: list[str], key: str, idx: int | None) -> str:
+        if header_map is not None and key in header_map:
+            i = header_map[key]
+            return parts[i] if i < len(parts) else ""
+        if idx is not None and idx < len(parts):
+            return parts[idx]
+        return ""
+
+    def _split_port_proto(cell: str) -> tuple[str | None, str]:
+        text = (cell or "").strip()
+        if not text:
+            return None, ""
+        if "/" in text:
+            left, right = text.split("/", 1)
+            return normalize_port(left), right.strip().lower()
+        return normalize_port(text), ""
+
+    HEADER_ALIASES = {
+        "address": {"address", "ip", "host", "hostname", "url", "地址", "主机"},
+        "port": {"port", "ports", "端口"},
+        "protocol": {"protocol", "proto", "协议"},
+        "name": {"name", "service", "svc", "服务", "服务名"},
+        "tags": {"tags", "tag", "标签"},
+    }
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip().strip('"').strip("'") for p in re.split(r"[,;\t]", line)]
+        # Keep empty middle cells when header-driven; drop trailing empties only for positional.
+        while parts and parts[-1] == "":
+            parts.pop()
+        if not parts:
+            continue
+
+        lower0 = parts[0].lower()
+        # Header row detection
+        if header_map is None and any(
+            lower0 in aliases or any(p.lower() in aliases for p in parts)
+            for aliases in HEADER_ALIASES.values()
+        ):
+            # Only treat as header if first cell looks like a column name, not an IP.
+            joined = {p.lower() for p in parts}
+            if lower0 in HEADER_ALIASES["address"] or "address" in joined or "ip" in joined or "地址" in joined:
+                header_map = {}
+                for i, cell in enumerate(parts):
+                    c = cell.lower()
+                    for key, aliases in HEADER_ALIASES.items():
+                        if c in aliases and key not in header_map:
+                            header_map[key] = i
+                            break
+                if "address" in header_map:
+                    continue
+
+        if header_map is not None:
+            addr_raw = _cell(parts, "address", 0)
+            port_raw = _cell(parts, "port", None)
+            proto_raw = _cell(parts, "protocol", None).lower()
+            name_raw = _cell(parts, "name", None)
+            tags_raw = _cell(parts, "tags", None)
+        else:
+            addr_raw = parts[0]
+            port_raw = parts[1] if len(parts) > 1 else ""
+            proto_raw = parts[2].lower() if len(parts) > 2 else ""
+            name_raw = parts[3] if len(parts) > 3 else ""
+            tags_raw = parts[4] if len(parts) > 4 else ""
+
+        host, addr_port = split_host_port(addr_raw)
+        if not host:
+            if is_valid_ledger_address(addr_raw):
+                host = normalize_address(addr_raw)
+            else:
+                continue
+        host = normalize_address(host)
+
+        port_n, proto_from_port = _split_port_proto(port_raw)
+        if not port_n and addr_port:
+            port_n = normalize_port(addr_port)
+        # Prefer protocol embedded in port (80/tcp); bare 3rd column may be service name.
+        known_proto = {
+            "tcp",
+            "udp",
+            "sctp",
+            "http",
+            "https",
+            "tls",
+            "ssl",
+            "ssh",
+            "ftp",
+            "smtp",
+            "dns",
+            "rdp",
+            "smb",
+            "mysql",
+            "postgres",
+            "redis",
+            "mongodb",
+        }
+        protocol = (proto_from_port or "").strip().lower()
+        svc_name = (name_raw or "").strip()
+        if proto_raw:
+            if proto_from_port:
+                # e.g. 22/tcp,ssh → keep tcp, name=ssh
+                if not svc_name:
+                    svc_name = proto_raw
+            elif proto_raw in known_proto:
+                protocol = proto_raw
+            elif not svc_name:
+                svc_name = proto_raw
+
+        tags = normalize_tags(re.split(r"[,|，、]+", tags_raw) if tags_raw else [])
+
+        if host not in by_host:
+            by_host[host] = {"address": host, "tags": [], "services": []}
+            order.append(host)
+        entry = by_host[host]
+        if tags:
+            entry["tags"] = merge_tags(entry.get("tags") or [], tags)
+        if port_n:
+            services: list[dict[str, Any]] = entry["services"]
+            existing = next((s for s in services if s.get("port") == port_n), None)
+            if existing:
+                if protocol:
+                    existing["protocol"] = protocol
+                if svc_name:
+                    existing["name"] = svc_name
+            else:
+                row: dict[str, Any] = {"port": port_n}
+                if protocol:
+                    row["protocol"] = protocol
+                if svc_name:
+                    row["name"] = svc_name
+                services.append(row)
+
+    return [by_host[h] for h in order]
 
 
 def build_scope_allow(assets: list[dict[str, Any]]) -> list[str]:
@@ -526,6 +705,81 @@ def identities_summary(identities: list[dict[str, Any]] | None, *, max_items: in
     if extra > 0:
         parts.append(f"+{extra}")
     return " · ".join(parts)
+
+
+def expand_host_specs(
+    specs: list[str] | str | None,
+    *,
+    max_hosts: int = MAX_AGENT_HOST_CREATE,
+    exclude_last_octets: list[int] | None = None,
+) -> list[str]:
+    """Expand IP/domain/CIDR specs into Host addresses (pure; no DB).
+
+    - Single host/domain → one address
+    - host:port → host only (ports applied separately)
+    - IPv4/IPv6 network (e.g. 10.0.0.0/24) → usable host addresses
+      (IPv4 hosts() already drops network/broadcast for mask < 31)
+    - ``exclude_last_octets``: drop IPv4 addresses whose last octet is in the set
+      (e.g. ``[1, 255]`` to skip gateway + broadcast when user asks)
+
+    Raises ValueError when expansion would exceed ``max_hosts``.
+    """
+    if specs is None:
+        return []
+    raw_list = [specs] if isinstance(specs, str) else list(specs)
+    out: list[str] = []
+    seen: set[str] = set()
+    skip_last = {int(x) for x in (exclude_last_octets or []) if str(x).strip().lstrip("-").isdigit()}
+
+    def _add(addr: str) -> None:
+        a = normalize_address(addr)
+        if not a or a in seen:
+            return
+        if not is_valid_ledger_address(a) and not split_host_port(a)[0]:
+            return
+        host, _ = split_host_port(a)
+        host = normalize_address(host or a)
+        if not host or host in seen:
+            return
+        if skip_last and _IPV4.match(host):
+            try:
+                last = int(host.rsplit(".", 1)[-1])
+            except ValueError:
+                last = -1
+            if last in skip_last:
+                return
+        seen.add(host)
+        out.append(host)
+
+    for raw in raw_list:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if "/" in text and not text.lower().startswith("http"):
+            try:
+                net = ipaddress.ip_network(text, strict=False)
+            except ValueError:
+                _add(text)
+                continue
+            # num_addresses includes network+broadcast for IPv4; hosts() excludes them when >2
+            if net.num_addresses > max_hosts + 2:
+                raise ValueError(
+                    f"host create cap {max_hosts} exceeded for {text} "
+                    f"({net.num_addresses} addresses); split the range"
+                )
+            hosts_iter = net.hosts() if net.num_addresses > 2 else list(net)
+            for ip in hosts_iter:
+                if len(out) >= max_hosts:
+                    raise ValueError(
+                        f"host create cap {max_hosts} exceeded for {text}; split the range"
+                    )
+                _add(str(ip))
+            continue
+        _add(text)
+
+    if len(out) > max_hosts:
+        raise ValueError(f"at most {max_hosts} hosts per create call (got {len(out)})")
+    return out
 
 
 def is_valid_ledger_address(value: object) -> bool:
@@ -1694,7 +1948,8 @@ def _public_service(svc: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-SERVICE_ADMIT_SOURCES = frozenset({"user", "book", "http_settle"})
+# "agent" = user-requested Agent write (platform_create_asset / enrich with ports).
+SERVICE_ADMIT_SOURCES = frozenset({"user", "book", "http_settle", "agent"})
 OWNER_PATH_ADMIT_SOURCES = frozenset({"book", "http_settle"})
 _HTTP_SCHEMES = frozenset({"http", "https"})
 

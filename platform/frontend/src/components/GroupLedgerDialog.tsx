@@ -37,9 +37,6 @@ type Tab = "edit" | "members" | "surface" | "risk" | "intel";
 /** Match AssetDetailDialog field chrome. */
 const FIELD =
   "w-full rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink";
-const FIELD_SELECT =
-  "min-w-[10rem] flex-1 rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink";
-
 interface Props {
   open: boolean;
   group: GroupDetail | null;
@@ -70,9 +67,12 @@ export default function GroupLedgerDialog({
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [addHostId, setAddHostId] = useState("");
+  /** Hosts staged for bulk assemble into this group. */
+  const [addHostIds, setAddHostIds] = useState<string[]>([]);
   const [addPorts, setAddPorts] = useState<string[]>([]);
+  const [hostFilter, setHostFilter] = useState("");
   const [adding, setAdding] = useState(false);
+  const [addProgress, setAddProgress] = useState("");
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
 
   // Reset only when opening a different group — not when parent reloads after rename
@@ -84,8 +84,10 @@ export default function GroupLedgerDialog({
     setSavedName(group.name);
     setError("");
     setConfirmDelete(false);
-    setAddHostId("");
+    setAddHostIds([]);
     setAddPorts([]);
+    setHostFilter("");
+    setAddProgress("");
   }, [open, group?.id]);
 
   // If parent finishes load with a newer name while we are not dirty, adopt it.
@@ -104,8 +106,46 @@ export default function GroupLedgerDialog({
     .filter((row): row is { member: Member; asset: CatalogAsset } => Boolean(row.asset));
 
   const unusedHosts = catalog.filter((a) => !members.some((m) => m.asset_id === a.id));
-  const addTarget = catalogById.get(addHostId);
+  const filterQ = hostFilter.trim().toLowerCase();
+  const filteredUnused = useMemo(() => {
+    if (!filterQ) return unusedHosts;
+    return unusedHosts.filter(
+      (a) =>
+        a.address.toLowerCase().includes(filterQ) ||
+        (a.name || "").toLowerCase().includes(filterQ) ||
+        (a.tags || []).some((t) => t.toLowerCase().includes(filterQ)),
+    );
+  }, [unusedHosts, filterQ]);
+  const filteredIds = filteredUnused.map((a) => a.id);
+  const allFilteredSelected =
+    filteredIds.length > 0 && filteredIds.every((id) => addHostIds.includes(id));
+  const someFilteredSelected =
+    filteredIds.some((id) => addHostIds.includes(id)) && !allFilteredSelected;
+  /** Port picker only when exactly one host is staged (bulk = bare hosts). */
+  const singleAddId = addHostIds.length === 1 ? addHostIds[0] : "";
+  const addTarget = singleAddId ? catalogById.get(singleAddId) : undefined;
   const addPortOptions = (addTarget?.services || []).map((s) => s.port).filter(Boolean);
+
+  const toggleAddHost = (id: string) => {
+    const next = addHostIds.includes(id)
+      ? addHostIds.filter((x) => x !== id)
+      : [...addHostIds, id];
+    setAddHostIds(next);
+    if (next.length !== 1) setAddPorts([]);
+  };
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setAddHostIds(addHostIds.filter((id) => !filteredIds.includes(id)));
+      setAddPorts([]);
+      return;
+    }
+    const next = new Set(addHostIds);
+    for (const id of filteredIds) next.add(id);
+    const arr = [...next];
+    setAddHostIds(arr);
+    if (arr.length !== 1) setAddPorts([]);
+  };
 
   const vulns = useMemo(() => {
     const rows: RelatedVuln[] = [];
@@ -188,26 +228,38 @@ export default function GroupLedgerDialog({
     }
   };
 
-  const addHost = async () => {
-    if (!addHostId) {
-      setError("请选择主机");
+  const addHosts = async () => {
+    if (!addHostIds.length) {
+      setError("请勾选要装入的主机");
       return;
     }
     setAdding(true);
     setError("");
+    setAddProgress(addHostIds.length > 1 ? `装入 ${addHostIds.length} 台…` : "写入…");
+    const ids = [...addHostIds];
     try {
-      await authFetch(`/api/asset-groups/${group.id}/hosts/${addHostId}`, {
-        method: "PUT",
+      // Single host: honor port checkboxes; bulk: bare hosts (empty ports).
+      const ports_by_asset =
+        ids.length === 1 ? { [ids[0]]: addPorts } : undefined;
+      await authFetch("/api/asset-groups/batch-move", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ports: addPorts }),
+        body: JSON.stringify({
+          asset_ids: ids,
+          target_group_id: group.id,
+          default_ports: [],
+          ports_by_asset,
+        }),
       });
-      setAddHostId("");
+      setAddHostIds([]);
       setAddPorts([]);
+      setAddProgress("");
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "装入失败");
     } finally {
       setAdding(false);
+      setAddProgress("");
     }
   };
 
@@ -391,31 +443,101 @@ export default function GroupLedgerDialog({
               {!memberAssets.length ? <p className="text-sm text-ink-muted">组内还没有主机。</p> : null}
 
               <div className="rounded-md border border-dashed border-hairline px-3 py-2.5">
-                <p className="text-[11px] font-medium text-ink-secondary">装入主机</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <select
-                    value={addHostId}
-                    onChange={(e) => {
-                      setAddHostId(e.target.value);
-                      setAddPorts([]);
-                    }}
-                    className={FIELD_SELECT}
-                  >
-                    <option value="">选择主机…</option>
-                    {unusedHosts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.address}
-                      </option>
-                    ))}
-                  </select>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-medium text-ink-secondary">
+                    装入主机
+                    {unusedHosts.length ? (
+                      <span className="ml-1 font-normal text-ink-muted">
+                        （未装入 {unusedHosts.length}）
+                      </span>
+                    ) : null}
+                  </p>
+                  {filteredUnused.length ? (
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] text-ink">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someFilteredSelected;
+                        }}
+                        onChange={toggleSelectAllFiltered}
+                        className="rounded border-hairline"
+                        aria-label="全选未装入主机"
+                      />
+                      {allFilteredSelected ? "取消全选" : `全选${filterQ ? "筛选结果" : ""} ${filteredIds.length}`}
+                    </label>
+                  ) : null}
+                </div>
+                {unusedHosts.length ? (
+                  <input
+                    value={hostFilter}
+                    onChange={(e) => setHostFilter(e.target.value)}
+                    placeholder="筛选地址 / 名称 / 标签…"
+                    className={`${FIELD} mt-2`}
+                  />
+                ) : null}
+                {unusedHosts.length ? (
+                  <div className="mt-2 max-h-52 overflow-y-auto rounded-md border border-hairline bg-surface">
+                    {filteredUnused.map((a) => {
+                      const on = addHostIds.includes(a.id);
+                      return (
+                        <label
+                          key={a.id}
+                          className={`flex cursor-pointer items-center gap-2 border-b border-hairline-soft px-2.5 py-1.5 last:border-b-0 hover:bg-canvas ${
+                            on ? "bg-canvas" : ""
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => toggleAddHost(a.id)}
+                            className="shrink-0 rounded border-hairline"
+                          />
+                          <span className="min-w-0 truncate font-mono text-xs text-ink">{a.address}</span>
+                          {(a.services?.length || 0) > 0 ? (
+                            <span className="shrink-0 text-[10px] text-ink-muted">
+                              {a.services!.length} 端口
+                            </span>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                    {!filteredUnused.length ? (
+                      <p className="px-2.5 py-2 text-[11px] text-ink-muted">没有匹配的主机</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] text-ink-muted">台账里没有可装入的主机（都已在组内或尚未创建）。</p>
+                )}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    disabled={adding || !addHostId}
-                    onClick={() => void addHost()}
+                    disabled={adding || !addHostIds.length}
+                    onClick={() => void addHosts()}
                     className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-on-ink disabled:opacity-50"
                   >
-                    {adding ? "写入…" : "装入"}
+                    {adding
+                      ? addProgress || "写入…"
+                      : addHostIds.length
+                        ? `装入 ${addHostIds.length} 台`
+                        : "装入"}
                   </button>
+                  {addHostIds.length ? (
+                    <button
+                      type="button"
+                      disabled={adding}
+                      onClick={() => {
+                        setAddHostIds([]);
+                        setAddPorts([]);
+                      }}
+                      className="text-[11px] text-ink-muted hover:text-ink"
+                    >
+                      清空勾选
+                    </button>
+                  ) : null}
+                  {addHostIds.length > 1 ? (
+                    <span className="text-[11px] text-ink-muted">批量装入为裸主机（不带端口）</span>
+                  ) : null}
                 </div>
                 {addPortOptions.length ? (
                   <div className="mt-2 flex flex-wrap gap-2">

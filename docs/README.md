@@ -19,6 +19,8 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — `node4/` |
 | [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
 | [`specs/participant-session.md`](specs/participant-session.md) | Case · Participant Session · work mode continuity (Spec [#277](https://github.com/zangjiaao/my-ai-pen/issues/277)) |
+| [`specs/session-owns-runtime.md`](specs/session-owns-runtime.md) | Session owns captain runtime; Task is dispatch package only (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354)) |
+| [`specs/session-dialogue-path.md`](specs/session-dialogue-path.md) | Session-first dialogue path — Task out of conversational middle (Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455)) |
 | [`specs/graph-catalog-work-mode-ui.md`](specs/graph-catalog-work-mode-ui.md) | Graph L1 catalog (skill-like) + dual-rail composer/AgentRow (Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278)) |
 | [`specs/composer-graph-harness-bind.md`](specs/composer-graph-harness-bind.md) | Composer Graph + Expert → harness bind fail-closed; re-verify booking (Spec [#284](https://github.com/zangjiaao/my-ai-pen/issues/284)) |
 | [`specs/engagement-graph-back-edges.md`](specs/engagement-graph-back-edges.md) | Constrained Engagement Graph (declarative back-edges) + `hypothesis_cycle` (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)) |

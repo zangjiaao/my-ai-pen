@@ -59,7 +59,8 @@
 
 **P0**
 
-- 登录与会话：列表、新建、切换、基本管理。
+- 登录与会话：列表、新建、切换、基本管理；新建默认标题「新会话」。
+- **会话自动命名**：用户在仍为默认标题的会话中发出**实质任务**时，Agent 经 `platform_set_conversation_title(only_if_default=true)` 生成短标题（侧栏/顶栏即时更新）；纯寒暄不改名；用户手动改名后不被自动覆盖。用户也可明确要求改名。
 - 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + Goal 开关 + **参与者**（工作台助手 `default` / 专家）+ 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
@@ -86,6 +87,7 @@
   - **节点输出语言**：节点详情「配置」可设 `agent_language`（可扩展注册表，当前：`auto` 跟随用户 / `zh-CN` 简体 / `zh-TW` 繁體 / `en` / `ja`）。经 `task_assign` / steer 重建时的 `worker_limits.agent_language`，由共享 `formatAgentLanguageInjection` 注入 **所有** Agent Session 系统提示（free OMP、Hard Graph stage、subagent）。**Standing-first（#352）**：系统提示 **以** 英文结构壳 `## Standing node policies` **开头**，其下嵌套 `### Output language (node policy: …)`；本波策略 **正文仍为英文**（后续若 zh-CN 实机思考仍偏英可再开 target-language/双语 body 跟进，不在本波）。约束 **agent 自写叙述**（软保证，非硬翻译过滤）：对话、**Chat 中展示的思考/推理**（与对话同一语言面、非 English-only 旁路）、todo/计划、工具意图/进度叙述、台账字段、阶段/包交接叙述、报告 markdown。模板仅 minimal `{{ language_code }}` / `{{ language_prompt_name }}` / `{{ policy_body }}`（非 full Jinja、无 XML policy 壳）。工具原始 stdout/HTTP body **不翻译**。新增语言 = 扩展 registry 一行（UI/Platform allowlist 同源），不写 per-locale inject 分支。
   - **默认对话角色**：专家管理可勾选「设为默认对话角色」（`experts.is_default`，全站仅一位）。新建会话 / 空白 composer 优先选该专家；未设置时优先 `pack_id=default`，再 online / 列表首位。
   - **诚实计数（harness）**：收尾总结中「重新验证 N」= 本会话成功 `finding(confirm)` 次数，不是 prior 列表长度；「新发现」仅指新台账身份，同 path 合并只能称 rediscovery。见 `experts/pentest/work.md` Honest counts。
+  - **Scope Host 薄记忆（`case_context.scope_intel`）**：task_assign 时按结构化 target/scope 解析 Host（非 NLP），注入台账摘要——Host id/地址/端口服务、prior 计数与 severity 分层、最多约 8 条 high/critical 标题+path、攻击面 path 草图（非全文 PoC）。**主业仍是拓面与新 finding**；open prior 为穿插 re-verify。全量细节按需 `platform_list_vulnerabilities(asset_id=…)` / `platform_get_asset`（与漏洞台账按资产筛选同粒度；勿把未过滤 top-N 当该 Host 全集），禁止把 prior 列表当必须做完的 checklist。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
 - 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
 - 历史里程碑与旧计划已删除；运维清理见 **`docs/project-cleanup-plan.md`**。

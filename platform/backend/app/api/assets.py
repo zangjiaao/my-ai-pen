@@ -1,7 +1,8 @@
-"""Asset API — one host (IP/domain) per asset, ports+services+urls, tags for grouping.
+"""Asset API — Host cards (identity = asset id), ports/services/urls, tags.
 
-Ownership: users create/delete host rows. Agents only enrich surface fields
-(ports, services, URLs, API endpoints) on hosts that already exist.
+Ownership: users create/delete host rows. Same address may exist as multiple
+Hosts (cross-unit). Merge only when address is already a Group member.
+Agents create/enrich via node ledger tools when the user asked.
 """
 from __future__ import annotations
 
@@ -60,13 +61,21 @@ router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 
 class AssetCreate(BaseModel):
-    """Create/merge one host asset. Address is a single IP or domain."""
+    """Create one Host (identity = asset id). Same address may exist many times.
+
+    Optional group_ids: merge only when this address is already a *member* of
+    one of those Groups (unit-scoped). Cross-unit same IP → new Host.
+    """
     address: str
     name: str | None = None
     tags: list[str] = Field(default_factory=list)
     # Optional initial ports (services without names).
     ports: list[str | int] = Field(default_factory=list)
+    # Optional services with port / protocol / name (CSV bulk create).
+    services: list[dict] = Field(default_factory=list)
     properties: dict = Field(default_factory=dict)
+    # Optional Groups to scope merge (first match wins).
+    group_ids: list[str] = Field(default_factory=list)
 
 
 class AssetUpdate(BaseModel):
@@ -233,6 +242,7 @@ class TreeHostOut(BaseModel):
     source_label: str = ""
     risk: RiskSummaryOut = Field(default_factory=RiskSummaryOut)
     related_vulnerabilities: list[RelatedVulnOut] = Field(default_factory=list)
+    created_at: str | None = None
     updated_at: str | None = None
 
 
@@ -370,6 +380,7 @@ async def list_asset_tree(
                     source_label=source_label(asset.source) if asset else "",
                     risk=RiskSummaryOut(**risk),
                     related_vulnerabilities=vulns,
+                    created_at=asset.created_at.isoformat() if asset and asset.created_at else None,
                     updated_at=asset.updated_at.isoformat() if asset and asset.updated_at else None,
                 )
             )
@@ -455,14 +466,34 @@ async def create_asset(
     if not host:
         raise HTTPException(400, "地址无效：无法解析为 IP 或域名")
 
-    existing = await db.execute(
-        select(Asset).where(Asset.user_id == user_id, Asset.address == host)
-    )
-    a = existing.scalar_one_or_none()
     tags = normalize_tags(body.tags)
     ports = list(body.ports or [])
     if addr_port:
         ports.append(addr_port)
+    # Prefer structured services (port + protocol + name); also accept properties.services.
+    services_in: list[dict] = []
+    for raw in list(body.services or []) + list((body.properties or {}).get("services") or []):
+        if isinstance(raw, dict):
+            services_in.append(dict(raw))
+    for svc in services_in:
+        p = normalize_port(svc.get("port"))
+        if p:
+            ports.append(p)
+
+    # Group-scoped merge only (never global address uniqueness).
+    a: Asset | None = None
+    from app.services.node_ledger import find_group_member_by_address
+
+    for raw_gid in body.group_ids or []:
+        try:
+            gid = uuid.UUID(str(raw_gid))
+        except ValueError:
+            continue
+        a = await find_group_member_by_address(
+            db, user_id=user_id, group_id=gid, address=host
+        )
+        if a:
+            break
 
     if a:
         a.name = (body.name or "").strip() or a.name or host
@@ -470,14 +501,21 @@ async def create_asset(
         a.properties = merge_discover_properties(
             a.properties,
             open_ports=ports or None,
-            services=(body.properties or {}).get("services"),
+            services=services_in or None,
         )
-        await _audit(db, user_id, "asset.update", "asset", a.id, {"address": a.address, "merged": True})
+        await _audit(
+            db,
+            user_id,
+            "asset.update",
+            "asset",
+            a.id,
+            {"address": a.address, "merged": True, "scope": "group_member"},
+        )
     else:
         props = merge_discover_properties(
             body.properties or {},
             open_ports=ports or [],
-            services=(body.properties or {}).get("services"),
+            services=services_in or None,
         )
         a = Asset(
             id=uuid.uuid4(),
@@ -492,8 +530,32 @@ async def create_asset(
         db.add(a)
         await db.flush()
         await _audit(db, user_id, "asset.create", "asset", a.id, {"address": a.address})
+    # Official service rows: prefer full service dicts (protocol/name), then bare ports.
+    seen_ports: set[str] = set()
+    for svc in services_in:
+        p = normalize_port(svc.get("port"))
+        if not p:
+            continue
+        await upsert_official_service(
+            db,
+            asset_id=a.id,
+            port=p,
+            source="user",
+            name=str(svc.get("name") or svc.get("service") or "") or None,
+            protocol=str(svc["protocol"]).strip() if svc.get("protocol") else None,
+            product=str(svc["product"]) if svc.get("product") else None,
+            version=str(svc["version"]) if svc.get("version") else None,
+            url=str(svc["url"]) if svc.get("url") else None,
+            note=str(svc["note"]) if svc.get("note") else None,
+            tags=svc.get("tags") if "tags" in svc else None,
+        )
+        seen_ports.add(p)
     for p in ports:
-        await upsert_official_service(db, asset_id=a.id, port=p, source="user")
+        pn = normalize_port(p)
+        if not pn or pn in seen_ports:
+            continue
+        seen_ports.add(pn)
+        await upsert_official_service(db, asset_id=a.id, port=pn, source="user")
     await db.commit()
     await db.refresh(a)
     related = await _related_vulns(db, user_id, [a.id])
@@ -710,6 +772,91 @@ async def update_asset(
     related = await _related_vulns(db, user_id, [a.id])
     official = await load_official_services(db, [a.id])
     return _out(a, related.get(a.id, []), official.get(a.id))
+
+
+class BatchDeleteIn(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/batch-delete")
+async def batch_delete_assets(
+    body: BatchDeleteIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete many Hosts in one transaction (UI multi-select)."""
+    from sqlalchemy import delete as sa_delete, update
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+    user_id = uuid.UUID(current_user["user_id"])
+    raw_ids = [str(x).strip() for x in (body.asset_ids or []) if str(x or "").strip()]
+    if not raw_ids:
+        raise HTTPException(400, "请选择主机")
+    if len(raw_ids) > 2000:
+        raise HTTPException(400, "一次最多删除 2000 台")
+
+    asset_uuids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in raw_ids:
+        try:
+            aid = uuid.UUID(raw)
+        except ValueError as exc:
+            raise HTTPException(400, f"无效资产 id: {raw}") from exc
+        if aid in seen:
+            continue
+        seen.add(aid)
+        asset_uuids.append(aid)
+
+    rows = list(
+        (
+            await db.execute(
+                select(Asset).where(Asset.user_id == user_id, Asset.id.in_(asset_uuids))
+            )
+        ).scalars().all()
+    )
+    if not rows:
+        raise HTTPException(404, "资产不存在")
+    owned_ids = [r.id for r in rows]
+    addresses = [str(r.address or "") for r in rows]
+
+    try:
+        unlink_result = await db.execute(
+            update(Vulnerability)
+            .where(Vulnerability.asset_id.in_(owned_ids))
+            .values(asset_id=None)
+        )
+        unlinked = int(getattr(unlink_result, "rowcount", 0) or 0)
+        await _audit(
+            db,
+            user_id,
+            "asset.batch_delete",
+            "asset",
+            owned_ids[0],
+            {
+                "count": len(owned_ids),
+                "addresses_sample": addresses[:8],
+                "unlinked_vulnerabilities": unlinked,
+            },
+        )
+        await db.execute(sa_delete(Asset).where(Asset.user_id == user_id, Asset.id.in_(owned_ids)))
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        detail = str(getattr(exc, "orig", None) or exc)
+        raise HTTPException(
+            409,
+            f"批量删除失败。已尝试解绑关联漏洞。请刷新后重试。{detail[:180]}",
+        ) from exc
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise HTTPException(500, f"资产删除数据库错误：{exc}") from exc
+
+    return {
+        "ok": True,
+        "deleted": len(owned_ids),
+        "unlinked_vulnerabilities": unlinked,
+        "missing": len(asset_uuids) - len(owned_ids),
+    }
 
 
 @router.delete("/{asset_id}")

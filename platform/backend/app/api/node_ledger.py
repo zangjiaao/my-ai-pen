@@ -46,7 +46,8 @@ async def _user_for_conversation(db: AsyncSession, conversation_id: str | None) 
 async def list_assets(
     conversation_id: str | None = Query(default=None),
     q: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     node: Node = Depends(get_node_from_token),
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
@@ -54,8 +55,18 @@ async def list_assets(
     _ = node
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
-    items = await ledger.list_assets(db, user_id=user_id, conversation_id=cid, q=q, limit=limit)
-    return {"ok": True, "assets": items, "count": len(items)}
+    items, total = await ledger.list_assets(
+        db, user_id=user_id, conversation_id=cid, q=q, limit=limit, offset=offset
+    )
+    return {
+        "ok": True,
+        "assets": items,
+        "count": len(items),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
 
 
 @router.get("/assets/{asset_id}")
@@ -74,6 +85,39 @@ async def get_asset(
     except ledger.NodeLedgerError as e:
         raise HTTPException(e.status_code, e.message) from e
     return {"ok": True, "asset": item}
+
+
+@router.post("/assets/batch-enrich")
+async def batch_enrich_assets(
+    body: dict | None = None,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
+    """Bulk-add ports/services on existing Hosts (user-requested). One transaction."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    payload = body if isinstance(body, dict) else {}
+    try:
+        result = await ledger.batch_enrich_hosts_for_user(
+            db,
+            user_id=user_id,
+            reason=str(payload.get("reason") or payload.get("user_request") or ""),
+            asset_ids=payload.get("asset_ids") if isinstance(payload.get("asset_ids"), list) else None,
+            addresses=payload.get("addresses") or payload.get("hosts"),
+            group_id=str(payload.get("group_id") or "").strip() or None,
+            group_name=str(payload.get("group_name") or payload.get("group") or "").strip() or None,
+            ports=payload.get("ports") or payload.get("open_ports"),
+            services=payload.get("services"),
+            remove_ports=payload.get("remove_ports"),
+        )
+    except ledger.NodeLedgerError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return result
 
 
 @router.post("/assets/{asset_id}/enrich")
@@ -100,14 +144,120 @@ async def enrich_asset(
 
 
 @router.post("/assets")
-async def create_asset_denied(
+async def create_assets(
     body: dict | None = None,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
     node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
 ):
-    """Hard deny: agents must not create host rows via node ledger API."""
+    """Create Hosts when the user asked the Agent (reason required).
+
+    Accepts single ``address``, list ``addresses``, and/or CIDR (e.g. 10.0.0.0/24).
+    Cap: 256 hosts per call. Shared owner ledger with 资产管理.
+    """
     _ = node
-    _ = body
-    raise HTTPException(403, "host create denied: only users may create host assets")
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    payload = body if isinstance(body, dict) else {}
+    try:
+        result = await ledger.create_hosts_for_user(
+            db,
+            user_id=user_id,
+            conversation_id=cid,
+            address=payload.get("address"),
+            addresses=payload.get("addresses") or payload.get("hosts"),
+            ports=payload.get("ports") or payload.get("open_ports"),
+            services=payload.get("services"),
+            tags=payload.get("tags"),
+            reason=str(payload.get("reason") or payload.get("user_request") or ""),
+            group_id=str(payload.get("group_id") or "").strip() or None,
+            group_name=str(payload.get("group_name") or payload.get("group") or "").strip() or None,
+            assembly_ports=payload.get("assembly_ports"),
+            exclude_last_octets=payload.get("exclude_last_octets"),
+        )
+    except ledger.NodeLedgerError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return result
+
+
+@router.get("/groups")
+async def list_groups(
+    conversation_id: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
+    """List owner Groups (资产管理分组) for the conversation owner."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    items = await ledger.list_groups_for_user(db, user_id=user_id, q=q, limit=limit)
+    return {"ok": True, "groups": items, "count": len(items)}
+
+
+@router.post("/groups")
+async def create_group(
+    body: dict | None = None,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
+    """Create a Group when the user asked (reason required)."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    payload = body if isinstance(body, dict) else {}
+    try:
+        result = await ledger.create_group_for_user(
+            db,
+            user_id=user_id,
+            name=str(payload.get("name") or payload.get("group_name") or ""),
+            reason=str(payload.get("reason") or payload.get("user_request") or ""),
+        )
+    except ledger.NodeLedgerError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return result
+
+
+@router.post("/groups/assemble")
+async def assemble_hosts(
+    body: dict | None = None,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
+    """Put Hosts into a Group assembly (user-requested organization)."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    payload = body if isinstance(body, dict) else {}
+    try:
+        result = await ledger.put_hosts_in_group(
+            db,
+            user_id=user_id,
+            group_id=str(payload.get("group_id") or "").strip() or None,
+            group_name=str(payload.get("group_name") or payload.get("group") or "").strip() or None,
+            asset_ids=payload.get("asset_ids") if isinstance(payload.get("asset_ids"), list) else None,
+            addresses=payload.get("addresses") or payload.get("hosts"),
+            ports=payload.get("ports") or payload.get("assembly_ports"),
+            reason=str(payload.get("reason") or payload.get("user_request") or ""),
+        )
+    except ledger.NodeLedgerError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return result
 
 
 @router.get("/experts")
@@ -137,7 +287,10 @@ async def list_experts_for_node(
 async def list_vulns(
     conversation_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
+    asset_id: str | None = Query(default=None, description="Filter by one Host asset id"),
+    asset_ids: list[str] | None = Query(default=None, description="Filter by multiple Host asset ids"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     node: Node = Depends(get_node_from_token),
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
@@ -145,10 +298,25 @@ async def list_vulns(
     _ = node
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
-    items = await ledger.list_vulnerabilities(
-        db, user_id=user_id, conversation_id=cid, status=status, limit=limit
+    items, total = await ledger.list_vulnerabilities(
+        db,
+        user_id=user_id,
+        conversation_id=cid,
+        status=status,
+        limit=limit,
+        offset=offset,
+        asset_id=asset_id,
+        asset_ids=asset_ids,
     )
-    return {"ok": True, "vulnerabilities": items, "count": len(items)}
+    return {
+        "ok": True,
+        "vulnerabilities": items,
+        "count": len(items),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(items) < total,
+    }
 
 
 @router.get("/vulnerabilities/{vulnerability_id}")
@@ -269,3 +437,70 @@ async def create_conversation_report_node(
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True, "report": report_to_dict(row, include_markdown=False)}
+
+
+# Default placeholder titles the product creates for brand-new Cases.
+_DEFAULT_CONVERSATION_TITLES = frozenset(
+    {
+        "新会话",
+        "New session",
+        "new session",
+        "Untitled",
+        "未命名会话",
+    }
+)
+
+
+@router.patch("/conversations/{conversation_id}/title")
+async def set_conversation_title_node(
+    conversation_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Agent renames this Case/session title (sidebar + top bar)."""
+    _ = node
+    user_id = await _user_for_conversation(db, conversation_id)
+    if not user_id:
+        raise HTTPException(404, "conversation not found")
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == cid, Conversation.user_id == user_id)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+
+    body = body if isinstance(body, dict) else {}
+    title = str(body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title cannot be empty")
+    title = title[:255]
+
+    only_if_default = body.get("only_if_default")
+    if only_if_default is True or str(only_if_default).strip().lower() in {"1", "true", "yes"}:
+        current = str(conv.title or "").strip()
+        if current and current not in _DEFAULT_CONVERSATION_TITLES:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "title_already_set",
+                "title": conv.title,
+                "conversation_id": str(conv.id),
+            }
+
+    before = conv.title
+    conv.title = title
+    await db.commit()
+    await db.refresh(conv)
+    return {
+        "ok": True,
+        "skipped": False,
+        "title": conv.title,
+        "before": before,
+        "conversation_id": str(conv.id),
+    }

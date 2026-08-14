@@ -31,6 +31,23 @@ class AssemblyPut(BaseModel):
     ports: list[str | int] = Field(default_factory=list)
 
 
+class BatchMoveIn(BaseModel):
+    """One-shot assembly move/add for many Hosts (UI multi-select).
+
+    - target_group_id set → upsert each Host into that Group
+    - target_group_id empty + remove_from_all_groups → strip all assemblies (→ 未分组)
+    - source_group_id set → delete those Hosts from the source Group after put
+    """
+
+    asset_ids: list[str] = Field(default_factory=list)
+    target_group_id: str | None = None
+    source_group_id: str | None = None
+    remove_from_all_groups: bool = False
+    # Same ports for every Host when ports_by_asset omits an id (default bare).
+    default_ports: list[str | int] = Field(default_factory=list)
+    ports_by_asset: dict[str, list[str | int]] | None = None
+
+
 class AssemblyMemberOut(BaseModel):
     asset_id: str
     ports: list[str] = Field(default_factory=list)
@@ -199,6 +216,138 @@ async def delete_group(
     await db.delete(group)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/batch-move")
+async def batch_move(
+    body: BatchMoveIn,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move/add many Hosts in one transaction (replaces N× PUT/DELETE)."""
+    user_id = await _user_id(current_user)
+    raw_ids = [str(x).strip() for x in (body.asset_ids or []) if str(x or "").strip()]
+    if not raw_ids:
+        raise HTTPException(400, "请选择主机")
+    if len(raw_ids) > 2000:
+        raise HTTPException(400, "一次最多移动 2000 台")
+
+    asset_uuids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in raw_ids:
+        try:
+            aid = uuid.UUID(raw)
+        except ValueError as exc:
+            raise HTTPException(400, f"无效资产 id: {raw}") from exc
+        if aid in seen:
+            continue
+        seen.add(aid)
+        asset_uuids.append(aid)
+
+    owned = (
+        await db.execute(select(Asset.id).where(Asset.user_id == user_id, Asset.id.in_(asset_uuids)))
+    ).scalars().all()
+    owned_set = set(owned)
+    missing = [str(a) for a in asset_uuids if a not in owned_set]
+    if missing:
+        raise HTTPException(404, f"资产不存在: {missing[0]}")
+
+    target_raw = str(body.target_group_id or "").strip()
+    source_raw = str(body.source_group_id or "").strip()
+    target: AssetGroup | None = None
+    source: AssetGroup | None = None
+    if target_raw:
+        target = await _get_group(db, user_id, target_raw)
+    if source_raw:
+        source = await _get_group(db, user_id, source_raw)
+        if target and source.id == target.id:
+            source = None
+
+    if not target and not source and not body.remove_from_all_groups:
+        raise HTTPException(400, "请指定目标组、源组或移到未分组")
+
+    default_ports = normalize_assembly_ports(body.default_ports)
+    ports_map = body.ports_by_asset if isinstance(body.ports_by_asset, dict) else {}
+
+    put_count = 0
+    if target:
+        existing_rows = (
+            await db.execute(
+                select(AssetAssembly).where(
+                    AssetAssembly.group_id == target.id,
+                    AssetAssembly.asset_id.in_(asset_uuids),
+                )
+            )
+        ).scalars().all()
+        by_asset = {row.asset_id: row for row in existing_rows}
+        for aid in asset_uuids:
+            key = str(aid)
+            if key in ports_map:
+                ports = normalize_assembly_ports(ports_map[key])
+            else:
+                ports = default_ports
+            row = by_asset.get(aid)
+            if row:
+                row.ports = ports
+            else:
+                db.add(
+                    AssetAssembly(
+                        id=uuid.uuid4(),
+                        group_id=target.id,
+                        asset_id=aid,
+                        ports=ports,
+                    )
+                )
+            put_count += 1
+
+    removed = 0
+    if body.remove_from_all_groups:
+        # Strip every assembly for these Hosts, then re-put target if any
+        # (target put already applied above — only delete non-target rows).
+        q = select(AssetAssembly).where(AssetAssembly.asset_id.in_(asset_uuids))
+        if target:
+            q = q.where(AssetAssembly.group_id != target.id)
+        rows = (await db.execute(q)).scalars().all()
+        for row in rows:
+            await db.delete(row)
+            removed += 1
+    elif source:
+        rows = (
+            await db.execute(
+                select(AssetAssembly).where(
+                    AssetAssembly.group_id == source.id,
+                    AssetAssembly.asset_id.in_(asset_uuids),
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            await db.delete(row)
+            removed += 1
+
+    audit_target = target.id if target else (source.id if source else asset_uuids[0])
+    await _audit(
+        db,
+        user_id,
+        "asset_assembly.batch_move",
+        audit_target,
+        {
+            "asset_count": len(asset_uuids),
+            "put_count": put_count,
+            "removed": removed,
+            "target_group_id": str(target.id) if target else None,
+            "source_group_id": str(source.id) if source else None,
+            "remove_from_all_groups": bool(body.remove_from_all_groups),
+        },
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "asset_count": len(asset_uuids),
+        "put_count": put_count,
+        "removed": removed,
+        "target_group_id": str(target.id) if target else None,
+        "source_group_id": str(source.id) if source else None,
+    }
 
 
 @router.put("/{group_id}/hosts/{asset_id}", response_model=AssemblyMemberOut)
