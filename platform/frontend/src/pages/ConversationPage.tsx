@@ -97,6 +97,7 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
+import { upsertIntelRow, type IntelRow } from "../lib/intelView";
 import {
   buildConfirmOptionsText,
   expandSelectedOptions,
@@ -268,6 +269,9 @@ type ConversationSnapshot = {
   strix_notes?: StrixNote[];
   strix_run?: StrixRun;
   findings?: Array<Record<string, unknown>>;
+  intel?: Array<Record<string, unknown>>;
+  intel_forgotten?: Array<Record<string, unknown>>;
+  intel_sealed?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
   evidence?: Array<Record<string, unknown>>;
@@ -354,6 +358,9 @@ export default function ConversationPage() {
   /** User preference: hide Status panel (like sidebar collapse). Independent of content availability. */
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(readRightPanelCollapsed);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
+  const [intel, setIntel] = useState<Array<Record<string, unknown>>>([]);
+  const [intelForgotten, setIntelForgotten] = useState<Array<Record<string, unknown>>>([]);
+  const [intelSealed, setIntelSealed] = useState<Array<Record<string, unknown>>>([]);
   /** Case-scoped snapshot assets (agent/session read-model; may be empty). */
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   /**
@@ -841,6 +848,11 @@ export default function ConversationPage() {
     }
     // Spec #280: empty ledger arrays are correct — do not fall back to chat archaeology.
     setFindings(Array.isArray(snapshot.findings) ? snapshot.findings : (fallback?.findings || []));
+    setIntel(Array.isArray(snapshot.intel) ? snapshot.intel : (fallback?.intel || []));
+    setIntelForgotten(
+      Array.isArray(snapshot.intel_forgotten) ? snapshot.intel_forgotten : (fallback?.intel_forgotten || []),
+    );
+    setIntelSealed(Array.isArray(snapshot.intel_sealed) ? snapshot.intel_sealed : (fallback?.intel_sealed || []));
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(Array.isArray(snapshot.evidence) ? snapshot.evidence : (fallback?.evidence || []));
@@ -1080,6 +1092,19 @@ export default function ConversationPage() {
           updated_at: m.updated_at != null ? String(m.updated_at) : null,
         }),
       );
+    },
+    intel_upsert: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const raw = (m.intel && typeof m.intel === "object" ? m.intel : m) as IntelRow;
+      const id = String(raw.id || "").trim();
+      if (!id) return;
+      const status = String(raw.status || "").trim().toLowerCase();
+      const forget = Number(raw.forget_count || 0);
+      const sealed = status === "sealed" || forget >= 2;
+      const soft = status === "forgotten" || forget === 1;
+      setIntel((prev) => (sealed || soft ? prev.filter((r) => String(r.id) !== id) : upsertIntelRow(prev as IntelRow[], raw)));
+      setIntelForgotten((prev) => (soft ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
+      setIntelSealed((prev) => (sealed ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
     },
     vuln_found: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -1962,6 +1987,9 @@ export default function ConversationPage() {
     setStrixRun(undefined);
     setCaseRun(undefined);
     setFindings([]);
+    setIntel([]);
+    setIntelForgotten([]);
+    setIntelSealed([]);
     setAssets([]);
     setPendingApprovals([]);
     setEvidence([]);
@@ -3562,6 +3590,16 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               trafficExchanges={trafficExchanges}
               surfaceLedger={surfaceLedger}
               findings={findings}
+              intel={intel as IntelRow[]}
+              intelForgotten={intelForgotten as IntelRow[]}
+              intelSealed={intelSealed as IntelRow[]}
+              currentTaskId={
+                String(
+                  (taskContext as { task_id?: string; id?: string } | undefined)?.task_id ||
+                    (taskContext as { id?: string } | undefined)?.id ||
+                    "",
+                ).trim() || null
+              }
               assets={ownerLedgerAssets.length ? ownerLedgerAssets : assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}

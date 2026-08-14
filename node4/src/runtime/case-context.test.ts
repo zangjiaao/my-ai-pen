@@ -104,4 +104,11 @@ const onlyIntel = parseCaseContext({
 });
 assert.ok(onlyIntel);
 assert.equal(onlyIntel!.scope_intel!.hosts?.[0]?.address, "lab.local");
+const onlyClues = parseCaseContext({
+  intel_summary: [{ id: "i1", summary: "admin:admin invalid", kind: "credential_status", asset_id: "a1" }],
+});
+assert.ok(onlyClues);
+assert.equal(onlyClues!.intel_summary?.[0]?.id, "i1");
+assert.match(formatCaseContextInjection(onlyClues), /Living notebook/);
+assert.match(formatCaseContextInjection(onlyClues), /admin:admin invalid/);
 console.log("case-context.test.ts ok");

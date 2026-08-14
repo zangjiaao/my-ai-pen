@@ -10,6 +10,7 @@ from app.models.expert import Expert
 from app.models.conversation_report import ConversationReport
 from app.models.surface_inventory import SurfaceInventory
 from app.models.owner_ledger import AssetAssembly, AssetGroup, AssetService, AssetServicePath
+from app.models.owner_intel import AssetIntel
 
 __all__ = [
     "User",
@@ -27,4 +28,5 @@ __all__ = [
     "AssetAssembly",
     "AssetService",
     "AssetServicePath",
+    "AssetIntel",
 ]

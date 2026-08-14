@@ -382,6 +382,54 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         )
     except Exception:
         surface_ledger_doc = {"version": 1, "updated_at": None, "surfaces": []}
+    intel_items: list[dict] = []
+    intel_forgotten_items: list[dict] = []
+    intel_sealed_items: list[dict] = []
+    try:
+        from app.services.case_context import _scope_asset_ids
+        from app.services.owner_intel import list_intel
+
+        scope_ids = await _scope_asset_ids(
+            db, cid=conversation.id, uid=user_id, conv_context=context
+        )
+        task_id = None
+        if isinstance(task_context, dict):
+            task_id = str(task_context.get("task_id") or task_context.get("id") or "").strip() or None
+        if scope_ids:
+            intel_items, _ = await list_intel(
+                db,
+                user_id=user_id,
+                asset_ids=scope_ids,
+                status="active",
+                audience="user",
+                current_task_id=task_id,
+                limit=100,
+                include_body=False,
+            )
+            intel_forgotten_items, _ = await list_intel(
+                db,
+                user_id=user_id,
+                asset_ids=scope_ids,
+                status="forgotten",
+                audience="user",
+                current_task_id=task_id,
+                limit=100,
+                include_body=False,
+            )
+            intel_sealed_items, _ = await list_intel(
+                db,
+                user_id=user_id,
+                asset_ids=scope_ids,
+                status="sealed",
+                audience="user",
+                current_task_id=task_id,
+                limit=100,
+                include_body=False,
+            )
+    except Exception:
+        intel_items = []
+        intel_forgotten_items = []
+        intel_sealed_items = []
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
     # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
@@ -445,6 +493,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "kanban": kanban,
         "todos": todos,
         "findings": findings,
+        "intel": intel_items,
+        "intel_forgotten": intel_forgotten_items,
+        "intel_sealed": intel_sealed_items,
         "assets": asset_items,
         "checkpoint": checkpoint or {},
         # Spec #163: latest Graph engagement close-out (same JSON as Node taskDir file)

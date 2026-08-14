@@ -11,7 +11,7 @@
 > Legacy trees (`node/`, `node2/`, `node3/`) are plan-delete after gates — do not expand.  
 > **No agent finish tool** — session end is harness/platform only.
 
-Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/specs/expert-offers.md`, `docs/specs/ctf-role.md`, `docs/specs/task-graph.md`, `experts/README.md`.
+Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/specs/expert-offers.md`, `docs/specs/ctf-role.md`, `docs/specs/task-graph.md`, `docs/specs/context-window-management.md` (occupancy shrink — persist pass then checkpoint), `experts/README.md`.
 
 ---
 

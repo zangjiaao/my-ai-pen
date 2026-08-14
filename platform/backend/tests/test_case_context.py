@@ -265,6 +265,20 @@ def test_payload_includes_scope_intel():
     assert "scope_intel" in payload["note"]
 
 
+def test_payload_includes_intel_summary_distinct_from_scope_intel():
+    payload = build_case_context_payload(
+        messages=[],
+        findings=[],
+        conversation_id="conv-x",
+        intel_summary=[
+            {"id": "i1", "summary": "admin:admin invalid", "kind": "credential_status", "asset_id": "a1"},
+        ],
+    )
+    assert payload["intel_summary"][0]["id"] == "i1"
+    assert "intel_summary" in payload["note"]
+    assert "scope_intel" not in payload
+
+
 def test_excerpt_and_role_helpers():
     assert excerpt_from_properties({"stdout": "hello world proof"}) == "hello world proof"
     assert evidence_role({"role": "trace"}) == "trace"

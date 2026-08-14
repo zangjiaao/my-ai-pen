@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/api";
 import FindingCard, { groupFindingsByKind } from "./cards/FindingCard";
+import { IntelList, useAssetIntel } from "./IntelList";
 import VulnDetailDialog from "./VulnDetailDialog";
 import { asString, type SecurityVulnerability } from "../lib/securityTypes";
 
@@ -61,6 +62,7 @@ export default function ServiceLedgerDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
+  const { rows: intelRows } = useAssetIntel(open ? assetId : null, port);
 
   useEffect(() => {
     if (!open || !assetId) return;
@@ -144,7 +146,7 @@ export default function ServiceLedgerDialog({
     { key: "edit", label: "编辑" },
     { key: "surface", label: "攻击面", count: paths.length },
     { key: "risk", label: "漏洞", count: vulns.length },
-    { key: "intel", label: "情报" },
+    { key: "intel", label: "情报", count: intelRows.filter((r) => (r.forget_count || 0) <= 0).length },
   ];
 
   return (
@@ -316,9 +318,10 @@ export default function ServiceLedgerDialog({
           ) : null}
 
           {tab === "intel" ? (
-            <p className="text-sm leading-relaxed text-ink-muted">
-              情报块还没接入。端口档案位已经留好，不会用空话填充。
-            </p>
+            <IntelList
+              rows={intelRows}
+              emptyCopy="这个端口还没有线索。Agent 笔记本会记在这里。"
+            />
           ) : null}
         </div>
 

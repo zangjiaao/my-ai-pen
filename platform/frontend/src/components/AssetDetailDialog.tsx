@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { authFetch } from "../lib/api";
 import { asString, type SecurityAsset, type SecurityVulnerability } from "../lib/securityTypes";
 import FindingCard, { groupFindingsByKind } from "./cards/FindingCard";
+import { IntelList, useAssetIntel } from "./IntelList";
 import VulnDetailDialog from "./VulnDetailDialog";
 import ConfirmDialog from "./ConfirmDialog";
 
@@ -123,11 +124,12 @@ export default function AssetDetailDialog({
     [vulns, host],
   );
   const riskGroups = useMemo(() => groupFindingsByKind(findingRows), [findingRows]);
+  const { rows: intelRows } = useAssetIntel(id ? String(id) : null);
 
   const tabs: { key: DetailTab; label: string; count?: number }[] = [
     { key: "edit", label: "编辑" },
     { key: "ports", label: "端口", count: services.length },
-    { key: "intel", label: "情报" },
+    { key: "intel", label: "情报", count: intelRows.filter((r) => (r.forget_count || 0) <= 0).length },
     { key: "risk", label: "漏洞", count: vulns.length },
   ];
 
@@ -482,9 +484,10 @@ export default function AssetDetailDialog({
           )}
 
           {tab === "intel" && (
-            <p className="text-sm leading-relaxed text-ink-muted">
-              情报块还没接入。主机档案位已经留好，不会用空话填充。
-            </p>
+            <IntelList
+              rows={intelRows}
+              emptyCopy="这台主机还没有线索。Agent 笔记本会记在这里。"
+            />
           )}
 
           {tab === "risk" && (

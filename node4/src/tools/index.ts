@@ -16,6 +16,12 @@ import { createSubagentTool } from "./subagent.js";
 import { createFactTool } from "./fact.js";
 import { createTodoTool } from "./todo.js";
 import { PLATFORM_TOOL_FACTORIES } from "./platform.js";
+import {
+  createPlatformForgetIntelTool,
+  createPlatformGetIntelTool,
+  createPlatformListIntelTool,
+  createPlatformRecordIntelTool,
+} from "./platform-intel.js";
 import { createRequestUserDecisionTool } from "./decision.js";
 import { createTrafficListTool } from "./traffic.js";
 import { createSurfaceTool } from "./surface.js";
@@ -42,6 +48,10 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   traffic_list: createTrafficListTool,
   request_user_decision: createRequestUserDecisionTool,
   ...PLATFORM_TOOL_FACTORIES,
+  platform_record_intel: createPlatformRecordIntelTool,
+  platform_list_intel: createPlatformListIntelTool,
+  platform_get_intel: createPlatformGetIntelTool,
+  platform_forget_intel: createPlatformForgetIntelTool,
 };
 
 /** Bare OMP runtime tool order (no expert pack). Expert packs pass their own toolNames. */

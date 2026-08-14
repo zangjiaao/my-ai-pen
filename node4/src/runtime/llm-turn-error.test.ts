@@ -131,5 +131,6 @@ const e = new LlmTurnError("403 fail");
 assert.equal(isLlmTurnError(e), true);
 assert.equal(e.code, "llm_error");
 assert.match(formatLlmErrorForUser("plain"), /模型调用失败：plain/);
+assert.match(formatLlmErrorForUser("context_length exceeded"), /occupancy \/ context-length/);
 
 console.log("llm-turn-error.test.ts: ok");

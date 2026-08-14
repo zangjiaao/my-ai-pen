@@ -37,3 +37,5 @@ from app.api.experts import router as experts_router
 api_router.include_router(experts_router)
 from app.api.node_ledger import router as node_ledger_router
 api_router.include_router(node_ledger_router)
+from app.api.intel import router as intel_router
+api_router.include_router(intel_router)

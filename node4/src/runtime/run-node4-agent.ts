@@ -68,6 +68,10 @@ export type RunNode4AgentOptions = {
   sessionId?: string;
   beforeToolCall?: Agent["beforeToolCall"];
   afterToolCall?: Agent["afterToolCall"];
+  /** Occupancy shrink / persist pass (Spec context-window-management). */
+  transformContext?: Agent["transformContext"];
+  /** Fail-closed occupancy after shrink retry. */
+  occupancyError?: () => string | undefined;
   /** Test seam: inject a prebuilt session (skips Agent construction). */
   sessionFactory?: () => Node4AgentSession | Promise<Node4AgentSession>;
 };
@@ -197,15 +201,24 @@ export async function runNode4Agent(options: RunNode4AgentOptions): Promise<Node
     getApiKey: options.getApiKey ?? ((provider: string) => resolveNode4ApiKey(provider)),
     beforeToolCall: options.beforeToolCall,
     afterToolCall: options.afterToolCall,
+    transformContext: options.transformContext,
     sessionId,
   });
 
-  return wrapAgentAsSession(agent);
+  return wrapAgentAsSession(agent, { occupancyError: options.occupancyError });
 }
 
-export function wrapAgentAsSession(agent: Agent): Node4AgentSession {
+export function wrapAgentAsSession(
+  agent: Agent,
+  opts?: { occupancyError?: () => string | undefined },
+): Node4AgentSession {
   return {
     prompt: async (text: string, _opts?: { source?: string }) => {
+      const occ = opts?.occupancyError?.();
+      if (occ) {
+        const { occupancyLlmTurnError } = await import("./context-window.js");
+        throw occupancyLlmTurnError(occ);
+      }
       await agent.prompt(text);
     },
     abort: () => {
@@ -294,12 +307,23 @@ export async function createBoundNode4Session(
   /** Filled after session wrap so afterToolCall can followUp without onAgent handshake. */
   const followUpHold: { fn?: (text: string) => void } = {};
 
+  const compactCycle: import("./context-window.js").CompactCycle = {
+    persistPassIssued: false,
+    shrinkRetry: 0,
+  };
+  const { createContextWindowTransform } = await import("./context-window.js");
   const session = await runNode4Agent({
     systemPrompt,
     tools,
     model,
     thinkingLevel: options.thinkingLevel ?? "medium",
     sessionId: options.sessionId,
+    occupancyError: () => compactCycle.occupancyError,
+    transformContext: createContextWindowTransform({
+      contextWindow: Number(model.contextWindow) || 128_000,
+      cycle: compactCycle,
+      runtime,
+    }),
     afterToolCall: async (context: AfterToolCallContext) => {
       // pi-agent-core: execute() never sets isError unless throw; product tools put
       // isError on result.details (textResult(_, { isError: true })). Promote so

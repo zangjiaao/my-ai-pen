@@ -139,8 +139,29 @@ export function assistantTurnErrorMessage(message: AssistantTurnSnapshot | Recor
 export function formatLlmErrorForUser(raw: string): string {
   const t = String(raw || "").trim() || "Model request failed";
   // Keep provider text — operators need 403 / opt-in URLs.
-  if (/模型调用失败|Model request failed/i.test(t)) return t;
+  if (/模型调用失败|Model request failed/i.test(t)) {
+    if (isOccupancyProviderText(t) && !/occupancy/i.test(t)) {
+      return `${t} (occupancy / context-length)`;
+    }
+    return t;
+  }
+  if (isOccupancyProviderText(t)) {
+    return `模型调用失败：occupancy / context-length — ${t}`;
+  }
   return `模型调用失败：${t}`;
+}
+
+/** Provider overflow text — diagnosis only, not intent routing. */
+export function isOccupancyProviderText(raw: string): boolean {
+  const t = String(raw || "").toLowerCase();
+  return (
+    t.includes("context_length") ||
+    t.includes("context length") ||
+    t.includes("maximum context") ||
+    t.includes("context window") ||
+    t.includes("too many tokens") ||
+    t.includes("prompt is too long")
+  );
 }
 
 export function isLlmTurnError(err: unknown): err is LlmTurnError {
