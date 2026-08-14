@@ -92,6 +92,10 @@ _Avoid_: treating queue fullness as stage L0 gate; killed/deferred as ledger vul
 Turn-local agent messages inside the Agent Runtime. Optional Node4 projection from Runtime events for debug/stream; not required as a product session format; never used as fail-closed gate input.
 _Avoid_: dual cookie stores; Feedback parsing private Runtime/session formats; salvage handoff from transcript
 
+**Context-window checkpoint**:
+Occupancy shrink of the **next model view** on a long Participant Session (Free park / Graph same-stage): rehydrate Todo + thin Store indexes + living Intel; keep the current Todo slice; drop tool process. Not Session Reset; not `AgentHarness` compact; not making transcript the SOT. Window from model catalog (unknown model: `LLM_CONTEXT_WINDOW`); trigger default 80% (`NODE4_COMPACT_THRESHOLD`). Spec: `docs/specs/context-window-management.md`.
+_Avoid_: fat chat-summary as product memory; Case-user compact slider; dumping scanner stdout into Store
+
 ### Owner ledger
 
 **Group**:
@@ -113,3 +117,7 @@ _Avoid_: business tags only on Group; inventing org structure as required clerk 
 **Service 攻击面**:
 Durable paths under a Service (company book). A path enters only from `finding(confirm)` or an accepted HTTP(S) Traffic settle on an existing Host. Scan / SYN does not. Not Case Surface (#368 this-run NEW/TESTED).
 _Avoid_: dumping every scanned/SYN path onto the Host; calling Case Surface the company 暴露面总账; Agent creating a Host in order to hang a path
+
+**Intel (线索 / 情报)**:
+The Agent’s **notebook** on a **Host** or **Service**: Agent supplies summary + NL body + hang + kind; **harness** mints `id` and stamps time/`source`/**New**/`forget_count`. Living rows project as 线索. First `forget` leaves working memory (Agent may still update that id); **second forget** → **遗忘区** (operator can read; never injected or listed to the Agent). Spec: `docs/specs/owner-intel.md`.
+_Avoid_: Agent-authored timestamps or New; open `note` dump; NLP scrape; inventing a Host to hang a clue; Group/Case hang in v1; feeding 遗忘区 back to the Agent

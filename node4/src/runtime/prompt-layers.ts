@@ -311,6 +311,11 @@ export function buildPromptLayers(
       "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
     );
   }
+  if (pack.toolNames.includes("platform_record_intel")) {
+    runtimeParts.push(
+      "Notebook (platform_record_intel): clues on an existing Host/Service — not a Finding. Optional mid-run; one persist pass at compact. First forget leaves working memory; second = 遗忘区.",
+    );
+  }
   if (pack.toolNames.includes("fact")) {
     runtimeParts.push(
       "Process facts (fact tool): write confirmed cognition now (ports/auth/deadends); ≠ finding; list=index — get body for detail.",

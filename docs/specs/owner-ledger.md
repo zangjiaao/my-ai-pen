@@ -59,7 +59,7 @@ Same Host `1.1.1.1` in two Groups with **different Service subsets**. That is as
 | **Tag** | Label on a **Host** or a **Service**. Not required to assemble, book, or admit. |
 | **Service 攻击面** | Durable paths under a Service (company book). Enter only from `finding(confirm)` or an **accepted HTTP(S) Traffic settle** on an **existing** Host. Scan / SYN does not. Do not create a Host to hang a path. |
 | **Finding** | Stays `asset_id` + `port` (existing law / #275). Service is the face those two already name. No cluster merge. No new Finding PK. |
-| **Intel** | Info blocks on Group / Host / Service. **Not this wave.** |
+| **Intel** | Durable clues on **Host / Service** (v1). Law: [`owner-intel.md`](owner-intel.md) / map [#459](https://github.com/zangjiaao/my-ai-pen/issues/459). Group hang deferred. |
 
 ### Aliases vs vhosts (do not collapse)
 
@@ -144,7 +144,7 @@ Do **not** auto-mirror Surface / #410 into Service 攻击面 except the Wave 2 a
 - Path Observation as a Service; Surface-tab inventory tree.
 - Inventory as Graph L0 / Feedback success.
 - Changing Finding identity (#275).
-- Intel blocks (later; hang on Group / Host / Service, no new asset kind).
+- Intel **law** lives in [`owner-intel.md`](owner-intel.md) (shipped: Host/Service hang + Findings 线索).
 - External CMDB; org RBAC beyond current user-scoped assets.
 - 巡检 / 整改 as new asset kinds — they reuse Host / Service / Finding when they ship.
 
@@ -173,7 +173,7 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 1. **#454a** — Group + assembly + tags on existing Host / `properties.services`. Asset page scheme B. No new path ledger. **Shipped** (`0012_owner_ledger`, `/api/asset-groups`, `/api/assets/tree`).  
 2. **#454b** — First-class Service row (Host+port) + dual-read `properties.services`. Book / accepted HTTP(S) may upsert the port row (not the path). **Shipped** (`0013_owner_service_rows`, `asset_services`).  
 3. **#454c** — Service 攻击面: persist admitted paths on Service from book / accepted HTTP(S) only. **Shipped** (`asset_service_paths`; attach on book + Surface HTTP settle, no #368/#410 rewrite).  
-4. **Intel** — later, not numbered here.
+4. **Intel** — shipped; law in [`owner-intel.md`](owner-intel.md) (`0014_owner_intel`, `/api/intel`, node ledger tools).
 
 #341 (tls Observation) stays deferred and is **not** a child of this Spec.
 
@@ -205,3 +205,5 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-14 | Agent: list_assets total/has_more；create/list groups；assemble；batch_enrich + remove_ports；identity=asset id（同 IP 跨单位可多 Host）。 |
 | 2026-08-14 | UI: 全选/跨筛选 sticky 多选、移出 vs 删除、新建并加入组、排序（含 IP）、shadcn Select。 |
 | 2026-08-14 | Agent 可见/装入 Group：`platform_list_groups` / `create_group` / `assemble_group`；create_asset 支持 group_name。 |
+| 2026-08-15 | Intel wave law published: [`owner-intel.md`](owner-intel.md) (map #459). |
+| 2026-08-15 | Intel shipped: Host/Service hang + Findings 线索 + Agent record/list/get/forget. |

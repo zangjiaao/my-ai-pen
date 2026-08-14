@@ -560,6 +560,7 @@ def build_case_context_payload(
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
     workset: dict | None = None,
     scope_intel: dict | None = None,
+    intel_summary: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
@@ -623,7 +624,8 @@ def build_case_context_payload(
             "Same case work-group. findings_summary = this Case's booked findings (board). "
             "scope_intel (when present) = thin owner-ledger memory for Scope Hosts "
             "(counts, high/crit samples, surface sketch) — not a full prior dump; "
-            "deep-dive with platform.* tools when useful. "
+            "intel_summary = living notebook clues on those Hosts/Services (id+summary+hang; "
+            "not Findings; get body via platform_get_intel). "
             "Primary work: expand untested surface and NEW ledger identities. "
             "Open priors: interleaved re-verify with fresh proof → finding(confirm) "
             "(rediscovery merge; same asset+path/module ≠ second row). "
@@ -634,6 +636,8 @@ def build_case_context_payload(
     }
     if isinstance(scope_intel, dict) and scope_intel:
         payload["scope_intel"] = scope_intel
+    if isinstance(intel_summary, list) and intel_summary:
+        payload["intel_summary"] = intel_summary[:20]
     # Spec #311: thin Workset brief at assign boundary (not every mid-turn).
     if isinstance(workset, dict) and (workset.get("items") or workset.get("goal")):
         try:
@@ -947,6 +951,91 @@ async def _load_scope_intel(
     )
 
 
+async def _scope_asset_ids(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[str]:
+    """Host ids for Case Scope ∩ owner ledger (same match as scope_intel)."""
+    from sqlalchemy import or_, select
+
+    from app.models.asset import Asset
+
+    task = {}
+    if isinstance(conv_context, dict):
+        raw_task = conv_context.get("task")
+        if isinstance(raw_task, dict):
+            task = raw_task
+    host_keys = extract_hosts_from_task(task)
+    ids: list[str] = []
+    seen: set[str] = set()
+    try:
+        if host_keys and uid is not None:
+            q = select(Asset.id).where(
+                or_(Asset.user_id == uid, Asset.user_id.is_(None)),
+                Asset.address.in_(host_keys),
+            )
+            for aid in (await db.execute(q)).scalars().all():
+                s = str(aid)
+                if s not in seen:
+                    seen.add(s)
+                    ids.append(s)
+        sticky_q = select(Asset.id).where(Asset.conversation_id == cid)
+        if uid is not None:
+            sticky_q = sticky_q.where(or_(Asset.user_id == uid, Asset.user_id.is_(None)))
+        for aid in (await db.execute(sticky_q)).scalars().all():
+            s = str(aid)
+            if s not in seen:
+                seen.add(s)
+                ids.append(s)
+    except Exception:
+        return ids
+    return ids
+
+
+async def _load_living_intel_summary(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[dict[str, Any]] | None:
+    """Living notebook lines for Case Scope Hosts — distinct from scope_intel priors."""
+    from app.services.owner_intel import living_intel_for_assets
+
+    asset_ids = await _scope_asset_ids(db, cid=cid, uid=uid, conv_context=conv_context)
+    if not asset_ids:
+        return None
+    task_id = None
+    if isinstance(conv_context, dict):
+        raw_task = conv_context.get("task")
+        if isinstance(raw_task, dict):
+            task_id = str(raw_task.get("task_id") or raw_task.get("id") or "").strip() or None
+    rows = await living_intel_for_assets(
+        db,
+        user_id=uid,
+        asset_ids=asset_ids,
+        current_task_id=task_id,
+        limit=20,
+    )
+    if not rows:
+        return None
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        line = {
+            "id": r.get("id"),
+            "summary": r.get("summary"),
+            "kind": r.get("kind"),
+            "asset_id": r.get("asset_id"),
+            "port": r.get("port"),
+            "is_new": r.get("is_new"),
+        }
+        out.append({k: v for k, v in line.items() if v is not None and v != ""})
+    return out or None
+
+
 async def load_case_context_for_conversation(
     db,
     conversation_id,
@@ -1069,6 +1158,14 @@ async def load_case_context_for_conversation(
     except Exception:
         scope_intel = None
 
+    intel_summary = None
+    try:
+        intel_summary = await _load_living_intel_summary(
+            db, cid=cid, uid=uid, conv_context=conv_context
+        )
+    except Exception:
+        intel_summary = None
+
     return build_case_context_payload(
         messages=messages,
         findings=findings,
@@ -1079,4 +1176,5 @@ async def load_case_context_for_conversation(
         evidence_limit=evidence_limit,
         workset=workset_blob,
         scope_intel=scope_intel,
+        intel_summary=intel_summary,
     )

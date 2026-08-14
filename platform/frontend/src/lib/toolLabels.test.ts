@@ -11,6 +11,8 @@ assert.equal(friendlyToolLabel("http"), "HTTP 探测");
 assert.equal(friendlyToolLabel("todo"), "更新任务清单");
 assert.equal(friendlyToolLabel(""), "工具");
 assert.equal(friendlyToolLabel("platform_list_assets"), "查询资产台账");
+assert.equal(friendlyToolLabel("platform_record_intel"), "记录线索");
+assert.equal(friendlyToolLabel("platform_forget_intel"), "遗忘线索");
 assert.ok(friendlyToolLabel("platform_unknown_thing").startsWith("平台："));
 console.log("ok: friendlyToolLabel Chinese map");
 console.log("toolLabels.test.ts: all ok");

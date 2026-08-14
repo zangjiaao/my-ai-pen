@@ -43,6 +43,7 @@ export async function platformLedgerFetch(
     "X-Node-Token": api.nodeToken,
     "Content-Type": "application/json",
     "X-Conversation-Id": String(runtime.task.conversationId || ""),
+    "X-Task-Id": String(runtime.task.taskId || ""),
   };
   const res = await fetch(url, {
     method,
