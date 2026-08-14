@@ -646,6 +646,81 @@ export function createPlatformListExpertsTool(runtime: ToolRuntime): AgentTool<a
   };
 }
 
+/** Placeholder titles for brand-new Cases (Spec #457). */
+const DEFAULT_CONVERSATION_TITLES = new Set([
+  "新会话",
+  "New session",
+  "new session",
+  "Untitled",
+  "未命名会话",
+  "",
+]);
+
+export function createPlatformSetConversationTitleTool(runtime: ToolRuntime): AgentTool<any> {
+  return {
+    name: "platform_set_conversation_title",
+    label: "Set session title",
+    description:
+      "Rename **this** Case/session title (sidebar + top bar). " +
+      "Use on the first substantive user message when the title is still the default placeholder " +
+      "(新会话 / New session): invent a short descriptive title from intent (target, unit, task type). " +
+      "Also when the user explicitly asks to rename. " +
+      "Titles: concise (≤~24 Chinese chars or ~40 Latin), no quotes, no trailing period. " +
+      "Prefer only_if_default=true for auto-naming so a user-chosen title is never overwritten. " +
+      "Do not announce the rename in chat unless the user asked to rename.",
+    parameters: Type.Object({
+      title: Type.String({ description: "New session title" }),
+      only_if_default: Type.Optional(
+        Type.Boolean({
+          description:
+            "If true, update only when current title is still a default placeholder (新会话 etc.). Prefer true for auto-naming.",
+        }),
+      ),
+    }),
+    async execute(_id: string, params: any) {
+      const cid = String(runtime.task.conversationId || "").trim();
+      if (!cid) return textResult("error: no conversation_id on task", { isError: true });
+      const title = String(params.title || "").trim();
+      if (!title) return textResult("error: title required", { isError: true });
+      const onlyIfDefault = params.only_if_default === true || params.only_if_default === "true";
+      const res = await platformLedgerFetch(
+        runtime,
+        "PATCH",
+        `/api/node/ledger/conversations/${encodeURIComponent(cid)}/title`,
+        {
+          title: title.slice(0, 255),
+          only_if_default: onlyIfDefault,
+        },
+      );
+      if (res.ok) {
+        const data = (res.data && typeof res.data === "object" ? res.data : {}) as {
+          title?: string;
+          skipped?: boolean;
+        };
+        const nextTitle = String(data.title || title).trim();
+        if (!data.skipped && nextTitle) {
+          try {
+            await runtime.platform.send({
+              type: "conversation_title_updated",
+              conversation_id: cid,
+              task_id: runtime.task.taskId,
+              title: nextTitle,
+            } as any);
+          } catch {
+            /* non-fatal */
+          }
+        }
+      }
+      return jsonResult(res.data, { isError: !res.ok });
+    },
+  };
+}
+
+/** True when title is still a product default placeholder (for prompts / tests). */
+export function isDefaultConversationTitle(title: string | undefined | null): boolean {
+  return DEFAULT_CONVERSATION_TITLES.has(String(title ?? "").trim());
+}
+
 /** Register all platform.* tool factories used by the default seat. */
 export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => AgentTool<any>> = {
   platform_list_assets: createPlatformListAssetsTool,
@@ -663,4 +738,5 @@ export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => A
   platform_list_reports: createPlatformListReportsTool,
   platform_create_report: createPlatformCreateReportTool,
   platform_list_experts: createPlatformListExpertsTool,
+  platform_set_conversation_title: createPlatformSetConversationTitleTool,
 };

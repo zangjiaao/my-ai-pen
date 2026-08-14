@@ -2,7 +2,7 @@
  * Policy unit tests for platform ledger tools (host create denial + chat-only helpers).
  */
 import assert from "node:assert/strict";
-import { isHostCreateAttempt } from "./platform.js";
+import { isDefaultConversationTitle, isHostCreateAttempt } from "./platform.js";
 import { isChatOnlyTask, isLedgerAssistSeat } from "../runtime/session-runner.js";
 import { resolveRolePack } from "../roles/index.js";
 import { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } from "../roles/default.js";
@@ -69,5 +69,13 @@ assert.ok(
   toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_list_reports"),
   "default seat can list reports",
 );
+assert.ok(
+  toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_set_conversation_title"),
+  "default seat can rename session title",
+);
+assert.equal(isDefaultConversationTitle("新会话"), true);
+assert.equal(isDefaultConversationTitle("New session"), true);
+assert.equal(isDefaultConversationTitle("  "), true);
+assert.equal(isDefaultConversationTitle("DVWA 渗透 — lab.local"), false);
 
 console.log("platform.policy.test.ts ok");
