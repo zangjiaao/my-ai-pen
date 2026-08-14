@@ -69,3 +69,4 @@ benchmarks/omp-*/
 # Claude local
 .claude/settings.local.json
 
+.vite/
