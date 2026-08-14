@@ -411,6 +411,10 @@ export async function runNode4Task(
     // Spec #278: Session actual mode for AgentRow / dual-rail settlement consumers.
     work_mode: "free",
     panel_agents: panel.list(),
+    // Spec #455: cold reseed of same-Session continue (park miss / explicit flag).
+    ...(task.sessionContinue
+      ? { session_continue: true as const }
+      : {}),
   });
   panel.setMainActivity({
     phase: chatOnly ? "chat" : "starting",

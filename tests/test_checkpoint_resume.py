@@ -2422,6 +2422,7 @@ class CheckpointResumeTests(unittest.TestCase):
         )
 
     def test_resume_message_from_context_preserves_task_and_checkpoint(self):
+        """Spec #455 S1: sticky target/scope/checkpoint; turn text = utterance only."""
         msg = {"type": "user_message", "conversation_id": "conv-1", "text": "continue"}
         resume_context = {
             "task": {
@@ -2438,8 +2439,11 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(resumed["target"], resume_context["task"]["target"])
         self.assertEqual(resumed["scope"], resume_context["task"]["scope"])
         self.assertEqual(resumed["checkpoint"], resume_context["checkpoint"])
-        self.assertIn("Run a DVWA web application pentest", resumed["text"])
-        self.assertIn("continue", resumed["text"])
+        # Dialogue body is operator utterance only — no engagement-book rewrap.
+        self.assertEqual(resumed["text"], "continue")
+        self.assertEqual(resumed["initial_instruction"], "continue")
+        self.assertNotIn("User continuation:", resumed["text"])
+        self.assertNotIn("Run a DVWA web application pentest", resumed["text"])
 
     def test_completed_followup_resume_can_reset_checkpoint(self):
         msg = {"type": "user_message", "conversation_id": "conv-1", "text": "confirm current state"}
@@ -2544,6 +2548,39 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertTrue(is_resume)
         self.assertEqual(resumed.get("goal_objective"), "Maximize verified flags in scope")
         self.assertTrue(resumed.get("goal_mode"))
+        # Spec #455 S1: goal stays structured; prior instruction is not pasted into turn text.
+        self.assertEqual(resumed["text"], "继续")
+        self.assertEqual(resumed["initial_instruction"], "继续")
+        self.assertNotIn("prior instruction", resumed["text"])
+        self.assertNotIn("User continuation:", resumed["text"])
+
+    def test_s1_resume_turn_text_is_utterance_not_engagement_book(self):
+        """Spec #455 S1 pure: sticky resume never builds User continuation: glue."""
+        prior = (
+            "Authorized pentest of http://lab.example/\n"
+            "Enumerate attack surface, book findings with proof."
+        )
+        resume_context = {
+            "task": {
+                "target": {"type": "url", "value": "http://lab.example/"},
+                "scope": {"allow": ["http://lab.example/"], "deny": []},
+                "instruction": prior,
+            },
+            "checkpoint": {"phase": "recon"},
+        }
+        resumed, ok = _resume_message_from_context({"text": "继续"}, resume_context)
+        self.assertTrue(ok)
+        self.assertIsNotNone(resumed)
+        self.assertEqual(resumed["text"], "继续")
+        self.assertEqual(resumed["initial_instruction"], "继续")
+        self.assertEqual(resumed["target"]["value"], "http://lab.example/")
+        self.assertEqual(resumed["scope"]["allow"], ["http://lab.example/"])
+        self.assertNotIn("User continuation:", resumed["text"])
+        self.assertNotIn(prior, resumed["text"])
+        # task_assign maps text → initial_instruction only (no rewrap later).
+        task_msg = _task_assign_from_user_message("conv-s1", resumed, "task-s1")
+        self.assertEqual(task_msg["initial_instruction"], "继续")
+        self.assertEqual(task_msg["target"]["value"], "http://lab.example/")
 
     def test_build_conversation_snapshot_restores_checkpoint_runtime_structures(self):
         conv_id = uuid.uuid4()

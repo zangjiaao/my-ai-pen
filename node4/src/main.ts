@@ -578,6 +578,10 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       message.pending_handoff === true ||
       message.pendingHandoff === true ||
       undefined,
+    sessionContinue:
+      message.session_continue === true ||
+      message.sessionContinue === true ||
+      undefined,
   };
 }
 

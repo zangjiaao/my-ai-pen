@@ -13,9 +13,11 @@ import {
 import MarkdownText from "../MarkdownText";
 import { ProcessStatusLight } from "../ProcessStatusLight";
 
-/** Thinking body density: secondary chrome + soft-break for streamed short lines (Spec #327 / #329). */
+/** Thinking body density: secondary chrome + soft-break for streamed short lines (Spec #327 / #329).
+ * Width fills the rail column (min-w-0) — do not force w-full next to the left border rail.
+ */
 const THINKING_MARKDOWN_CLASS =
-  "min-w-0 w-full max-w-full space-y-1 py-1 text-xs leading-relaxed text-ink-muted [overflow-wrap:anywhere]";
+  "min-w-0 max-w-full space-y-1 py-1 text-xs leading-relaxed text-ink-muted [overflow-wrap:anywhere]";
 
 /**
  * Thinking process chrome — sibling group to 「工具调用」:
@@ -118,13 +120,20 @@ export default function ThinkingCard({
           opacity: showBody ? 1 : 0,
         }}
       >
-        <div className="min-h-0 overflow-hidden">
+        <div className="min-h-0 min-w-0 overflow-hidden">
           {projection.showBodyWhenExpanded ? (
+            // Indent with padding (not margin + w-full): left rail must not push content past parent.
             <div
-              className="relative ml-2.5 w-full min-w-0 border-l border-hairline pl-3"
+              className="flex min-w-0 max-w-full pl-2.5"
               data-testid="thinking-card-body"
             >
-              <MarkdownText text={projection.body} breaks className={THINKING_MARKDOWN_CLASS} />
+              <div
+                className="w-px shrink-0 self-stretch bg-hairline"
+                aria-hidden
+              />
+              <div className="min-w-0 flex-1 overflow-x-hidden pl-3">
+                <MarkdownText text={projection.body} breaks className={THINKING_MARKDOWN_CLASS} />
+              </div>
             </div>
           ) : null}
         </div>

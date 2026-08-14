@@ -1402,11 +1402,20 @@ export default function ConversationPage() {
       setInterrupting(false);
       clearProgressiveStreamUi();
       const status = String(m.status || "incomplete").toLowerCase();
+      const sessionContinue = m.parked_continue === true || m.session_continue === true;
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: (status === "blocked" ? "Task blocked - " : "Task incomplete - ") + String(m.summary || ""),
+        text:
+          (sessionContinue
+            ? status === "blocked"
+              ? "Session continue blocked - "
+              : "Session continue paused - "
+            : status === "blocked"
+              ? "Package blocked - "
+              : "Package incomplete - ") + String(m.summary || ""),
         status: status === "blocked" ? "blocked" : "incomplete",
         audit: m.audit,
         summary: m.summary,
+        parked_continue: sessionContinue || undefined,
         message_id: m.message_id,
       }));
       void fetchAll();
@@ -1704,15 +1713,30 @@ export default function ConversationPage() {
       ) as Conversation["status"];
       if (convId) patchConversation(convId, { status: nextStatus, working: false });
       // Single terminal channel: completed | incomplete | blocked (no separate task_incomplete).
+      // Spec #455: package settle is a Session segment light, not "new Task life cycle".
       const status = String(m.status || "completed").toLowerCase();
       const incomplete = status === "incomplete" || status === "blocked";
+      const sessionContinue = m.parked_continue === true || m.session_continue === true;
+      const summaryText = incomplete
+        ? String(m.summary || "")
+        : JSON.stringify(m.summary || {});
+      const settleLabel = sessionContinue
+        ? incomplete
+          ? status === "blocked"
+            ? "Session continue blocked - "
+            : "Session continue paused - "
+          : "Session continue settled - "
+        : incomplete
+          ? status === "blocked"
+            ? "Package blocked - "
+            : "Package incomplete - "
+          : "Package complete - ";
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: incomplete
-          ? (status === "blocked" ? "Task blocked - " : "Task incomplete - ") + String(m.summary || "")
-          : "Task complete - " + JSON.stringify(m.summary || {}),
+        text: settleLabel + summaryText,
         status: incomplete ? status : "completed",
         summary: m.summary || {},
         audit: m.audit,
+        parked_continue: sessionContinue || undefined,
         message_id: m.message_id,
       }));
       void fetchAll();
@@ -1727,7 +1751,14 @@ export default function ConversationPage() {
       setInterrupting(false);
       clearProgressiveStreamUi();
       if (convId) patchConversation(convId, { status: "failed", working: false });
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task failed: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
+      // Spec #455: package segment fail ≠ Case/Session death (display copy).
+      const err = msg as Record<string, unknown>;
+      const sessionContinue = err.parked_continue === true || err.session_continue === true;
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", {
+        text: (sessionContinue ? "Session segment failed: " : "Package failed: ") + (err.message || ""),
+        parked_continue: sessionContinue || undefined,
+        message_id: err.message_id,
+      }));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -3889,6 +3920,8 @@ function isUserVisibleStatusMessage(text: string): boolean {
   if (/^[\w.-]+\s+running$/i.test(t)) return false; // "todo running", "shell running"
   if (t.startsWith("phase:") && t.includes("(iter")) return false;
   if (t.startsWith("node4 starting") || t.includes(" starting pack=")) return false;
+  // Spec #455: machine parked_continue ticks are not product chat.
+  if (t.startsWith("parked_continue")) return false;
   // Keep interrupt / error / handoff style notes.
   return true;
 }

@@ -102,6 +102,11 @@ export type TaskEnvelope = {
   /** Spec #354: true when this assign consumes a Case pending hold (force drop ghost park). */
   pendingHandoff?: boolean;
   /**
+   * Spec #455: same-Session dialogue continue (package is accounting only).
+   * Park-hit prompts utterance only; cold/park-miss may still inject case_context.
+   */
+  sessionContinue?: boolean;
+  /**
    * Node-configured output language — registry wire code only
    * (auto | zh-CN | zh-TW | en | ja). Normalized at the envelope boundary.
    * Agent-authored narrative surfaces; raw tool stdout is never rewritten.
