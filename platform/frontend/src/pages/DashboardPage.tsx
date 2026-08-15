@@ -238,6 +238,7 @@ function buildDailySeries(
   points: OpenFindingPoint[],
   days: number,
   assetId: string | null,
+  severity: string | null,
 ): Array<DailyOpenPoint & { label: string }> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -258,6 +259,7 @@ function buildDailySeries(
 
   for (const p of points) {
     if (assetId && p.asset_id !== assetId) continue;
+    if (severity && p.severity !== severity) continue;
     const bucket = buckets.get(p.date);
     if (!bucket) continue;
     const sev = (SEVERITIES as readonly string[]).includes(p.severity)
@@ -280,6 +282,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   /** Empty string = all assets */
   const [chartAssetId, setChartAssetId] = useState("");
+  const [chartSeverity, setChartSeverity] = useState("");
   /** Inline vuln detail — list row opens dialog, not /vulnerabilities. */
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
   const [opsTab, setOpsTab] = useState<"nodes" | "experts">("experts");
@@ -327,14 +330,23 @@ export default function DashboardPage() {
   const openPoints = summary?.daily_open?.open_points ?? [];
 
   const dailyChartData = useMemo(
-    () => buildDailySeries(openPoints, days, chartAssetId || null),
-    [openPoints, days, chartAssetId],
+    () => buildDailySeries(openPoints, days, chartAssetId || null, chartSeverity || null),
+    [openPoints, days, chartAssetId, chartSeverity],
   );
+
+  const chartSeries = chartSeverity
+    ? SEVERITIES.filter((s) => s === chartSeverity)
+    : SEVERITIES;
 
   const chartOpenTotal = useMemo(
     () => dailyChartData.reduce((sum, d) => sum + d.total, 0),
     [dailyChartData],
   );
+
+  const chartYMax = useMemo(() => {
+    const peak = dailyChartData.reduce((m, d) => Math.max(m, d.total), 0);
+    return peak + 5;
+  }, [dailyChartData]);
 
   const hasChartData = chartOpenTotal > 0;
 
@@ -403,6 +415,22 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
+                      <label htmlFor="chart-severity-filter" className="sr-only">
+                        筛选等级
+                      </label>
+                      <select
+                        id="chart-severity-filter"
+                        value={chartSeverity}
+                        onChange={(e) => setChartSeverity(e.target.value)}
+                        className="rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-xs text-ink outline-none focus:border-ink-muted"
+                      >
+                        <option value="">全部等级</option>
+                        {SEVERITIES.map((sev) => (
+                          <option key={sev} value={sev}>
+                            {SEV_LABEL[sev]}
+                          </option>
+                        ))}
+                      </select>
                       <label htmlFor="chart-asset-filter" className="sr-only">
                         筛选资产
                       </label>
@@ -445,6 +473,7 @@ export default function DashboardPage() {
                           interval="preserveStartEnd"
                         />
                         <YAxis
+                          domain={[0, chartYMax]}
                           allowDecimals={false}
                           tickLine={false}
                           axisLine={false}
@@ -454,7 +483,7 @@ export default function DashboardPage() {
                         />
                         <ChartTooltip cursor={false} content={<ChartTooltipContent hideZero />} />
                         {/* Bottom → top: critical … info so 严重 sits at the base */}
-                        {SEVERITIES.map((sev) => (
+                        {chartSeries.map((sev) => (
                           <Bar
                             key={sev}
                             dataKey={sev}
