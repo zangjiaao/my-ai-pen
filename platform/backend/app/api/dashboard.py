@@ -146,7 +146,11 @@ class ExpertItem(BaseModel):
     pack_id: str
     node_id: str
     node_name: str | None = None
+    node_status: str | None = None
+    color: str | None = None
     enabled: bool = True
+    is_default: bool = False
+    description: str | None = None
 
 
 class ExpertSection(BaseModel):
@@ -186,6 +190,13 @@ class ScheduleSection(BaseModel):
     items: list[ScheduleItem] = Field(default_factory=list)
 
 
+class FindingPace(BaseModel):
+    """New findings in the last 7 days vs the previous 7 (first_seen preferred)."""
+
+    last_7d: int = 0
+    prev_7d: int = 0
+
+
 class DashboardSummaryOut(BaseModel):
     vulnerabilities: VulnSection = Field(default_factory=VulnSection)
     daily_open: DailyOpenSection = Field(default_factory=DailyOpenSection)
@@ -194,6 +205,7 @@ class DashboardSummaryOut(BaseModel):
     experts: ExpertSection = Field(default_factory=ExpertSection)
     tasks: TaskSection = Field(default_factory=TaskSection)
     schedules: ScheduleSection = Field(default_factory=ScheduleSection)
+    finding_pace: FindingPace = Field(default_factory=FindingPace)
 
     # flat KPI helpers
     assets_total: int = 0
@@ -277,6 +289,11 @@ async def dashboard_summary(
     open_by_asset: dict[str, list[str]] = defaultdict(list)
     total_by_asset: Counter[str] = Counter()
     open_points: list[OpenFindingPoint] = []
+    now_utc = datetime.now(timezone.utc)
+    week_ago = now_utc - timedelta(days=7)
+    prev_week = now_utc - timedelta(days=14)
+    last_7d = 0
+    prev_7d = 0
     for v in vulns:
         st = normalize_status(v.status)
         by_status[st] = by_status.get(st, 0) + 1
@@ -299,6 +316,14 @@ async def dashboard_summary(
                         asset_id=aid,
                     )
                 )
+        first_at = v.first_seen_at or v.discovered_at
+        if first_at is not None:
+            first_utc = first_at if first_at.tzinfo else first_at.replace(tzinfo=timezone.utc)
+            first_utc = first_utc.astimezone(timezone.utc)
+            if first_utc >= week_ago:
+                last_7d += 1
+            elif first_utc >= prev_week:
+                prev_7d += 1
     open_total = int(by_status.get("to_fix", 0) + by_status.get("fixing", 0))
     sorted_vulns = sorted(
         vulns,
@@ -401,6 +426,7 @@ async def dashboard_summary(
         ],
     )
     node_name_by_id = {str(n.id): n.name for n in nodes}
+    node_status_by_id = {str(n.id): (n.status or "offline") for n in nodes}
 
     # --- experts ---
     experts = (
@@ -415,7 +441,11 @@ async def dashboard_summary(
                 pack_id=e.pack_id,
                 node_id=str(e.node_id),
                 node_name=node_name_by_id.get(str(e.node_id)),
+                node_status=node_status_by_id.get(str(e.node_id)),
+                color=getattr(e, "color", None),
                 enabled=bool(getattr(e, "enabled", True)),
+                is_default=bool(getattr(e, "is_default", False)),
+                description=(e.description or None),
             )
             for e in experts[:12]
         ],
@@ -501,6 +531,7 @@ async def dashboard_summary(
         experts=expert_section,
         tasks=task_section,
         schedules=schedule_section,
+        finding_pace=FindingPace(last_7d=last_7d, prev_7d=prev_7d),
         assets_total=len(assets),
         conversations_total=conv_total,
         nodes_online=online,

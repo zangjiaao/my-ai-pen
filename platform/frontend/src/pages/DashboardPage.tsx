@@ -3,12 +3,13 @@
  *
  * Layout:
  *  1. KPI strip (small cards)
- *  2. 每日未修复漏洞 chart (2/3) | 新增漏洞列表 (1/3)
+ *  2. 每日未修复漏洞 chart (3/5) | 新增漏洞列表 (2/5)
  *  3. 节点信息 | 专家信息 | 计划任务
  */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bar, BarChart, CartesianGrid, Legend, XAxis, YAxis } from "recharts";
+import { TrendingDown, TrendingUp } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import VulnDetailDialog from "../components/VulnDetailDialog";
@@ -19,6 +20,7 @@ import {
   type ChartConfig,
 } from "../components/ui/chart";
 import { authFetch } from "../lib/api";
+import { expertLabel, packCapabilities, resolveExpertColor } from "../lib/experts";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 
 type FindingItem = {
@@ -99,7 +101,11 @@ type Summary = {
       pack_id: string;
       node_id: string;
       node_name?: string | null;
+      node_status?: string | null;
+      color?: string | null;
       enabled: boolean;
+      is_default?: boolean;
+      description?: string | null;
     }[];
   };
   tasks: {
@@ -131,6 +137,10 @@ type Summary = {
   vulns_total?: number;
   experts_total?: number;
   schedules_total?: number;
+  finding_pace?: {
+    last_7d: number;
+    prev_7d: number;
+  };
 };
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -148,7 +158,15 @@ const SEV_COLOR: Record<(typeof SEVERITIES)[number], string> = {
   high: "var(--color-severity-high)",
   medium: "var(--color-severity-medium)",
   low: "var(--color-severity-low)",
-  info: "var(--color-severity-info)",
+  info: "var(--color-ink-secondary)",
+};
+
+const SEV_FILL: Record<(typeof SEVERITIES)[number], string> = {
+  critical: "fill-severity-critical",
+  high: "fill-severity-high",
+  medium: "fill-severity-medium",
+  low: "fill-severity-low",
+  info: "fill-ink-secondary",
 };
 
 const SEV_LABEL: Record<(typeof SEVERITIES)[number], string> = {
@@ -297,7 +315,7 @@ export default function DashboardPage() {
       <Sidebar activeId={null} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title="状态看板" />
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
           {loading && <p className="text-sm text-ink-muted">加载中…</p>}
           {error && (
             <div className="mb-4 max-w-xl rounded-md bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
@@ -306,12 +324,27 @@ export default function DashboardPage() {
           )}
 
           {summary && !loading && (
-            <div className="space-y-6">
-              {/* 1. KPI strip */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                <Kpi label="待处理漏洞" value={openTotal} onClick={() => navigate("/vulnerabilities?status=to_fix")} />
-                <Kpi label="漏洞总数" value={vulnsTotal} onClick={() => navigate("/vulnerabilities")} />
-                <Kpi label="资产" value={summary.assets?.total ?? 0} onClick={() => navigate("/assets")} />
+            <div className="flex min-h-0 flex-1 flex-col gap-4">
+              {/* 1. KPI strip — title / value / trend */}
+              <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                <Kpi
+                  label="待处理漏洞"
+                  value={openTotal}
+                  hint={vulnsTotal > 0 ? `占总数 ${Math.round((openTotal / vulnsTotal) * 100)}%` : undefined}
+                  onClick={() => navigate("/vulnerabilities?status=to_fix")}
+                />
+                <Kpi
+                  label="漏洞总数"
+                  value={vulnsTotal}
+                  {...paceProps(summary.finding_pace?.last_7d ?? 0, summary.finding_pace?.prev_7d ?? 0)}
+                  onClick={() => navigate("/vulnerabilities")}
+                />
+                <Kpi
+                  label="资产"
+                  value={summary.assets?.total ?? 0}
+                  hint={`${summary.assets?.with_open_vulns ?? 0} 个有未修复`}
+                  onClick={() => navigate("/assets")}
+                />
                 <Kpi
                   label="在线节点"
                   value={summary.nodes?.online ?? 0}
@@ -325,15 +358,15 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* 2. 每日未修复 chart (2/3) | 新增漏洞 (1/3) */}
-              <div className="grid gap-4 lg:grid-cols-3 lg:items-stretch">
-                <section className="flex h-[400px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4 lg:col-span-2">
-                  <div className="mb-2 flex shrink-0 flex-wrap items-start justify-between gap-3">
+              <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,6fr)_minmax(0,4fr)] gap-4">
+              {/* 2. 每日未修复 (6fr) | 新增漏洞 (4fr) */}
+              <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] lg:items-stretch">
+                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+                  <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h2 className="text-sm font-semibold tracking-tight text-ink">每日未修复漏洞</h2>
                       <p className="mt-0.5 text-[11px] text-ink-muted">
                         近 {days} 天 · 仅统计待修复 / 修复中
-                        {chartOpenTotal > 0 ? ` · 合计 ${chartOpenTotal}` : ""}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -353,13 +386,6 @@ export default function DashboardPage() {
                           </option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        onClick={() => navigate("/vulnerabilities?status=to_fix")}
-                        className="shrink-0 text-xs text-ink-secondary hover:text-ink"
-                      >
-                        漏洞 →
-                      </button>
                     </div>
                   </div>
 
@@ -368,51 +394,43 @@ export default function DashboardPage() {
                   ) : (
                     <ChartContainer
                       config={dailyOpenChartConfig}
-                      className="min-h-0 w-full flex-1 aspect-auto"
+                      className="min-h-0 w-full flex-1 aspect-auto pt-4"
                     >
                       <BarChart
                         data={dailyChartData}
                         margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
                       >
-                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-chart-grid)" />
+                        <CartesianGrid vertical={false} stroke="var(--color-chart-grid)" />
                         <XAxis
                           dataKey="date"
                           tickLine={false}
                           axisLine={false}
+                          tickMargin={8}
+                          minTickGap={32}
                           tick={{ fontSize: 11, fill: "var(--color-chart-tick)" }}
                           tickFormatter={formatDayLabel}
                           interval="preserveStartEnd"
-                          minTickGap={16}
                         />
                         <YAxis
                           allowDecimals={false}
                           tickLine={false}
                           axisLine={false}
-                          width={28}
+                          tickMargin={4}
+                          width={35}
                           tick={{ fontSize: 11, fill: "var(--color-chart-tick)" }}
                         />
-                        <ChartTooltip content={<ChartTooltipContent hideZero />} />
-                        <Legend
-                          verticalAlign="top"
-                          height={28}
-                          iconType="square"
-                          iconSize={8}
-                          formatter={(value) => (
-                            <span className="text-[11px] text-ink-secondary">
-                              {SEV_LABEL[value as (typeof SEVERITIES)[number]] || value}
-                            </span>
-                          )}
-                        />
-                        {/* Bottom → top: info … critical so highest severity sits on top */}
-                        {[...SEVERITIES].reverse().map((sev, idx, arr) => (
+                        <ChartTooltip cursor={false} content={<ChartTooltipContent hideZero />} />
+                        {/* PaceUI chart-3: stacked bars, radius 6, 3px canvas stroke between segments */}
+                        {[...SEVERITIES].reverse().map((sev) => (
                           <Bar
                             key={sev}
                             dataKey={sev}
-                            name={sev}
+                            name={SEV_LABEL[sev]}
                             stackId="open"
-                            fill={`var(--color-${sev})`}
-                            radius={idx === arr.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
-                            maxBarSize={36}
+                            fill={SEV_COLOR[sev]}
+                            radius={6}
+                            className={`stroke-canvas ${SEV_FILL[sev]}`}
+                            strokeWidth={3}
                           />
                         ))}
                       </BarChart>
@@ -420,7 +438,7 @@ export default function DashboardPage() {
                   )}
                 </section>
 
-                <section className="flex h-[400px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
                   <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
                     <div className="min-w-0">
                       <h2 className="text-sm font-semibold tracking-tight text-ink">新增漏洞</h2>
@@ -434,41 +452,54 @@ export default function DashboardPage() {
                       漏洞 →
                     </button>
                   </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto">
+                  <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
                     {recentFindings.length === 0 ? (
                       <Empty>暂无新增漏洞</Empty>
                     ) : (
-                      <ul className="divide-y divide-hairline-soft">
-                        {recentFindings.map((f) => (
-                          <li key={f.id}>
-                            <button
-                              type="button"
+                      <table className="w-full table-fixed text-left text-sm">
+                        <colgroup>
+                          <col className="w-[4.5rem]" />
+                          <col />
+                          <col className="w-[9.5rem]" />
+                        </colgroup>
+                        <thead className="sticky top-0 z-10 bg-canvas">
+                          <tr className="border-b border-hairline text-[11px] text-ink-secondary">
+                            <th className="bg-canvas pb-2 pr-2 font-medium">级别</th>
+                            <th className="bg-canvas pb-2 pr-2 font-medium">漏洞名</th>
+                            <th className="bg-canvas pb-2 font-medium">发现时间</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentFindings.map((f) => (
+                            <tr
+                              key={f.id}
+                              className="cursor-pointer border-b border-hairline-soft last:border-b-0 hover:bg-canvas-inset"
                               onClick={() => openFinding(f)}
-                              className="flex w-full items-start gap-2 py-2 text-left hover:bg-canvas-inset"
                             >
-                              <span
-                                className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${SEV_CLASS[f.severity] || SEV_CLASS.info}`}
-                              >
-                                {f.severity}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm text-ink">{f.title}</p>
-                                <p className="text-[11px] text-ink-muted">
-                                  {f.status_label}
-                                  {f.discovered_at ? ` · ${formatWhen(f.discovered_at)}` : ""}
-                                </p>
-                              </div>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+                              <td className="py-2 pr-2 align-middle">
+                                <span
+                                  className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10px] font-medium ${SEV_CLASS[f.severity] || SEV_CLASS.info}`}
+                                >
+                                  {SEV_LABEL[f.severity as (typeof SEVERITIES)[number]] || f.severity}
+                                </span>
+                              </td>
+                              <td className="truncate py-2 pr-2 align-middle text-xs text-ink" title={f.title}>
+                                {f.title}
+                              </td>
+                              <td className="whitespace-nowrap py-2 align-middle text-[11px] text-ink-muted">
+                                {formatWhen(f.discovered_at)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     )}
                   </div>
                 </section>
               </div>
 
               {/* 3. 节点 | 专家 | 计划任务 */}
-              <div className="grid gap-4 lg:grid-cols-3">
+              <div className="grid min-h-0 gap-4 lg:grid-cols-3">
                 <Card
                   title="节点信息"
                   meta={`在线 ${summary.nodes?.online ?? 0} · 离线 ${summary.nodes?.offline ?? 0}`}
@@ -478,38 +509,24 @@ export default function DashboardPage() {
                   {(summary.nodes?.items?.length ?? 0) === 0 ? (
                     <Empty>暂无节点</Empty>
                   ) : (
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-hairline text-xs text-ink-secondary">
-                          <th className="pb-2 pr-2 font-medium">名称</th>
-                          <th className="pb-2 pr-2 font-medium">状态</th>
-                          <th className="pb-2 font-medium">会话</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-hairline-soft">
-                        {summary.nodes.items.map((n) => (
-                          <tr
-                            key={n.id}
-                            className="cursor-pointer hover:bg-canvas-inset"
+                    <ul className="flex flex-col">
+                      {summary.nodes.items.map((n) => (
+                        <li key={n.id}>
+                          <Tile
+                            flush
+                            title={n.name}
+                            meta={`${n.type} · ${n.current_sessions} 会话`}
+                            dot={n.status === "online" ? "var(--color-status-success)" : "var(--color-ink-muted)"}
+                            badge={
+                              <StatusPill on={n.status === "online"}>
+                                {n.status === "online" ? "在线" : n.status}
+                              </StatusPill>
+                            }
                             onClick={() => navigate("/nodes")}
-                          >
-                            <td className="py-2 pr-2 text-xs font-medium">{n.name}</td>
-                            <td className="py-2 pr-2">
-                              <span
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                  n.status === "online"
-                                    ? "bg-status-success/15 text-status-success"
-                                    : "bg-canvas-inset text-ink-muted"
-                                }`}
-                              >
-                                {n.status}
-                              </span>
-                            </td>
-                            <td className="py-2 font-mono text-xs">{n.current_sessions}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                          />
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </Card>
 
@@ -522,30 +539,16 @@ export default function DashboardPage() {
                   {(summary.experts?.items?.length ?? 0) === 0 ? (
                     <Empty>暂无专家实例</Empty>
                   ) : (
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-hairline text-xs text-ink-secondary">
-                          <th className="pb-2 pr-2 font-medium">名称</th>
-                          <th className="pb-2 pr-2 font-medium">Pack</th>
-                          <th className="pb-2 font-medium">节点</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-hairline-soft">
-                        {summary.experts.items.map((e) => (
-                          <tr
-                            key={e.id}
-                            className="cursor-pointer hover:bg-canvas-inset"
+                    <ul className="flex flex-col">
+                      {summary.experts.items.map((e) => (
+                        <li key={e.id}>
+                          <ExpertTile
+                            expert={e}
                             onClick={() => navigate("/experts")}
-                          >
-                            <td className="py-2 pr-2 text-xs font-medium">@{e.name}</td>
-                            <td className="py-2 pr-2 font-mono text-xs text-ink-secondary">{e.pack_id}</td>
-                            <td className="max-w-[6rem] truncate py-2 text-xs text-ink-muted" title={e.node_name || e.node_id}>
-                              {e.node_name || e.node_id.slice(0, 8)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                          />
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </Card>
 
@@ -558,44 +561,21 @@ export default function DashboardPage() {
                   {(summary.schedules?.items?.length ?? 0) === 0 ? (
                     <Empty>暂无计划任务</Empty>
                   ) : (
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-hairline text-xs text-ink-secondary">
-                          <th className="pb-2 pr-2 font-medium">目标</th>
-                          <th className="pb-2 pr-2 font-medium">周期</th>
-                          <th className="pb-2 font-medium">状态</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-hairline-soft">
-                        {summary.schedules.items.map((s) => (
-                          <tr
-                            key={s.id}
-                            className="cursor-pointer hover:bg-canvas-inset"
+                    <ul className="flex flex-col gap-2">
+                      {summary.schedules.items.map((s) => (
+                        <li key={s.id}>
+                          <Tile
+                            title={s.target}
+                            meta={`${formatInterval(s.interval_seconds)}${s.next_fire_at ? ` · ${formatWhen(s.next_fire_at)}` : ""}`}
+                            badge={<StatusPill on={s.enabled}>{s.enabled ? "启用" : "停用"}</StatusPill>}
                             onClick={() => navigate("/schedules")}
-                          >
-                            <td className="max-w-[8rem] truncate py-2 pr-2 font-mono text-xs" title={s.target}>
-                              {s.target}
-                            </td>
-                            <td className="py-2 pr-2 text-xs text-ink-secondary">
-                              {formatInterval(s.interval_seconds)}
-                            </td>
-                            <td className="py-2">
-                              <span
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                  s.enabled
-                                    ? "bg-status-success/15 text-status-success"
-                                    : "bg-canvas-inset text-ink-muted"
-                                }`}
-                              >
-                                {s.enabled ? "启用" : "停用"}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                          />
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </Card>
+              </div>
               </div>
             </div>
           )}
@@ -620,7 +600,7 @@ function Card(props: {
   onAction?: () => void;
 }) {
   return (
-    <section className="flex h-[260px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
       <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold tracking-tight text-ink">{props.title}</h2>
@@ -632,8 +612,101 @@ function Card(props: {
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </section>
+  );
+}
+
+function ExpertTile(props: {
+  expert: {
+    id: string;
+    name: string;
+    pack_id: string;
+    node_id: string;
+    node_name?: string | null;
+    node_status?: string | null;
+    color?: string | null;
+    enabled: boolean;
+    is_default?: boolean;
+    description?: string | null;
+  };
+  onClick: () => void;
+}) {
+  const e = props.expert;
+  const accent = resolveExpertColor(e.color, e.id);
+  const pack = expertLabel(e.pack_id);
+  const caps = packCapabilities(e.pack_id);
+  const nodeOnline = (e.node_status || "").toLowerCase() === "online";
+  const nodeLabel = e.node_name || e.node_id.slice(0, 8);
+  const meta = [
+    pack,
+    nodeOnline ? nodeLabel : `${nodeLabel}（离线）`,
+    `技能 ${caps.skills.length}`,
+    `工具 ${caps.tools.length}`,
+  ].join(" · ");
+
+  return (
+    <Tile
+      flush
+      title={e.name}
+      meta={meta}
+      dot={accent}
+      badge={
+        e.is_default && e.enabled ? (
+          <StatusPill on>默认</StatusPill>
+        ) : !e.enabled ? (
+          <StatusPill on={false}>停用</StatusPill>
+        ) : null
+      }
+      onClick={props.onClick}
+    />
+  );
+}
+
+function Tile(props: {
+  title: string;
+  meta?: string;
+  badge?: React.ReactNode;
+  dot?: string;
+  flush?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={
+        props.flush
+          ? "flex w-full items-center justify-between gap-3 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-canvas-inset"
+          : "flex w-full items-start justify-between gap-3 rounded-md border border-hairline bg-canvas-inset px-3 py-2.5 text-left transition-colors hover:border-ink-muted/40 hover:bg-surface-elevated"
+      }
+    >
+      <div
+        className="flex min-w-0 flex-1 items-center gap-2"
+        title={props.meta ? `${props.title} · ${props.meta}` : props.title}
+      >
+        {props.dot ? (
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: props.dot }} aria-hidden />
+        ) : null}
+        <p className="min-w-0 truncate">
+          <span className="text-sm font-medium text-ink">{props.title}</span>
+          {props.meta ? <span className="text-[11px] text-ink-muted"> · {props.meta}</span> : null}
+        </p>
+      </div>
+      {props.badge}
+    </button>
+  );
+}
+
+function StatusPill({ on, children }: { on: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+        on ? "bg-status-success/15 text-status-success" : "bg-canvas text-ink-muted"
+      }`}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -641,16 +714,39 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="flex h-full min-h-[80px] items-center justify-center text-sm text-ink-muted">{children}</p>;
 }
 
-function Kpi(props: { label: string; value: number; hint?: string; onClick?: () => void }) {
+function paceProps(last: number, prev: number): { hint: string; tone: "up" | "down" | "flat" } {
+  const d = last - prev;
+  if (d === 0 && prev === 0) return { hint: "近 7 天无新增", tone: "flat" };
+  if (d === 0) return { hint: "与前 7 天持平", tone: "flat" };
+  const sign = d > 0 ? "+" : "";
+  const text = prev === 0 ? `${sign}${d}` : `${sign}${d} · ${sign}${Math.round((d / prev) * 100)}%`;
+  return { hint: text, tone: d > 0 ? "up" : "down" };
+}
+
+function Kpi(props: {
+  label: string;
+  value: number;
+  hint?: string;
+  tone?: "up" | "down" | "flat";
+  onClick?: () => void;
+}) {
+  const toneClass =
+    props.tone === "up" ? "text-severity-critical" : props.tone === "down" ? "text-status-success" : "text-ink-muted";
   return (
     <button
       type="button"
       onClick={props.onClick}
-      className="rounded-lg border border-hairline bg-canvas p-4 text-left transition-colors hover:bg-canvas-inset"
+      className="flex min-h-[9rem] flex-col rounded-lg border border-hairline bg-canvas px-4 py-5 text-left transition-colors hover:bg-canvas-inset"
     >
-      <p className="text-[11px] font-medium uppercase tracking-wider text-ink-muted">{props.label}</p>
-      <p className="mt-1 font-mono text-2xl font-semibold tracking-tight text-ink">{props.value}</p>
-      {props.hint ? <p className="mt-1 text-xs text-ink-muted">{props.hint}</p> : null}
+      <p className="text-[11px] font-medium text-ink-muted">{props.label}</p>
+      <p className="mt-2 font-mono text-2xl font-semibold tracking-tight text-ink">{props.value}</p>
+      {props.hint ? (
+        <p className={`mt-auto flex items-center gap-1 pt-3 text-xs ${toneClass}`}>
+          {props.tone === "up" ? <TrendingUp size={12} /> : null}
+          {props.tone === "down" ? <TrendingDown size={12} /> : null}
+          {props.hint}
+        </p>
+      ) : null}
     </button>
   );
 }
