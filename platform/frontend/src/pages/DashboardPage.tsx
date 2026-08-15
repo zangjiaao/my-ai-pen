@@ -482,7 +482,7 @@ export default function DashboardPage() {
                       onClick={() => navigate("/vulnerabilities")}
                       className="h-7 shrink-0 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
                     >
-                      漏洞 →
+                      进入
                     </button>
                   </div>
                   <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
@@ -635,7 +635,7 @@ export default function DashboardPage() {
                       onClick={() => navigate("/schedules")}
                       className="h-7 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
                     >
-                      计划 →
+                      进入
                     </button>
                   }
                 >
@@ -706,7 +706,7 @@ function Card(props: {
             onClick={props.onAction}
             className="h-7 shrink-0 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
           >
-            {props.actionLabel} →
+            进入
           </button>
         ) : null}
       </div>
