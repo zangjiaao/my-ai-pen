@@ -60,7 +60,7 @@
 **P0**
 
 - 登录与会话：列表、新建、切换、基本管理；新建默认标题「新会话」。
-- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)）：默认标题 + 任务信封里已有结构化 target / scope 时，**harness 家政**（瘦 Node Agent，不是参与者 Session）经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；无 target 的寒暄/台账闲聊不改名；用户手动改名后不被自动覆盖。专家只在用户明确要求时改名。
+- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)）：默认标题 + 任务信封里已有结构化 target / scope 时，**当前 Main**（Default 或 Expert Free）在 Task 层经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；无 target 的寒暄/台账闲聊不改名；用户手动改名后不被自动覆盖。不另开命名 Session。Graph 阶段 / Package worker 不起名。
 - 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + Goal 开关 + **参与者**（工作台助手 `default` / 专家）+ 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。

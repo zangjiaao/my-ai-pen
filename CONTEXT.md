@@ -23,8 +23,8 @@ Long-lived `conversation_id + expert_id` work identity. Private work mode, parke
 _Avoid_: new amnesiac task_id as the only notion of “session”; equating UI chat continuity with per-stage pi workdirs alone
 
 **Housekeeping**:
-Harness-owned chores that must not occupy the Expert (first: auto-title when the Case is still「新会话」and the task envelope has a structured target/scope). Thin Node Agent + tool persist; **not** a Participant Session, not a chat persona, not a second UI participant.
-_Avoid_: putting auto-title / similar chores back on the Expert first-turn plan; spawning a second Expert Session to rename
+Retired as a separate thin Agent. Auto-title is a **Main Task-layer** duty (still「新会话」+ structured target/scope → `platform_set_conversation_title` with `only_if_default=true`). Not a Participant Session; not a Graph-stage or Package-worker duty.
+_Avoid_: a dedicated naming Session; putting title duty on Graph stage / Package workers
 
 **Work mode Free**:
 Participant Session without Expert Graph runner (OMP-class Agent Runtime under the same Expert persona). UI Graph control **不指定**.

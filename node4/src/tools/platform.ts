@@ -686,9 +686,9 @@ export function createPlatformSetConversationTitleTool(runtime: ToolRuntime): Ag
     label: "Set session title",
     description:
       "Rename **this** Case/session title (sidebar + top bar). " +
-      "Housekeeping uses this once with only_if_default=true when the title is still 新会话 " +
-      "and the task envelope has a structured target/scope. " +
-      "Expert seats: only when the user explicitly asks to rename (only_if_default=false). " +
+      "When the title is still 新会话 and this turn has a structured target/scope, " +
+      "call once with only_if_default=true. " +
+      "User-asked rename: only_if_default=false. " +
       "Titles: concise (≤~24 Chinese chars or ~40 Latin), no quotes, no trailing period. " +
       "Never overwrite a user-chosen title. Do not announce the rename unless they asked.",
     parameters: Type.Object({

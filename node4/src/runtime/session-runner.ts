@@ -37,7 +37,6 @@ import {
 } from "./session-workspace.js";
 import { SubagentHost } from "./subagent.js";
 import { resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
-import { formatExpertSessionTitleHint, kickHousekeeping } from "./housekeeping.js";
 import {
   applyMainActToolFilter,
   buildPentestGraphContext,
@@ -120,8 +119,6 @@ export async function runNode4Task(
       : join(config.workspaceDir, task.taskId);
     return { terminalStatus: "failed", taskDir: failedDir };
   }
-  // Spec #457: chores (auto-title) run off the Expert. Not a Participant Session.
-  kickHousekeeping({ config, platform, task, pack, signal });
   /** Work-burst wall clock: right-panel Elapsed uses started_at → end_time (task lifecycle hooks). */
   const startedAt = new Date().toISOString();
   /**
@@ -461,7 +458,6 @@ export async function runNode4Task(
     workModeInjection: graphCtx.formatInjection(),
     eagerTodo: !chatOnly && !ledgerAssistSeat,
     eagerBooking: !chatOnly && !ledgerAssistSeat && pack.bookingMode === "finding",
-    sessionTitleHint: formatExpertSessionTitleHint(task.conversationTitle),
     chatOnly,
     allowPostexOverride:
       graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,

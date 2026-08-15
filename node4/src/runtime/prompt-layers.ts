@@ -28,6 +28,7 @@ import {
 import type { StageExecutorInput } from "./hard-graph-runner.js";
 import { isHypothesisWorkModeOn } from "./hypothesis-store.js";
 import { formatSubagentReturnContractPrompt } from "./subagent-result.js";
+import { formatSessionTitleHint } from "./session-title.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -72,8 +73,6 @@ export type BuildSystemPromptOptions = {
   eagerTodo?: boolean;
   /** Cold Free finding-pack: booking reminder in system. */
   eagerBooking?: boolean;
-  /** This-Case title hint (housekeeping). */
-  sessionTitleHint?: string;
   /** Expert turn with no authorized target — do not start recon from Profession start-order. */
   chatOnly?: boolean;
 };
@@ -476,9 +475,8 @@ export function buildPromptLayers(
 
   // --- Task: this-turn facts only ---
   const taskParts: string[] = [];
-  if (options?.sessionTitleHint) {
-    taskParts.push(options.sessionTitleHint);
-  }
+  const titleHint = formatSessionTitleHint(task);
+  if (titleHint) taskParts.push(titleHint);
   const caseBlock = formatCaseContextInjection(task.caseContext);
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
