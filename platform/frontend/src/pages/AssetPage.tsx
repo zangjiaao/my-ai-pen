@@ -13,6 +13,7 @@ import {
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import GroupLedgerDialog from "../components/GroupLedgerDialog";
@@ -199,6 +200,7 @@ function sortHosts(hosts: TreeHost[], key: HostSortKey): TreeHost[] {
 }
 
 export default function AssetPage() {
+  useRenderAudit("AssetPage");
   const [search, setSearch] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [hostSort, setHostSort] = useState<HostSortKey>("address");
@@ -785,7 +787,7 @@ export default function AssetPage() {
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={handleTypedInput("AssetPage.search", setSearch, { allow: ["AssetPage"] })}
                 placeholder="搜索地址 / 别名 / 端口 / 标签"
                 className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
               />

@@ -4,6 +4,7 @@
  * Toolbar aligned with Traffic: search + single view filter (All / NEW / Untested / Findings).
  */
 import { useMemo, useState } from "react";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { authFetch } from "../lib/api";
 import type { SecurityVulnerability } from "../lib/securityTypes";
@@ -411,6 +412,7 @@ export function SurfaceTreeView({
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onEnrolledAsset?: (asset: Record<string, unknown>) => void;
 }) {
+  useRenderAudit("SurfaceTreeView");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
   const [viewFilter, setViewFilter] = useState<SurfaceViewFilter>("all");
@@ -485,7 +487,7 @@ export function SurfaceTreeView({
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={handleTypedInput("SurfaceTreeView", setQuery)}
           placeholder="Search host, path, finding…"
           data-testid="surface-search"
           className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-muted outline-none focus:border-ink"

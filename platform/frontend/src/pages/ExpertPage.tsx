@@ -8,6 +8,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { ApiError, authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
   EXPERT_PACKS,
   EXPERT_COLOR_PRESETS,
@@ -46,6 +47,7 @@ type ExpertRow = {
 };
 
 export default function ExpertPage() {
+  useRenderAudit("ExpertPage");
   const [experts, setExperts] = useState<ExpertRow[]>([]);
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,7 +128,7 @@ export default function ExpertPage() {
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleTypedInput("ExpertPage.search", setSearch, { allow: ["ExpertPage"] })}
               placeholder="搜索专家名、节点、说明…"
               className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />

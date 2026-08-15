@@ -12,12 +12,12 @@ import {
 {
   // paused must win over working=true (authorize keeps working for Send interrupt)
   assert.ok(
-    packageStatusDotClass("paused", true).includes("severity-medium"),
-    "paused+working → yellow not blue",
+    packageStatusDotClass("paused", true).includes("severity-high"),
+    "paused+working → High yellow not running blue",
   );
   assert.ok(
-    packageStatusDotClass("pause", true).includes("severity-medium"),
-    "alias pause also yellow",
+    packageStatusDotClass("pause", true).includes("severity-high"),
+    "alias pause also High yellow",
   );
   assert.ok(
     packageStatusDotClass("running", true).includes("status-running"),
@@ -35,6 +35,16 @@ import {
     resolvePackageLightStatus({ packageStatus: "running", working: true }),
     "running",
   );
+  assert.equal(
+    resolvePackageLightStatus({ packageStatus: "incomplete", working: true }),
+    "incomplete",
+    "incomplete park must not become running/blue when working is sticky",
+  );
+  assert.ok(
+    packageStatusDotClass("incomplete", true).includes("severity-high"),
+    "incomplete+working → High yellow",
+  );
+  assert.equal(packageStatusTitle("incomplete", true), "等待/暂停");
   console.log("ok: paused yellow over working");
 }
 

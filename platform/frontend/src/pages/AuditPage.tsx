@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
+import { useRenderAudit } from "../lib/renderAudit";
 
 const ALL = "all";
 
@@ -43,6 +44,7 @@ type AuditLog = {
 };
 
 export default function AuditPage() {
+  useRenderAudit("AuditPage");
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [category, setCategory] = useState(ALL);
   const [status, setStatus] = useState(ALL);
