@@ -619,16 +619,13 @@ export function expertCreatePackOptions(offers: unknown): ExpertPackMeta[] {
   });
 }
 
-/** Preset accent colors for expert partner chips (conversation / list). */
+/** Expert accents — only product severity tokens (see index.css). */
 export const EXPERT_COLOR_PRESETS = [
-  "#2563EB", // blue
-  "#0D9488", // teal
-  "#7C3AED", // violet
-  "#DB2777", // pink
-  "#EA580C", // orange
-  "#CA8A04", // yellow/amber
-  "#16A34A", // green
-  "#475569", // slate
+  "#EF4444", // severity-critical
+  "#F59E0B", // severity-high
+  "#3B82F6", // severity-medium
+  "#22C55E", // severity-low
+  "#6B7280", // severity-info
 ] as const;
 
 const EXPERT_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -649,7 +646,11 @@ export function defaultExpertColor(seed?: string | null): string {
   return EXPERT_COLOR_PRESETS[h % EXPERT_COLOR_PRESETS.length]!;
 }
 
-/** Color used in UI: configured hex, else deterministic default. */
+/** Color used in UI: configured preset hex, else deterministic default. */
 export function resolveExpertColor(color?: string | null, seed?: string | null): string {
-  return normalizeExpertColor(color) ?? defaultExpertColor(seed);
+  const normalized = normalizeExpertColor(color);
+  if (normalized && (EXPERT_COLOR_PRESETS as readonly string[]).includes(normalized)) {
+    return normalized;
+  }
+  return defaultExpertColor(seed);
 }

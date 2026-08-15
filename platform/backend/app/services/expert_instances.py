@@ -24,6 +24,16 @@ from app.services.expert_offers import (
 EXPERT_NAME_RE = re.compile(r"^[\w.:-]{1,64}$", re.UNICODE)
 # Product accent color for partner chips (optional).
 EXPERT_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# Same ramp as frontend severity tokens (critical / high / medium / low / info).
+EXPERT_COLOR_PRESETS = frozenset(
+    {
+        "#EF4444",
+        "#F59E0B",
+        "#3B82F6",
+        "#22C55E",
+        "#6B7280",
+    }
+)
 # Soft block for names that look like instruction smuggling (display label only).
 _EXPERT_NAME_INJECTION_HINT = re.compile(
     r"(ignore\s*(all|previous|prior)|system\s*prompt|developer\s*message|"
@@ -66,7 +76,10 @@ def validate_expert_color(color: object) -> str | None:
         return None
     if not EXPERT_COLOR_RE.match(raw):
         raise ValueError("专家颜色须为 #RRGGBB 格式")
-    return raw.upper()
+    normalized = raw.upper()
+    if normalized not in EXPERT_COLOR_PRESETS:
+        raise ValueError("专家颜色须为系统色板中的颜色")
+    return normalized
 
 
 def validate_pack_for_node(node_config: object, pack_id: object) -> str:
