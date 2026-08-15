@@ -480,7 +480,7 @@ export default function DashboardPage() {
                     <button
                       type="button"
                       onClick={() => navigate("/vulnerabilities")}
-                      className="shrink-0 text-xs text-ink-secondary hover:text-ink"
+                      className="h-7 shrink-0 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
                     >
                       漏洞 →
                     </button>
@@ -701,7 +701,11 @@ function Card(props: {
         </div>
         {props.headerRight ? <div className="shrink-0">{props.headerRight}</div> : null}
         {!props.headerRight && props.actionLabel && props.onAction ? (
-          <button type="button" onClick={props.onAction} className="shrink-0 text-xs text-ink-secondary hover:text-ink">
+          <button
+            type="button"
+            onClick={props.onAction}
+            className="h-7 shrink-0 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
+          >
             {props.actionLabel} →
           </button>
         ) : null}
