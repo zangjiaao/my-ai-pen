@@ -71,12 +71,11 @@ export function eagerTodoInjection(options?: { forced?: boolean }): string {
   if (options?.forced) {
     return [
       "<system-reminder>",
-      "Before substantive work, create a phased todo.",
-      "You MUST call todo first in this turn with a single init op.",
-      "Cover the whole engagement as a coarse phased map — categories from YOUR role/mission and recon, not just the next step.",
+      "Read this-turn Case inject first (living creds, prior index, Scope). If recorded valid creds exist, login via session before any ledger dump.",
+      "After first live use, call todo(init) once with a coarse phased map — categories from YOUR recon, not kickoff 确认台账 / 复验 / load-skills.",
       "Task labels: concise 5–10 word category-level work (what, not how). Unique content strings.",
       "Bad: meta prep (configure environment, load skills), micro-checklists, or one todo per atomic item if the mission says use categories.",
-      "After todo succeeds, continue act work in the SAME turn (high-density primary tools).",
+      "Continue act work in the SAME turn (session/http first-pass; shell for multi-step/batch).",
       "NEVER call todo again unless task state has materially changed (start/done when you switch or finish a category).",
       "</system-reminder>",
     ].join("\n");

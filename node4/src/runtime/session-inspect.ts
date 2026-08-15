@@ -14,6 +14,9 @@ export async function writePostRunInspectArtifacts(options: {
   continueCount: number;
   stopReason: string;
   bookedFindingCount: number;
+  /** Durable per-Agent JSONL (Case seat `pi/{sessionId}.jsonl`). */
+  piSessionAuditPath?: string;
+  agentSessionId?: string;
 }): Promise<{ manifestPath: string; transcriptPath: string }> {
   const { taskDir } = options;
   await mkdir(taskDir, { recursive: true });
@@ -66,7 +69,10 @@ export async function writePostRunInspectArtifacts(options: {
     transcriptMessages: options.messages?.length ?? 0,
     artifacts: present,
     writtenAt: new Date().toISOString(),
-    inspect: "Read transcript.jsonl, events.jsonl, findings/, evidence/, pi-sessions/ offline after dispose.",
+    piSessionAuditPath: options.piSessionAuditPath || undefined,
+    agentSessionId: options.agentSessionId || undefined,
+    inspect:
+      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl for the assembled system prompt + incremental user/assistant/tool transcript.",
   };
   const manifestPath = join(taskDir, "session-manifest.json");
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");

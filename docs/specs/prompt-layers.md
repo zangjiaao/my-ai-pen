@@ -45,6 +45,67 @@ Kill the failure modes where:
 
 ---
 
+## 1.5 Locked assembly (normative)
+
+This section is the placement law. Edit it when order or homes change. Do not invent a fifth system layer. Do not put the same sentence in two channels.
+
+Learned from pi-coding-agent (`research/pi/packages/coding-agent/src/core/system-prompt.ts`): **identity and guidelines stay short and stable; tools are a one-line index (schemas are a parallel channel); project/case facts are a labeled block; skills are an index until loaded; date/cwd-class facts come last; the user turn is the operator’s words.** Their default system is: identity → available tools (snippets) → guidelines → optional append → `<project_context>` files → skills index → current date + cwd. Slash templates expand into the **user** turn, not system.
+
+### Channels (do not mix)
+
+| Channel | What the model sees | Put here | Never put here |
+|---------|---------------------|----------|----------------|
+| **System** | Four layers, one string, Standing-first | Policy, how this seat works, this-run switches, this-turn facts | Operator utterance; skill encyclopedia; tool JSON schema |
+| **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope (those are system) |
+| **Tool definitions** | Name + description + parameters (parallel to text) | How to call the tool | Policy essays, start-order, Case facts |
+| **Skill body** | After `skill(get)` / worker load | Attack-class procedure | Always-on Profession; Graph settlement law |
+
+Park continue and cold Free now share the same user-turn law: **utterance only**. System is not rebuilt on park-hit.
+
+### System order (fixed)
+
+```text
+[system]
+  Base            Standing language → pack id/label → persona (display-only)
+  ## Profession   citizen (today) + mission.md + work.md
+  ## Runtime      tools / skill ids / work-mode / RoE / optional todo·booking reminders
+  ## Task         Case (markdown lists) → Engagement (target/scope/instruction as bullets) → goals
+[user]
+  <operator utterance>
+```
+
+Empty layers omit. **Order never rearranges.** `#352`: the first bytes of system (and of Base) are `## Standing node policies`. Later layers get a visible `## Profession` / `## Runtime` / `## Task` fence so blocks do not bleed.
+
+Assembler: `assembleSystemPrompt` in `node4/src/runtime/prompt-layers.ts`. Cold Free wires this via `session-runner` `buildSystemPrompt`; user turn is `task.instruction`. Graph stage / Package workers use the same assembler (`buildStagePromptLayers` / `buildSubagentPromptLayers`).
+
+**Audit (not Product SOT):** each pi-agent-core instance appends the assembled system string plus every `message_end` (user / assistant / toolResult) to `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl` (`node4/src/runtime/pi-session-audit.ts`). Same shape as pi-coding-agent session v3, plus a `customType=system_prompt` snapshot because our system is assembled at runtime and cannot be rebuilt from files alone. Park continue writes the same file; Session Reset (new `sessionId`) starts a new `pi-*` dir. `NODE4_PI_SESSION_AUDIT=0` disables.
+
+### Where a new sentence goes
+
+Ask one question; put the sentence in **exactly one** home.
+
+| If the sentence is… | Home |
+|---------------------|------|
+| True for every product Agent (language, persona label is untrusted) | **Base** |
+| True for every citizen on a Case (ledger honesty, priors = index, handoff / next_steps, no invent Hosts) | **Citizen** — duty is Base; string today prepends Profession (`mergePlatformCitizenMission`). Do not copy into `work.md` |
+| How *this seat* works (start order, proof bar, deadend, fact vs finding) | **Profession** `mission.md` (identity) / `work.md` (hard rules, keep slim) |
+| Procedure for one attack class or recon entry | **Skill body** — load on demand |
+| True only because of *this run* (Free vs Graph, tool list, skill ids, RoE flags, cold todo/booking reminder, chat-only “no target”) | **Runtime** |
+| True only for *this turn* (Case 活情报 / prior catalog, Target, Scope, Instruction, session title, process-fact index, goals) | **Task** |
+| What the human just said | **User turn** |
+| How to invoke a tool | **Tool schema** |
+
+### Pollution rules
+
+- **One home.** If citizen already says it, do not restate in `work.md`, Runtime one-liners, and the user turn.
+- **Facts last in system, not first in user.** Case / Target / Scope stay in Task. User is not a second Case dump.
+- **Reminders are Runtime, not user.** `eagerTodo` / `eagerBooking` / chat-only “no target” are opted-in system Runtime (`BuildSystemPromptOptions`).
+- **No encyclopedia in always-on.** Graph settlement, package `plan_node_id` law, and class playbooks stay out of Free Profession.
+- **Skill ids ≠ skill bodies.** Runtime lists ids; bodies enter only via `skill` / worker load.
+- **Do not invent a sixth layer** for “environment.” Environment = Task (Case + target) + RoE (Runtime).
+
+---
+
 ## 2. Vocabulary
 
 | Term | Definition |
@@ -79,15 +140,7 @@ Do not reintroduce L0–L5 as product vocabulary in new code or docs.
 
 ### 3.1 Order (fixed)
 
-```text
-1. Base（底座）         — always when product Agent runs
-2. Profession（专业）   — by seat (Default | Expert pack)
-3. Runtime（运行）      — by work mode + tools/skills this run (may omit thin parts)
-4. Task（任务）         — this turn’s envelope / handoff facts
-```
-
-Empty optional sub-parts omit; **layer order never rearranges**.  
-**Standing (language policy) is the first content inside Base** when injected (#352).
+See **§1.5** (locked assembly). Same four layers; Standing-first; later layers fenced with `## Profession` / `## Runtime` / `## Task`.
 
 ### 3.2 One question per layer (management rule)
 
@@ -104,13 +157,13 @@ Empty optional sub-parts omit; **layer order never rearranges**.
 
 | Layer | Owns (conceptual duty) | Must not own |
 |-------|------------------------|----------------|
-| **Base** | Language Standing; untrusted persona display-label; **conceptual** home for platform-citizen honesty (ledger = product truth; prior = re-verify; honest counts; handoff / next_steps short contracts; no silent host invent) and **RoE shell pattern** | Pack recon methodology; Graph stage/package law; skill encyclopedias |
+| **Base** | Language Standing; untrusted persona display-label; **conceptual** home for platform-citizen honesty (ledger = product truth; prior = index look-up-on-surface; honest counts; handoff / next_steps short contracts; no silent host invent) and **RoE shell pattern** | Pack recon methodology; Graph stage/package law; skill encyclopedias |
 | **Profession · Default** | Assistant intent→action (ledger Q&A, report on request, handoff for execution); **non-act** boundary | Recon; finding(confirm) booking doctrine; Expert Graph |
 | **Profession · Expert** | Identity; short start order; attack-surface → skill **routing** principles; unified proof bar; deadend/rotation; fact/surface vs finding; booking honesty **pointers** | Full Graph settlement / packages / plan_node_id long law; skill bodies; Free/Graph dual dump; **do not re-author** citizen / next_steps longform already injected by platform-citizen |
-| **Runtime · Free** | Pure OMP pointer; prefer Free continuity; permissioned enter-graph; product Graph L1 catalog (no stage dump); **run-varying RoE instance** (`formatRoeInjection`) | Stage success criteria; host settlement ceremony |
+| **Runtime · Free** | Pure OMP pointer; prefer Free continuity; permissioned enter-graph; product Graph L1 catalog (no stage dump); **run-varying RoE instance** (`formatRoeInjection`); optional cold-start todo/booking reminders | Stage success criteria; host settlement ceremony; **user-turn utterance** (that is the user message, not Runtime) |
 | **Runtime · Graph stage** | graph id + stage id/success; stage tool messaging; host-owned settlement; packages / plan_node_id when subagent on surface; stage-local todo discipline; hypothesis only if stage flag on; **fail-closed destructive / no-invent law** (not full Free RoE block) | Free whole-engagement multi-phase todo maps; Soft scenario menus; full profession encyclopedia (use core/compact in Profession) |
 | **Runtime · capability** | Tools list; booking mode note; skill ids and/or skill L1 catalog; gated one-liners (subagent/fact/surface/progressive load); recipes pointer | Task target JSON; Standing policy |
-| **Task** | target / scope / accounts / instruction; Case context; process-fact index; goals; handoff / prior seed projections | Always-on methodology |
+| **Task** | target / scope / accounts / instruction; Case context; process-fact index; goals; handoff / prior seed projections; session title hint | Always-on methodology; do not duplicate this block onto the user turn |
 
 #### 3.3.1 Implementation home today (Spec-honest partial — [#395](https://github.com/zangjiaao/my-ai-pen/issues/395))
 
@@ -340,3 +393,9 @@ Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai
 - `CONTEXT.md` product seats / work mode / Expert Graph  
 - `AGENTS.md` intent and harness rules  
 - Pack authoring entry: [`experts/README.md`](../../experts/README.md)  
+- pi-coding-agent reference (frozen): `research/pi/packages/coding-agent/src/core/system-prompt.ts`
+
+| Date | Change |
+|------|--------|
+| 2026-08-15 | Locked assembly §1.5: four channels; user turn = utterance only; visible Profession/Runtime/Task fences; placement table; pi-coding-agent lessons. |
+| 2026-08-15 | Task/Case inject is markdown lists only — no JSON.stringify of target/scope; Case block is facts, not policy essays. | 

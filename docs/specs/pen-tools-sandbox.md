@@ -19,7 +19,7 @@ Node4 (OMP) — target model
       browser  → exec agent-browser (profile in-box)
       shell    → docker exec (not per-command --rm)
       scanners → same image
-  Session workspace (host) → mount /workspace (SoT for scripts/evidence)
+  Session workspace (host) → `workspace/case-{caseId}/expert-{expertId}/` mount /workspace (scripts / notes / credentials)
 ```
 
 | Concern | Image |

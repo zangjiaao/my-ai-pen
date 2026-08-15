@@ -201,7 +201,7 @@ When implementing, update in the **same change**:
 - Hypothesis queue as booking channel  
 - Findings **count** as success metric  
 - Platform NLP engagement invent  
-- Full pi session file format as Product state SOT (Product state remains host SOT; Runtime transcript subordinate)  
+- Full pi session file format as Product state SOT (Product state remains host SOT; Runtime transcript subordinate). Audit JSONL at `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl` is an inspect copy, not SOT.  
 - Standalone Agent Route kernel / mandatory T1 `route_target` pre-step (#213 L3a as originally grilled)  
 - Full Goal multi-round assembly Spec (may reference Session rules later)  
 - Case multi-run inheritance field schema (former #217) as a blocker for Free Session continuity

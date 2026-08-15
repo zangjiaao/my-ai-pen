@@ -56,7 +56,14 @@ const ctx = parseCaseContext({
     ],
     prior_findings: { total: 50, open_or_retest: 40, by_severity: { critical: 10, high: 15 } },
     high_priority_sample: [
-      { id: "v1", severity: "critical", title: "SQLi login", location: "/rest/user/login" },
+      {
+        id: "v1",
+        severity: "critical",
+        title: "SQLi login",
+        location: "/rest/user/login",
+        summary: "UNION extract on /rest/user/login id=",
+        discoveries: 4,
+      },
     ],
     surface_sketch: { known_paths: ["/rest/user/login", "/api/Users"], this_case_surface_count: 0 },
   },
@@ -69,27 +76,28 @@ assert.equal(ctx!.next_work!.workset_open?.[0]?.id, "w1");
 assert.ok(ctx!.scope_intel);
 assert.equal(ctx!.scope_intel!.hosts?.[0]?.address, "host.docker.internal");
 const block = formatCaseContextInjection(ctx);
-assert.match(block, /Case work-group context/);
+assert.match(block, /^## Case/m);
 assert.match(block, /Please audit the dumped source/);
 assert.match(block, /RCE via upload/);
-assert.match(block, /Scope Host memory/);
+assert.match(block, /### Scope hosts/);
 assert.match(block, /host\.docker\.internal/);
 assert.match(block, /Prior findings/);
 assert.match(block, /SQLi login/);
-assert.match(block, /Known path sketch/);
-assert.match(block, /This Case findings board/);
-assert.match(block, /finding\(confirm\)/);
-assert.match(block, /this Case/i);
+assert.match(block, /UNION extract/);
+assert.match(block, /×4/);
+assert.match(block, /### Prior catalog/);
+assert.doesNotMatch(block, /interleaved re-verify/i);
+assert.doesNotMatch(block, /\{"[a-z_]+":/);
+assert.match(block, /### Paths seen/);
+assert.match(block, /### This Case findings/);
 assert.match(block, /ev_src_1/);
-assert.match(block, /Case evidence/);
+assert.match(block, /### Evidence/);
 assert.match(block, /Main\.java/);
 assert.match(block, /class Main/);
 assert.match(block, /source_dump/);
-// Spec #312 S5: next_work retained + formatted
-assert.match(block, /Case Next \/ Workset \(open\)/);
-assert.match(block, /id=w1/);
+assert.match(block, /### Next \(open\)/);
+assert.match(block, /w1/);
 assert.match(block, /\/admin/);
-assert.match(block, /next_steps/);
 assert.equal(parseCaseContext(null), undefined);
 assert.equal(parseCaseContext({}), undefined);
 // next_work alone is enough to parse
@@ -111,4 +119,25 @@ assert.ok(onlyClues);
 assert.equal(onlyClues!.intel_summary?.[0]?.id, "i1");
 assert.match(formatCaseContextInjection(onlyClues), /Living notebook/);
 assert.match(formatCaseContextInjection(onlyClues), /admin:admin invalid/);
+assert.match(formatCaseContextInjection(onlyClues), /fact\(op=get/);
+assert.doesNotMatch(formatCaseContextInjection(onlyClues), /platform_get_intel/);
+
+// Living creds must outrank prior-finding dumps and non-login clues (ef6326fd: agent
+// saw gordonb/test123 but recovered hashes via RCE after default admin/password).
+const credsVsPriors = formatCaseContextInjection({
+  intel_summary: [
+    { id: "p1", summary: "instructions.php?doc= whitelist only", kind: "path_hint", asset_id: "a1", port: "8080" },
+    { id: "c1", summary: "DVWA 8080 登录凭据：gordonb/test123 有效", kind: "credential_status", asset_id: "a1", port: "8080" },
+  ],
+  scope_intel: {
+    hosts: [{ address: "host.docker.internal", on_ledger: true, ports: ["8080"] }],
+    prior_findings: { total: 298, open_or_retest: 298, by_severity: { critical: 67 } },
+    high_priority_sample: [{ id: "v1", severity: "critical", title: "Unauth RCE cmd_shell.php" }],
+  },
+});
+const credAt = credsVsPriors.indexOf("gordonb/test123");
+assert.ok(credAt >= 0, "credential summary must be injected");
+assert.ok(credAt < credsVsPriors.indexOf("Prior findings"), "living notebook before prior dump");
+assert.ok(credAt < credsVsPriors.indexOf("instructions.php"), "credential kind before path_hint");
+assert.match(credsVsPriors, /Use first \(try these creds/);
 console.log("case-context.test.ts ok");

@@ -128,11 +128,11 @@ assert.match(unset, /node policy: auto/);
     "worker Runtime embeds skill body text",
   );
   assert.ok(
-    layers.task.includes("Target envelope:"),
+    layers.task.includes("Target:"),
     "worker Task owns child target",
   );
   assert.ok(
-    layers.task.includes("Scope envelope:"),
+    layers.task.includes("Scope allow:") || layers.task.includes("Scope:"),
     "worker Task owns child scope",
   );
   assert.ok(
@@ -140,7 +140,7 @@ assert.match(unset, /node policy: auto/);
     "Profession does not own tools list",
   );
   assert.ok(
-    !layers.runtime.includes("Target envelope:"),
+    !layers.runtime.includes("- Target:"),
     "Runtime does not own Task target JSON",
   );
   assert.ok(
@@ -195,7 +195,7 @@ assert.match(unset, /node policy: auto/);
   const toolsIdx = assembled.indexOf("Tools:");
   const returnIdx = assembled.indexOf("## Return contract");
   const skillIdx = assembled.indexOf("## Loaded skill");
-  const targetIdx = assembled.indexOf("Target envelope:");
+  const targetIdx = assembled.indexOf("- Target:");
   assert.ok(standingIdx === 0, "Standing at absolute start");
   assert.ok(missionIdx > standingIdx, "profession mission after Base Standing");
   assert.ok(toolsIdx > missionIdx, "tools after profession");

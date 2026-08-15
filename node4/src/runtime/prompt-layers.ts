@@ -16,7 +16,9 @@ import {
   type ProcessFactIndexEntry,
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
-import { formatCaseContextInjection } from "./case-context.js";
+import { eagerBookingInjection } from "./booking-harness.js";
+import { formatCaseContextInjection, LOGIN_INTEL_KINDS } from "./case-context.js";
+import { eagerTodoInjection } from "./todo-harness.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
@@ -66,6 +68,14 @@ export type BuildSystemPromptOptions = {
   workModeInjection?: string;
   /** When Graph mode resolves RoE, override allow_postex. */
   allowPostexOverride?: boolean;
+  /** Cold Free engagement: todo reminder lives in system, not the user turn. */
+  eagerTodo?: boolean;
+  /** Cold Free finding-pack: booking reminder in system. */
+  eagerBooking?: boolean;
+  /** This-Case title hint (housekeeping). */
+  sessionTitleHint?: string;
+  /** Expert turn with no authorized target — do not start recon from Profession start-order. */
+  chatOnly?: boolean;
 };
 
 /**
@@ -104,20 +114,134 @@ export type BuildSubagentPromptOptions = {
   >;
 };
 
-/** Join non-empty lines with single newlines (parity with pre-layer assembler). */
+/** Markdown engagement envelope — no JSON.stringify of target/scope/accounts. */
+export function formatEngagementMarkdown(input: {
+  target?: unknown;
+  scope?: unknown;
+  accounts?: unknown;
+  instruction?: string;
+}): string {
+  const lines = ["### Engagement"];
+  const target = formatTargetLine(input.target);
+  if (target) lines.push(`- Target: ${target}`);
+  for (const line of formatScopeLines(input.scope)) lines.push(line);
+  for (const line of formatAccountLines(input.accounts)) lines.push(line);
+  const instruction = String(input.instruction || "").trim();
+  if (instruction) {
+    if (instruction.includes("\n") || instruction.length > 160) {
+      lines.push("- Instruction:", instruction);
+    } else {
+      lines.push(`- Instruction: ${instruction}`);
+    }
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
+function formatTargetLine(target: unknown): string {
+  if (target == null || target === "") return "";
+  if (typeof target === "string") return target.trim();
+  if (typeof target !== "object" || Array.isArray(target)) return String(target);
+  const o = target as Record<string, unknown>;
+  const value = o.value ?? o.url ?? o.host ?? o.address;
+  if (value == null || value === "") {
+    const keys = Object.keys(o);
+    return keys.length ? keys.map((k) => `${k}=${String(o[k])}`).join(" ") : "";
+  }
+  const type = o.type != null && String(o.type) !== "url" ? ` (${o.type})` : "";
+  return `${String(value).trim()}${type}`;
+}
+
+function formatScopeLines(scope: unknown): string[] {
+  if (scope == null || scope === "") return [];
+  if (typeof scope === "string") return [`- Scope: ${scope}`];
+  if (Array.isArray(scope)) {
+    const items = scope.map(String).filter(Boolean);
+    return items.length ? [`- Scope allow: ${items.join(", ")}`] : [];
+  }
+  if (typeof scope !== "object") return [];
+  const o = scope as Record<string, unknown>;
+  const out: string[] = [];
+  const allow = Array.isArray(o.allow) ? o.allow.map(String).filter(Boolean) : [];
+  const deny = Array.isArray(o.deny) ? o.deny.map(String).filter(Boolean) : [];
+  if (allow.length) out.push(`- Scope allow: ${allow.join(", ")}`);
+  if (deny.length) out.push(`- Scope deny: ${deny.join(", ")}`);
+  if (!out.length && (o.hosts || o.targets)) {
+    const extra = [o.hosts, o.targets].flatMap((v) => (Array.isArray(v) ? v.map(String) : []));
+    if (extra.length) out.push(`- Scope: ${extra.join(", ")}`);
+  }
+  return out;
+}
+
+function formatAccountLines(accounts: unknown): string[] {
+  if (accounts == null) return [];
+  const rows = Array.isArray(accounts) ? accounts : [accounts];
+  const out: string[] = [];
+  for (const row of rows) {
+    if (row == null) continue;
+    if (typeof row === "string") {
+      out.push(`- Account: ${row}`);
+      continue;
+    }
+    if (typeof row !== "object") continue;
+    const o = row as Record<string, unknown>;
+    const user = o.username ?? o.user ?? o.login;
+    const pass = o.password ?? o.pass ?? o.secret;
+    if (user && pass) out.push(`- Account: ${String(user)} / ${String(pass)}`);
+    else if (user) out.push(`- Account: ${String(user)}`);
+    else if (pass) out.push(`- Account password: ${String(pass)}`);
+  }
+  return out;
+}
+
+function formatSurfacesMarkdown(surfaces: unknown[] | undefined): string {
+  if (!surfaces?.length) return "";
+  const lines = ["### Known surfaces"];
+  for (const raw of surfaces.slice(0, 20)) {
+    if (typeof raw === "string") {
+      if (raw.trim()) lines.push(`- ${raw.trim()}`);
+      continue;
+    }
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const loc = String(o.location || o.path || o.url || "").trim();
+    const kind = o.kind ? ` (${o.kind})` : "";
+    const status = o.status ? ` ${o.status}` : "";
+    if (loc) lines.push(`- ${loc}${kind}${status}`);
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
 export function joinNonEmptyPromptParts(
   parts: Array<string | false | null | undefined>,
 ): string {
   return parts.filter((l): l is string => typeof l === "string" && l !== "").join("\n");
 }
 
+/** Visible layer fences in the assembled system prompt (Base has none — Standing stays first). */
+export const LAYER_HEADING = {
+  profession: "## Profession",
+  runtime: "## Runtime",
+  task: "## Task",
+} as const;
+
+function prefixLayerHeading(heading: string, body: string): string {
+  const t = typeof body === "string" ? body.trim() : "";
+  if (!t) return "";
+  if (t.startsWith(heading)) return t;
+  return `${heading}\n${t}`;
+}
+
 /**
  * Single public assembler seam: fixed order Base → Profession → Runtime → Task.
- * Empty layers omit; order never rearranges.
+ * Empty layers omit; order never rearranges. Standing remains the first bytes of Base.
  */
 export function assembleSystemPrompt(layers: PromptLayers): string {
-  return [layers.base, layers.profession, layers.runtime, layers.task]
-    .map((s) => (typeof s === "string" ? s.trim() : ""))
+  return [
+    typeof layers.base === "string" ? layers.base.trim() : "",
+    prefixLayerHeading(LAYER_HEADING.profession, layers.profession || ""),
+    prefixLayerHeading(LAYER_HEADING.runtime, layers.runtime || ""),
+    prefixLayerHeading(LAYER_HEADING.task, layers.task || ""),
+  ]
     .filter((s) => s.length > 0)
     .join("\n\n");
 }
@@ -218,7 +342,7 @@ const MISSION_IDENTITY_LINE_RE =
   /You are|Your job|role pack|NOT a software|penetration testing|Do not invent|at most one/i;
 
 const PLATFORM_CITIZEN_MISSION_SKIP_RE =
-  /\[platform-citizen\]|platform_list_|request_user_decision|kind=next_steps|todo_replace|Honest counts:|Cross-pack handoff|Open priors on this Scope|Read inventory\/priors/i;
+  /\[platform-citizen\]|platform_list_|request_user_decision|kind=next_steps|todo_replace|Honest counts:|Cross-pack handoff|Open priors on this Scope|Read inventory\/priors|Ledger Q&A only/i;
 
 /**
  * Filter mission+work to compact Profession for Graph stage captains (#394)
@@ -311,19 +435,22 @@ export function buildPromptLayers(
       "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
     );
   }
-  if (pack.toolNames.includes("platform_record_intel")) {
-    runtimeParts.push(
-      "Notebook (platform_record_intel): clues on an existing Host/Service — not a Finding. Optional mid-run; one persist pass at compact. First forget leaves working memory; second = 遗忘区.",
-    );
-  }
   if (pack.toolNames.includes("fact")) {
     runtimeParts.push(
-      "Process facts (fact tool): write confirmed cognition now (ports/auth/deadends); ≠ finding; list=index — get body for detail.",
+      "fact: write confirmed cognition now. Host/Service 线索 via upsert — 情报 tab, not Finding/Evidence. this-task keys stay in facts/. list=index — get body by id or fact_key.",
+    );
+  }
+  const loginIntel = (task.caseContext?.intel_summary || []).some((c) =>
+    LOGIN_INTEL_KINDS.has(String(c.kind || "")),
+  );
+  if (loginIntel && pack.toolNames.includes("session")) {
+    runtimeParts.push(
+      "Living creds/tokens/accounts are in intel_summary — session-login this turn before recon dumps; do not shell-replay login or dump hashes to recover them.",
     );
   }
   if (pack.toolNames.includes("surface")) {
     runtimeParts.push(
-      "Attack surface (surface tool): summary|list|get for coverage (seen=first-touch still owed deepen; touched=further traffic; booked=confirm only); ledger from Traffic settle + TARGET seed; before next_steps/wrap disclose remaining seen; upsert optional corrective only (prefer over fact(op=surface)).",
+      "Attack surface (surface tool): summary|list|get for coverage (seen=first-touch still owed deepen; touched=further traffic; booked=confirm only); ledger from Traffic settle + TARGET seed; before next_steps/wrap disclose remaining seen; upsert optional corrective only.",
     );
   }
   if (pack.recipeDir) {
@@ -333,23 +460,37 @@ export function buildPromptLayers(
       `Recipes (non-answer templates): ${recipePath} — copy into task scripts/ or follow session examples.`,
     );
   }
+  if (options?.chatOnly) {
+    runtimeParts.push(
+      "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.",
+    );
+  }
+  if (options?.eagerTodo) {
+    runtimeParts.push(eagerTodoInjection({ forced: true }));
+  }
+  if (options?.eagerBooking) {
+    runtimeParts.push(eagerBookingInjection());
+  }
   runtimeParts.push("Stay in authorized scope.", formatRoeInjection(roe));
   const runtime = joinNonEmptyPromptParts(runtimeParts);
 
   // --- Task: this-turn facts only ---
   const taskParts: string[] = [];
+  if (options?.sessionTitleHint) {
+    taskParts.push(options.sessionTitleHint);
+  }
   const caseBlock = formatCaseContextInjection(task.caseContext);
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
   if (factBlock) taskParts.push(factBlock);
   taskParts.push(
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
+    formatEngagementMarkdown({
+      target: task.target,
+      scope: task.scope,
+      accounts: task.accounts,
+      instruction: task.instruction,
+    }),
   );
-  if (task.accounts !== undefined) {
-    taskParts.push(`Accounts: ${JSON.stringify(task.accounts)}`);
-  }
-  taskParts.push(`Instruction: ${task.instruction}`);
   if (options?.goals) {
     taskParts.push(options.goals.formatForPrompt());
   }
@@ -444,7 +585,7 @@ export function buildStagePromptLayers(
     "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only.",
     allowFinding
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
-      : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",
+      : "This stage cannot finding(confirm). Deposit candidates via packages; coverage via the surface tool only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
     "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
     hypMode && allowHypothesis
@@ -476,10 +617,9 @@ export function buildStagePromptLayers(
 
   // Task: this-turn envelope + handoff / prior seed facts (no hyp dual-home)
   const taskLayer = joinNonEmptyPromptParts([
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
+    formatEngagementMarkdown({ target: task.target, scope: task.scope }),
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
-    `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
+    formatSurfacesMarkdown(input.handoff.surfaces),
     priorSeed,
   ]);
 
@@ -558,8 +698,7 @@ export function buildSubagentPromptLayers(
 
   // Task: child target/scope envelope only.
   const taskLayer = joinNonEmptyPromptParts([
-    `Target envelope: ${JSON.stringify(childTask.target)}`,
-    `Scope envelope: ${JSON.stringify(childTask.scope)}`,
+    formatEngagementMarkdown({ target: childTask.target, scope: childTask.scope }),
   ]);
 
   return { base, profession, runtime, task: taskLayer };

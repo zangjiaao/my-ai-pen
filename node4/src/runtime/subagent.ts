@@ -5,6 +5,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolvePiInstanceDir } from "./session-workspace.js";
 import type { GoalStore } from "../stores/goal.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
@@ -43,6 +44,7 @@ export type SubagentWorker = (ctx: SubagentContext) => Promise<{ summary: string
 export type SubagentHostOptions = {
   task: TaskEnvelope;
   taskDir: string;
+  workspaceDir?: string;
   evidence: EvidenceStoreLike;
   platform: PlatformSink;
   goals: GoalStore;
@@ -287,7 +289,13 @@ export class SubagentHost {
     planNodeId?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
-    const workDir = join(this.opts.taskDir, "subagents", subagentId);
+    const conv = String(this.opts.task.conversationId || "").trim();
+    const exp = String(this.opts.task.expertId || "").trim();
+    const ws = String(this.opts.workspaceDir || "").trim();
+    const workDir =
+      ws && conv && exp
+        ? resolvePiInstanceDir(ws, conv, exp, subagentId)
+        : join(this.opts.taskDir, "subagents", subagentId);
     await mkdir(workDir, { recursive: true });
 
     if (options.goalId) {

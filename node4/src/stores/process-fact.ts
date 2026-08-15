@@ -151,10 +151,8 @@ export function formatProcessFactIndexInjection(
   if (!entries?.length) return "";
   const slice = entries.slice(0, MAX_INDEX_INJECT);
   const lines = [
-    "## Process facts index (task workspace — not findings)",
-    "Short summaries only. **Do not invent detail from a summary.** Call `fact(op=get, fact_key=...)` or `read` the body under `facts/` when you need repro steps, ports, auth state, or failed probes.",
-    "Process facts ≠ product vulns: book confirmed issues with `finding(confirm)` + grounded proof. Host IP/domain asset rows are **user-created only** — facts must not create assets.",
-    "Write-as-you-go: when you **confirm** a new cognition, upsert a fact immediately (do not wait for session end).",
+    "## Process facts",
+    "Summaries only — Do not invent detail; `fact(op=get, fact_key=…)` for the body. Not findings. Hosts are user-created only.",
   ];
   for (const e of slice) {
     const cat = e.category ? ` [${e.category}]` : "";

@@ -22,6 +22,10 @@ _Avoid_: Case sticky template as sole work-mode authority for every Expert resum
 Long-lived `conversation_id + expert_id` work identity. Private work mode, parked Graph, working memory. Multiple Sessions may exist on one Case; v1 only the current Mention runs.
 _Avoid_: new amnesiac task_id as the only notion of “session”; equating UI chat continuity with per-stage pi workdirs alone
 
+**Housekeeping**:
+Harness-owned chores that must not occupy the Expert (first: auto-title when the Case is still「新会话」and the task envelope has a structured target/scope). Thin Node Agent + tool persist; **not** a Participant Session, not a chat persona, not a second UI participant.
+_Avoid_: putting auto-title / similar chores back on the Expert first-turn plan; spawning a second Expert Session to rename
+
 **Work mode Free**:
 Participant Session without Expert Graph runner (OMP-class Agent Runtime under the same Expert persona). UI Graph control **不指定**.
 _Avoid_: Free as a second product **seat**; Soft scenario Graph; calling Free “Default” when an Expert is selected
@@ -89,7 +93,7 @@ Run-local Product-state working memory of exploration candidates and outcomes. *
 _Avoid_: treating queue fullness as stage L0 gate; killed/deferred as ledger vulns
 
 **Runtime transcript**:
-Turn-local agent messages inside the Agent Runtime. Optional Node4 projection from Runtime events for debug/stream; not required as a product session format; never used as fail-closed gate input.
+Turn-local agent messages inside the Agent Runtime. Node4 also writes an **audit JSONL** per pi-agent-core instance at `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl` (assembled system prompt + incremental user/assistant/tool; park continue appends). Optional event projection for debug/stream. Never Product SOT; never fail-closed gate input.
 _Avoid_: dual cookie stores; Feedback parsing private Runtime/session formats; salvage handoff from transcript
 
 **Context-window checkpoint**:
@@ -118,6 +122,10 @@ _Avoid_: business tags only on Group; inventing org structure as required clerk 
 Durable paths under a Service (company book). A path enters only from `finding(confirm)` or an accepted HTTP(S) Traffic settle on an existing Host. Scan / SYN does not. Not Case Surface (#368 this-run NEW/TESTED).
 _Avoid_: dumping every scanned/SYN path onto the Host; calling Case Surface the company 暴露面总账; Agent creating a Host in order to hang a path
 
+**Evidence (证据)**:
+Proof that **supports a Finding**. Created at `finding(confirm)` from grounded tool output. Case-shared so another expert can open the same proof. Not a notebook. Not operational leftover.
+_Avoid_: treating Evidence as 情报; copying Evidence/Finding text into Intel; using chat as proof SOT
+
 **Intel (线索 / 情报)**:
-The Agent’s **notebook** on a **Host** or **Service**: Agent supplies summary + NL body + hang + kind; **harness** mints `id` and stamps time/`source`/**New**/`forget_count`. Living rows project as 线索. First `forget` leaves working memory (Agent may still update that id); **second forget** → **遗忘区** (operator can read; never injected or listed to the Agent). Spec: `docs/specs/owner-intel.md`.
-_Avoid_: Agent-authored timestamps or New; open `note` dump; NLP scrape; inventing a Host to hang a clue; Group/Case hang in v1; feeding 遗忘区 back to the Agent
+Operational notes worth keeping **while testing** (creds status, how auth works, a path to retry) on a **Host** or **Service**, written through **`fact`**. Different direction from Evidence/Finding — **do not restated booked vulns or their proof**. Agent supplies summary + NL body + hang + kind; **harness** mints `id` and stamps time/`source`/**New**/`forget_count`/`access_count`. This-task process keys stay under `facts/`. Living rows project as 线索. Case inject / Findings 线索 = Host-level plus Scope Service ports (sibling ports on the same Host omitted). Inject places the living notebook **before** prior-finding dumps; login kinds first; summary is enough to act (recorded valid creds = login path). First `forget` leaves working memory; **second forget** → **遗忘区**. Opening get(id) increments `access_count` (eye + number). Mid-run writes are optional; wrap/next_steps may persist only clues judged worth keeping; compact persist is a separate pass. Spec: `docs/specs/owner-intel.md`.
+_Avoid_: Agent-authored timestamps or New; open `note` dump; NLP scrape; inventing a Host to hang a clue; Group/Case hang in v1; feeding 遗忘区 back to the Agent; a parallel `platform_record_intel` Agent surface; stuffing Finding/Evidence into Intel

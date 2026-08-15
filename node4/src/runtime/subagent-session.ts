@@ -11,7 +11,6 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadConfig } from "../config.js";
 import type { RolePack } from "../roles/types.js";
-import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { SkillStore } from "../stores/skill.js";
@@ -312,11 +311,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
 async function ensureChildDirs(workDir: string): Promise<void> {
   await mkdir(workDir, { recursive: true });
   await mkdir(join(workDir, "facts"), { recursive: true });
-  await mkdir(join(workDir, "evidence"), { recursive: true });
-  await mkdir(join(workDir, "findings"), { recursive: true });
-  await mkdir(join(workDir, "scripts"), { recursive: true });
   await mkdir(join(workDir, "tool-output"), { recursive: true });
-  await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 }
 
 /**
@@ -375,7 +370,7 @@ async function runWarmPackage(args: {
   warm.pathKey = pk || warm.pathKey;
   warm.agentId = agentId;
 
-  const sessionSeed = await seedChildSessionFromParent(input.parent.taskDir, workDir);
+  const sessionSeed = await seedChildSessionFromParent(input.parent.sessionDir || input.parent.taskDir, workDir);
   const userPrompt = buildUserPrompt(input.assignment, sessionSeed.seeded, true);
 
   // Spec #308: new Package turn on warm resume (same agent_id, new package_turn_id).
@@ -436,7 +431,7 @@ async function runWarmPackage(args: {
     promptError: race.error,
   });
 
-  const sessionPromote = await promoteChildSessionToParent(workDir, input.parent.taskDir);
+  const sessionPromote = await promoteChildSessionToParent(workDir, input.parent.sessionDir || input.parent.taskDir);
   // Spec #116 I0.4: salvage ≠ package success
   const ok = isPackageSuccess({
     ok: structured.ok && !race.aborted && !race.timedOut,
@@ -530,7 +525,7 @@ async function runColdPackage(args: {
   await ensureChildDirs(workDir);
 
   // Prefer parent session jars so packages need not re-login every time.
-  const sessionSeed = await seedChildSessionFromParent(parent.taskDir, workDir);
+  const sessionSeed = await seedChildSessionFromParent(parent.sessionDir || parent.taskDir, workDir);
 
   const dry =
     process.env.NODE4_SUBAGENT_DRY === "1" ||
@@ -601,11 +596,13 @@ async function runColdPackage(args: {
     task: childTask,
     workspaceDir: parent.workspaceDir,
     taskDir: workDir,
+    caseDir: parent.caseDir,
+    sessionDir: parent.sessionDir,
     platform: parent.platform,
     platformApi: parent.platformApi,
     todo: new TodoStore(),
-    evidence: new EvidenceStore(join(workDir, "evidence")),
-    findingsDir: join(workDir, "findings"),
+    evidence: parent.evidence,
+    findingsDir: parent.findingsDir,
     goals: new GoalStore(),
     rolePackId: pack.id,
     skills: skillStore,
@@ -640,6 +637,7 @@ async function runColdPackage(args: {
     pack,
     systemPrompt,
     thinkingLevel: "low",
+    sessionId: subagentId,
   });
 
   // Spec #308: progressive thinking/text on Worker channel (not Main observability).
@@ -686,7 +684,7 @@ async function runColdPackage(args: {
     promptError: race.error,
   });
 
-  const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
+  const sessionPromote = await promoteChildSessionToParent(workDir, parent.sessionDir || parent.taskDir);
   // Spec #116 I0.4: salvage ≠ package success
   const ok = isPackageSuccess({
     ok: structured.ok && !race.aborted && !race.timedOut,

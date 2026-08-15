@@ -202,7 +202,7 @@ export function formatRoeInjection(roe: RoeFlags): string {
       : "Do NOT use post-exploitation / lateral host-control techniques. Application-layer proof is sufficient. Prefer skills: surface-enum, authz-logic, recon — not postex-host or lateral.",
     roe.allowDestructive
       ? "Destructive tests are allowed within Scope; still require proof bar / L0 for booking."
-      : "Destructive tests are DENIED by default. If a destructive entry point is found, record fact/surface note=skipped_roe and do not execute wipe/flood/bulk-delete. Book capability only with non-destructive proof.",
+      : "Destructive tests are DENIED by default. If a destructive entry point is found, record surface note=skipped_roe and do not execute wipe/flood/bulk-delete. Book capability only with non-destructive proof.",
     "Do not invent target answer keys or fixed vulnerability checklists.",
     "</rules-of-engagement>",
   ];

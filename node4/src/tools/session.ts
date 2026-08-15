@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
+import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+
+function jarRoot(runtime: ToolRuntime): string {
+  return resolveRuntimeSessionDir(runtime) || runtime.taskDir;
+}
 
 type JarMap = Record<string, string>;
 type HistoryRow = {
@@ -62,11 +67,11 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: any) {
       const op = String(params.op || "request").trim().toLowerCase();
       const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
-      const paths = actorPaths(runtime.taskDir, actor);
+      const paths = actorPaths(jarRoot(runtime), actor);
       await mkdir(paths.dir, { recursive: true });
 
       if (op === "list_actors") {
-        const actors = await listActors(runtime.taskDir);
+        const actors = await listActors(jarRoot(runtime));
         return jsonResult({
           ok: true,
           op,
@@ -104,8 +109,8 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         );
         const to = sanitizeActor(String(params.to_actor || params.actor_b || ""));
         if (!to || to === from) return textResult("error: jar_copy needs from_actor and to_actor (distinct)");
-        const src = await loadJar(actorPaths(runtime.taskDir, from).jar);
-        const destPaths = actorPaths(runtime.taskDir, to);
+        const src = await loadJar(actorPaths(jarRoot(runtime), from).jar);
+        const destPaths = actorPaths(jarRoot(runtime), to);
         await mkdir(destPaths.dir, { recursive: true });
         await saveJar(destPaths.jar, { ...src });
         return jsonResult({ ok: true, op, from_actor: from, to_actor: to, cookies: src });
@@ -124,8 +129,8 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         const body = params.body != null ? String(params.body) : undefined;
         const headers = params.headers;
         const timeout_seconds = params.timeout_seconds;
-        const aPaths = actorPaths(runtime.taskDir, actor);
-        const bPaths = actorPaths(runtime.taskDir, actorB);
+        const aPaths = actorPaths(jarRoot(runtime), actor);
+        const bPaths = actorPaths(jarRoot(runtime), actorB);
         await mkdir(aPaths.dir, { recursive: true });
         await mkdir(bPaths.dir, { recursive: true });
         let jarA = await loadJar(aPaths.jar);

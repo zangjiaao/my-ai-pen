@@ -313,7 +313,9 @@ export async function runParkedWorkingContinue(options: {
   const findingsDir =
     String(parked.runtime?.findingsDir || "").trim() ||
     join(options.config.workspaceDir, task.taskId, "findings");
-  const taskDir = join(options.config.workspaceDir, task.taskId);
+  const taskDir =
+    String(parked.runtime?.taskDir || "").trim() ||
+    join(options.config.workspaceDir, task.taskId);
   const worksetSource = workMode === "graph" ? "hard_settle" : "free_settle";
   const settlePkg = await buildWorksetSettleEmitPackage({
     task,

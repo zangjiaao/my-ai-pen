@@ -60,7 +60,7 @@
 **P0**
 
 - 登录与会话：列表、新建、切换、基本管理；新建默认标题「新会话」。
-- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)）：用户在仍为默认标题的会话中发出**实质任务**时，Agent 经 `platform_set_conversation_title(only_if_default=true)` 生成短标题（侧栏/顶栏即时更新）；纯寒暄不改名；用户手动改名后不被自动覆盖。用户也可明确要求改名。
+- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)）：默认标题 + 任务信封里已有结构化 target / scope 时，**harness 家政**（瘦 Node Agent，不是参与者 Session）经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；无 target 的寒暄/台账闲聊不改名；用户手动改名后不被自动覆盖。专家只在用户明确要求时改名。
 - 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + Goal 开关 + **参与者**（工作台助手 `default` / 专家）+ 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
@@ -83,12 +83,12 @@
   - **协作树**：每个产品专家 / default 座位一行 root；该角色最近一轮的 subagent 挂在其下；当前 sticky 角色高亮。
   - **Tasks**：todo 投影带 `owner_expert_id/name`；多角色 todo 按 owner 合并展示，不因 handoff 抹掉另一角色清单。
   - **漏洞台账 / 再次发现**：专家与 default 均可 `platform_list_vulnerabilities`；任务 `case_context.findings_summary` 含 Case 资产上的历史 finding。同资产+路径/模块再次 booking → 平台 **rediscover**（保留 `first_seen_at`，`history` 记「再次发现」），不新建重复行；UI 卡片与详情展示 **多次发现** 徽章与发现时间线。
-  - **补扫再确认（harness）**：Scope 主机上已有 open prior 时，agent 须把其当作 **re-verify 工作流**（短证明 + `finding(confirm)` 新鲜 proof → rediscovery），与未测面 **穿插**；不得因「台账已有」整表跳过。判断抽样时优先 high/critical；不再复现则 fact/状态更新。见 `experts/pentest/work.md`、`platform-citizen` mission、`case_context` note。
+  - **先验台账（harness）**：Scope 上已有 finding 时，注入 **按 path/module 折叠** 的标题+一行摘要（×N = 再次发现；按 Scope 端口过滤）。**不是**开场逐条复验作业单。开场先读注入、有活凭据先 `session` 登录；`platform_list_vulnerabilities` 无 port/q 时只回短索引。测到某面再带 port/q 或 `get`。同资产+路径/模块再次 booking → rediscovery。见 `work.md`、`platform-citizen`、`case_context`。 Expert Graph package 复验仍按 harness / task-graph。
   - **同模块去重身份**：平台 `finding_dedupe` 用 **path 集合相交（含 upload 证据路径别名）+ 标题 stem（去掉 Low/Medium 级别、中英同类头）** 识别同一 finding；安全级别/新绕过不是新行。存量可用 `scripts/repair_finding_ledger.py`。
   - **节点输出语言**：节点详情「配置」可设 `agent_language`（可扩展注册表，当前：`auto` 跟随用户 / `zh-CN` 简体 / `zh-TW` 繁體 / `en` / `ja`）。经 `task_assign` / steer 重建时的 `worker_limits.agent_language`，由共享 `formatAgentLanguageInjection` 注入 **所有** Agent Session 系统提示（free OMP、Hard Graph stage、subagent）。**Standing-first（#352）**：系统提示 **以** 英文结构壳 `## Standing node policies` **开头**，其下嵌套 `### Output language (node policy: …)`；本波策略 **正文仍为英文**（后续若 zh-CN 实机思考仍偏英可再开 target-language/双语 body 跟进，不在本波）。约束 **agent 自写叙述**（软保证，非硬翻译过滤）：对话、**Chat 中展示的思考/推理**（与对话同一语言面、非 English-only 旁路）、todo/计划、工具意图/进度叙述、台账字段、阶段/包交接叙述、报告 markdown。模板仅 minimal `{{ language_code }}` / `{{ language_prompt_name }}` / `{{ policy_body }}`（非 full Jinja、无 XML policy 壳）。工具原始 stdout/HTTP body **不翻译**。新增语言 = 扩展 registry 一行（UI/Platform allowlist 同源），不写 per-locale inject 分支。
   - **默认对话角色**：专家管理可勾选「设为默认对话角色」（`experts.is_default`，全站仅一位）。新建会话 / 空白 composer 优先选该专家；未设置时优先 `pack_id=default`，再 online / 列表首位。
   - **诚实计数（harness）**：收尾总结中「重新验证 N」= 本会话成功 `finding(confirm)` 次数，不是 prior 列表长度；「新发现」仅指新台账身份，同 path 合并只能称 rediscovery。见 `experts/pentest/work.md` Honest counts。
-  - **Scope Host 薄记忆（`case_context.scope_intel`）**：task_assign 时按结构化 target/scope 解析 Host（非 NLP），注入台账摘要——Host id/地址/端口服务、prior 计数与 severity 分层、最多约 8 条 high/critical 标题+path、攻击面 path 草图（非全文 PoC）。**主业仍是拓面与新 finding**；open prior 为穿插 re-verify。全量细节按需 `platform_list_vulnerabilities(asset_id=…)` / `platform_get_asset`（与漏洞台账按资产筛选同粒度；勿把未过滤 top-N 当该 Host 全集），禁止把 prior 列表当必须做完的 checklist。
+  - **Scope Host 薄记忆（`case_context.scope_intel`）**：task_assign 时按结构化 target/scope 解析 Host（非 NLP），注入台账摘要——Host id/地址/端口服务、Scope 端口 prior 计数、按 path/module 折叠的标题+摘要（最多约 24 面）、攻击面 path 草图。**主业仍是拓面与新 finding**。详情按需 `platform_list_vulnerabilities(asset_id, port/q)` / `get`；无过滤 list 只回短索引。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
 - 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
 - 历史里程碑与旧计划已删除；运维清理见 **`docs/project-cleanup-plan.md`**。
@@ -102,7 +102,7 @@
 - **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
 - 工具与循环语义遵循 `docs/specs/harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
 - **Pentest Default free / Expert Graph：** 无 Graph 模板时为 free OMP；显式 `app_assessment`（产品 Expert Graph）走 Hard Graph runner（阶段 + fail-closed Feedback）。Soft 场景图产品模式已退役（#68 / #76）。见 `docs/specs/task-graph.md`。
-- 任务目录可排查：`events.jsonl`、evidence、findings 等。
+- 工作区按 Case / 专家 Session / pi 实例分目录：`workspace/case-{caseId}/`（findings/evidence/surfaces）、`…/expert-{expertId}/`（沙箱 + cookies）、`…/pi-{sessionId}/`（`session.jsonl` 审计 + events；非 Product SOT）。Task 包 id 不再占一层目录。
 - **Case 共享 evidence**：`task_assign.case_context` 含 findings + `evidence_snippets`（path/excerpt），供多专家接力（如 pentest 源码泄露 → code-audit）；实现见绑定候选的 booking / harness。
 
 **P1**

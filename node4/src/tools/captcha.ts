@@ -9,6 +9,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
+import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
@@ -61,7 +62,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         }
         if (!isInScope(runtime, url)) return textResult(`error: out of scope: ${url}`);
         const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
-        const jar = await loadActorJar(runtime.taskDir, actor);
+        const jar = await loadActorJar(resolveRuntimeSessionDir(runtime) || runtime.taskDir, actor);
         const headers: Record<string, string> = {};
         const cookie = formatCookieHeader(jar);
         if (cookie) headers.Cookie = cookie;

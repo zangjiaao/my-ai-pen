@@ -121,11 +121,10 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
     label: "Platform list vulnerabilities",
     description:
       "List findings from the **owner ledger** (same DB as 漏洞台账). " +
-      "When Scope Host is known, **pass asset_id** (from platform_list_assets / scope_intel) — " +
-      "do not treat unfiltered top-N as that host's full prior set. " +
+      "When Scope Host is known, **pass asset_id** (from platform_list_assets / scope_intel). " +
+      "Look up when you approach a path/module — pass **port** and/or **q** (title/path). " +
+      "Do not dump the host ledger at kickoff. Priors are an index, not a retest queue. " +
       "Response: count=this page, total=match size, has_more. Default limit 50 (max 200). " +
-      "Open priors on a host are an interleaved re-verify stream (fresh proof → finding(confirm)), " +
-      "not a skip list and not a finish-first checklist. " +
       "multiple_discoveries=true means rediscovered before. Read-only.",
     parameters: Type.Object({
       limit: Type.Optional(Type.Number()),
@@ -137,6 +136,12 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       asset_ids: Type.Optional(
         Type.Array(Type.String(), { description: "Multiple Host asset ids" }),
       ),
+      port: Type.Optional(
+        Type.String({ description: "Service port (Scope face) — prefer when looking up one site" }),
+      ),
+      q: Type.Optional(
+        Type.String({ description: "Title / location / description needle for the surface you are about to test" }),
+      ),
     }),
     async execute(_id: string, params: any) {
       const limit = Math.min(200, Math.max(1, Number(params.limit || 50) || 50));
@@ -146,17 +151,35 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       const assetIds = Array.isArray(params.asset_ids)
         ? params.asset_ids.map(String).map((s) => s.trim()).filter(Boolean)
         : [];
+      const port = String(params.port || "").trim();
+      const q = String(params.q || params.search || "").trim();
+      const unscoped = !port && !q;
+      const effectiveLimit = unscoped ? Math.min(limit, 12) : limit;
       let path = `/api/node/ledger/vulnerabilities${convQuery(runtime)}`;
       path += path.includes("?") ? "&" : "?";
-      path += `limit=${limit}&offset=${offset}`;
+      path += `limit=${effectiveLimit}&offset=${offset}`;
       if (status) path += `&status=${encodeURIComponent(status)}`;
       if (assetId) path += `&asset_id=${encodeURIComponent(assetId)}`;
       for (const id of assetIds) {
         if (id === assetId) continue;
         path += `&asset_ids=${encodeURIComponent(id)}`;
       }
+      if (port) path += `&port=${encodeURIComponent(port)}`;
+      if (q) path += `&q=${encodeURIComponent(q)}`;
       const res = await platformLedgerFetch(runtime, "GET", path);
-      return jsonResult(res.data, { isError: !res.ok });
+      const data =
+        res.data && typeof res.data === "object" && !Array.isArray(res.data)
+          ? {
+              ...(res.data as Record<string, unknown>),
+              ...(unscoped
+                ? {
+                    guidance:
+                      "Unscoped list is an index only (capped). Pass port= and/or q= for the surface you are testing. Do not treat this page as the host's full set or a kickoff retest queue.",
+                  }
+                : {}),
+            }
+          : res.data;
+      return jsonResult(data, { isError: !res.ok });
     },
   };
 }
@@ -663,12 +686,11 @@ export function createPlatformSetConversationTitleTool(runtime: ToolRuntime): Ag
     label: "Set session title",
     description:
       "Rename **this** Case/session title (sidebar + top bar). " +
-      "Use on the first substantive user message when the title is still the default placeholder " +
-      "(新会话 / New session): invent a short descriptive title from intent (target, unit, task type). " +
-      "Also when the user explicitly asks to rename. " +
+      "Housekeeping uses this once with only_if_default=true when the title is still 新会话 " +
+      "and the task envelope has a structured target/scope. " +
+      "Expert seats: only when the user explicitly asks to rename (only_if_default=false). " +
       "Titles: concise (≤~24 Chinese chars or ~40 Latin), no quotes, no trailing period. " +
-      "Prefer only_if_default=true for auto-naming so a user-chosen title is never overwritten. " +
-      "Do not announce the rename in chat unless the user asked to rename.",
+      "Never overwrite a user-chosen title. Do not announce the rename unless they asked.",
     parameters: Type.Object({
       title: Type.String({ description: "New session title" }),
       only_if_default: Type.Optional(

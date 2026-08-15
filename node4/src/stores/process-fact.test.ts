@@ -50,7 +50,7 @@ try {
   }
 
   const inject = formatProcessFactIndexInjection(listed);
-  assert(inject.includes("Process facts index"), "inject header");
+  assert(inject.includes("Process facts"), "inject header");
   assert(inject.includes("target/primary_url"), "inject key");
   assert(!inject.includes("Failed probe"), "inject does not include body detail");
   assert(inject.includes("Do not invent"), "anti-hallucination guidance");

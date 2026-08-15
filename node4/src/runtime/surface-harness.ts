@@ -102,7 +102,7 @@ export function midRunNewUntestedSurfaceNudge(newUntestedCount: number): string 
   return [
     "<system-reminder>",
     `Gentle reminder: ${newUntestedCount} Surface item${newUntestedCount === 1 ? "" : "s"} ${plural} still **NEW untested** (not yet TESTED this Case — need test-purpose traffic).`,
-    "Call surface(summary|list) and drive NEW → TESTED with real requests (or deadend) — platform priors are re-verify context, not a skip list.",
+    "Call surface(summary|list) and drive NEW → TESTED with real requests (or deadend) — platform priors are an index, not a skip list or a retest queue.",
     "Do not claim recon/coverage complete while NEW untested remain without an honest pause that discloses the queue.",
     "</system-reminder>",
   ].join("\n");

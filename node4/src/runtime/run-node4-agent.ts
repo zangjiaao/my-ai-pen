@@ -351,6 +351,22 @@ export async function createBoundNode4Session(
   followUpHold.fn = (text) => session.followUp(text);
   attachProductToolEventBridge(session, runtime, segmentCounter);
 
+  // Incremental pi-format JSONL (system + user + assistant/tool). Park continue
+  // keeps this Agent, so the same file grows. Best-effort — never fail the run.
+  try {
+    const { attachBoundSessionAudit } = await import("./pi-session-audit.js");
+    await attachBoundSessionAudit(session, {
+      workspaceDir: config.workspaceDir,
+      runtime,
+      systemPrompt,
+      thinkingLevel: options.thinkingLevel ?? "medium",
+      modelProvider: model.provider,
+      modelId: model.id,
+    });
+  } catch {
+    /* audit must not take down the Agent */
+  }
+
   return { session, segmentCounter };
 }
 

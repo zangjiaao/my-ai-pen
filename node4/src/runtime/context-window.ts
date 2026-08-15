@@ -8,13 +8,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { formatProcessFactIndexInjection } from "../stores/process-fact.js";
 import { formatTodoSummary } from "../stores/todo.js";
+import { formatIntelInjectLine, sortIntelSummaryForInject } from "./case-context.js";
 import { LlmTurnError } from "./llm-turn-error.js";
 
 export const DEFAULT_COMPACT_THRESHOLD = 0.8;
 export const CHECKPOINT_POINTER = "细节以 Store / 归档为准";
 export const PERSIST_PASS_MARKER = "[context-window]";
 export const PERSIST_PASS_TEXT =
-  "[context-window] Occupancy is high. Persist living notebook intel (platform_record_intel / platform_forget_intel) and any Store rows that should survive the smaller view, then continue. Unwritten process will be dropped.";
+  "[context-window] Occupancy is high. Persist living notebook clues with fact(upsert)/fact(forget) (Host hang) and any Store rows that should survive the smaller view, then continue. Unwritten process will be dropped.";
 
 export type OccupancyEstimate = {
   tokens: number;
@@ -276,10 +277,7 @@ export async function collectCheckpointRehydrate(runtime: ToolRuntime | undefine
   } else {
     const intel = runtime.task.caseContext?.intel_summary || [];
     if (intel.length) {
-      out.intelLines = intel.slice(0, 20).map((c) => {
-        const hang = c.port ? `${c.asset_id || "?"}:${c.port}` : String(c.asset_id || "");
-        return `- ${c.id || "?"}${hang ? ` hang=${hang}` : ""} — ${c.summary || ""}`;
-      });
+      out.intelLines = sortIntelSummaryForInject(intel.slice(0, 20)).map(formatIntelInjectLine);
     }
   }
   try {

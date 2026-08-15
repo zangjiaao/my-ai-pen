@@ -61,6 +61,12 @@ Operators watching a Case cannot see **what HTTP traffic the Agent actually prod
 - Platform: Case-scoped `conversation.context["traffic_exchanges"]`; snapshot field `traffic_exchanges`; live WS `traffic_exchange` upsert-by-id after persist.
 - FE: Traffic tab; N3 view filter pure function; search + source filter toolbar; L1 table (# newest-first, Method, Domain, Path, Status, Source, duration Time); center detail dialog (portal to body).
 
+### Job D store (when specifying [#442](https://github.com/zangjiaao/my-ai-pen/issues/442))
+
+V1 `conversation.context["traffic_exchanges"]` is a bounded JSON blob (row cap ~500). Job D MITM (nuclei / scripts / sandbox egress) will exceed that shape. When #442 writes the store law, **consider a Node SQLite working store** under the Case workspace (`case-{id}/` — same topology as Surface `ledger.sqlite`): local upsert + `WHERE` (host/path/source/purpose/TESTED settle) + retention/sampling. Platform stays UI/projection SoT (table or dual-write); do **not** stuff MITM volume into `conversation.context`. Do **not** put `session.jsonl` / events in that DB.
+
+This is a **candidate**, not a lock — grill volume, sampling, and Surface TESTED interaction on the map before picking sqlite vs a platform table.
+
 ---
 
 ## Testing seams

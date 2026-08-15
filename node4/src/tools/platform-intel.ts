@@ -14,9 +14,73 @@ const KIND_HELP =
   "credential_status | secret | token | flag | path_hint | account | config. " +
   "Pick the closest; do not invent a kind. Missing kind records as config.";
 
-function convQuery(runtime: ToolRuntime): string {
+export function convQuery(runtime: ToolRuntime): string {
   const id = String(runtime.task.conversationId || "").trim();
   return id ? `?conversation_id=${encodeURIComponent(id)}` : "";
+}
+
+/** Host hang from explicit args, or the single on-ledger Scope Host. Never invent. */
+export function resolveIntelHang(
+  params: { asset_id?: unknown; port?: unknown },
+  scopeHosts?: Array<{ id?: string; on_ledger?: boolean }> | null,
+): { asset_id: string; port?: string } | null {
+  const assetId = String(params.asset_id || "").trim();
+  const port = String(params.port || "").trim() || undefined;
+  if (assetId) return { asset_id: assetId, ...(port ? { port } : {}) };
+  const ledger = (scopeHosts || []).filter((h) => h && h.on_ledger !== false && String(h.id || "").trim());
+  if (ledger.length !== 1) return null;
+  return { asset_id: String(ledger[0].id).trim(), ...(port ? { port } : {}) };
+}
+
+export async function recordIntelRow(
+  runtime: ToolRuntime,
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await platformLedgerFetch(runtime, "POST", `/api/node/ledger/intel${convQuery(runtime)}`, payload);
+  if (res.ok && res.data && typeof res.data === "object") {
+    await emitIntelUpsert(runtime, (res.data as { intel?: unknown }).intel);
+  }
+  return res;
+}
+
+export async function listIntelRows(
+  runtime: ToolRuntime,
+  opts?: { asset_id?: string; port?: string; limit?: number },
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const limit = Math.min(200, Math.max(1, Number(opts?.limit || 50) || 50));
+  let path = `/api/node/ledger/intel${convQuery(runtime)}`;
+  path += path.includes("?") ? "&" : "?";
+  path += `limit=${limit}`;
+  if (opts?.asset_id) path += `&asset_id=${encodeURIComponent(opts.asset_id)}`;
+  if (opts?.port) path += `&port=${encodeURIComponent(opts.port)}`;
+  return platformLedgerFetch(runtime, "GET", path);
+}
+
+export async function getIntelRow(
+  runtime: ToolRuntime,
+  intelId: string,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  return platformLedgerFetch(
+    runtime,
+    "GET",
+    `/api/node/ledger/intel/${encodeURIComponent(intelId)}${convQuery(runtime)}`,
+  );
+}
+
+export async function forgetIntelRow(
+  runtime: ToolRuntime,
+  intelId: string,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await platformLedgerFetch(
+    runtime,
+    "POST",
+    `/api/node/ledger/intel/${encodeURIComponent(intelId)}/forget${convQuery(runtime)}`,
+    {},
+  );
+  if (res.ok && res.data && typeof res.data === "object") {
+    await emitIntelUpsert(runtime, (res.data as { intel?: unknown }).intel);
+  }
+  return res;
 }
 
 async function emitIntelUpsert(runtime: ToolRuntime, row: unknown): Promise<void> {
@@ -71,10 +135,7 @@ export function createPlatformRecordIntelTool(runtime: ToolRuntime): AgentTool<a
       if (port) payload.port = port;
       const intelId = String(params.id || "").trim();
       if (intelId) payload.id = intelId;
-      const res = await platformLedgerFetch(runtime, "POST", `/api/node/ledger/intel${convQuery(runtime)}`, payload);
-      if (res.ok && res.data && typeof res.data === "object") {
-        await emitIntelUpsert(runtime, (res.data as { intel?: unknown }).intel);
-      }
+      const res = await recordIntelRow(runtime, payload);
       return jsonResult(res.data, { isError: !res.ok });
     },
   };

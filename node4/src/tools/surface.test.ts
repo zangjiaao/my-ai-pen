@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { SurfaceSqliteStore, SURFACE_WRITE_HARD_CAP } from "../stores/surface-sqlite.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
 import { createSurfaceTool, depositSurfaceLocation } from "./surface.js";
+import { ProcessFactStore } from "../stores/process-fact.js";
 import type { ToolRuntime } from "../types.js";
 import type { TaskEnvelope } from "../types.js";
 
@@ -18,6 +19,7 @@ function minimalRuntime(
   opts?: {
     surfaceSqlite?: SurfaceSqliteStore;
     surfaceLedger?: SurfaceLedgerStore;
+    processFacts?: ProcessFactStore;
     workerAudit?: { agentId: string; packageTurnId: string } | null;
     subagentDepth?: number;
   },
@@ -38,6 +40,7 @@ function minimalRuntime(
     goals: {} as ToolRuntime["goals"],
     surfaceSqlite: opts?.surfaceSqlite,
     surfaceLedger: opts?.surfaceLedger,
+    processFacts: opts?.processFacts,
     lifecycle: {
       subagentDepth: opts?.subagentDepth ?? 0,
       workerAudit: opts?.workerAudit ?? null,
@@ -399,7 +402,7 @@ const tool = createSurfaceTool(runtime);
   await rm(migDir, { recursive: true, force: true });
 }
 
-// --- depositSurfaceLocation helper (fact thin wrapper) ---
+// --- depositSurfaceLocation helper (harness / Graph) ---
 {
   const dep = await depositSurfaceLocation(runtime, {
     location: "redis://10.1.2.3:6379",
@@ -411,6 +414,23 @@ const tool = createSurfaceTool(runtime);
   const g = await store.get({ location: "redis://10.1.2.3:6379" });
   assert.ok(g);
   assert.equal(g!.kind, "redis");
+}
+
+// Harness copies Agent surface deposits into this-task facts/ (not a second Agent op).
+{
+  const facts = new ProcessFactStore(join(dir, "facts-mirror"));
+  const rt = minimalRuntime(dir, { surfaceSqlite: store, processFacts: facts });
+  const dep = await depositSurfaceLocation(rt, {
+    location: "https://lab.local/login",
+    note: "login form",
+    kind: "form",
+  });
+  assert.ok(dep.ok, dep.ok ? "ok" : (dep as { error: string }).error);
+  const listed = await facts.list();
+  assert.ok(
+    listed.some((f) => f.fact_key.startsWith("surface/") && f.summary.includes("login form")),
+    "harness mirrored surface deposit into process facts",
+  );
 }
 
 // --- offline: no platformApi required ---

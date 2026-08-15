@@ -78,10 +78,10 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       `list: default seen+touched actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT} (max same); returns returned/total_matching/has_more.`,
       "get: by id, location, or origin_key+path_key.",
       "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; TESTED only via purpose=test Traffic (case_tested; ≥1 enough); booked only via finding(confirm).",
-      "Platform vuln priors alone ≠ this-Case TESTED / ≠ coverage complete — re-verify context only.",
+      "Platform vuln priors alone ≠ this-Case TESTED / ≠ coverage complete — index only; look up when you hit that surface.",
       "Optional upsert (non-primary): rare correctives — cannot set booked; cannot fake TESTED/case_tested without traffic.",
       "Main and Worker share the same Case ledger. Offline ok — no Platform required.",
-      "Prefer this tool over fact(op=surface).",
+      "This is the only Agent surface ledger tool. fact does not deposit surfaces.",
       `Write hard-cap ${SURFACE_WRITE_HARD_CAP} rows; prefer ≤${SURFACE_UPSERT_BATCH_MAX} per optional upsert call.`,
     ].join(" "),
     parameters: Type.Object({
@@ -288,6 +288,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
         if (platformOnline && result.upserted.length) {
           void enqueueSurfacePlatformSync(runtime, result.upserted);
         }
+        await mirrorSurfaceToProcessFacts(runtime, items);
 
         return jsonResult({
           ok: true,
@@ -310,9 +311,31 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
   };
 }
 
+/** Harness copy: Agent-initiated surface deposits also land in this-task facts/. */
+async function mirrorSurfaceToProcessFacts(
+  runtime: ToolRuntime,
+  items: Array<{ location?: string; kind?: string; auth?: string; note?: string }>,
+): Promise<void> {
+  const store = runtime.processFacts;
+  if (!store) return;
+  for (const item of items) {
+    const location = String(item.location || "").trim();
+    if (location.length < 2) continue;
+    const safeLoc = location.replace(/[^a-zA-Z0-9_./-]+/g, "_").replace(/^_+/, "");
+    await store
+      .upsert({
+        fact_key: `surface/${safeLoc}`.slice(0, 120),
+        summary: String(item.note || "").trim() || `surface ${location}`,
+        body: JSON.stringify({ location, kind: item.kind, auth: item.auth }),
+        category: "surface",
+      })
+      .catch(() => {});
+  }
+}
+
 /**
- * Thin helper for fact(op=surface) and other callers that deposit one location
- * into the SQLite working store (Graph gates read the same store — #371).
+ * Deposit one location into the SQLite working store (Graph gates — #371).
+ * Harness mirrors into process facts when that store exists.
  */
 export async function depositSurfaceLocation(
   runtime: ToolRuntime,
@@ -359,6 +382,7 @@ export async function depositSurfaceLocation(
       ],
       { source_subagent_id: source_agent_id },
     );
+    await mirrorSurfaceToProcessFacts(runtime, items);
     return { ok: true, created: added, updated: 0, total, platform_sync: "offline" };
   }
   await store.open();
@@ -372,6 +396,7 @@ export async function depositSurfaceLocation(
   if (platformOnline && result.upserted.length) {
     void enqueueSurfacePlatformSync(runtime, result.upserted);
   }
+  await mirrorSurfaceToProcessFacts(runtime, items);
   return {
     ok: true,
     created: result.created,

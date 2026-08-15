@@ -40,8 +40,8 @@ const baseTask: TaskEnvelope = {
   });
   assert.equal(
     ordered,
-    "BASE_MARK\n\nPROF_MARK\n\nRUN_MARK\n\nTASK_MARK",
-    "assemble joins four layers with blank lines",
+    "BASE_MARK\n\n## Profession\nPROF_MARK\n\n## Runtime\nRUN_MARK\n\n## Task\nTASK_MARK",
+    "assemble joins four layers with blank lines and later-layer headings",
   );
   ok(
     ordered.indexOf("BASE_MARK") < ordered.indexOf("PROF_MARK") &&
@@ -56,7 +56,7 @@ const baseTask: TaskEnvelope = {
     runtime: "  ",
     task: "TASK_ONLY",
   });
-  assert.equal(skipEmpty, "BASE_ONLY\n\nTASK_ONLY");
+  assert.equal(skipEmpty, "BASE_ONLY\n\n## Task\nTASK_ONLY");
   ok(!skipEmpty.includes("PROF"), "empty profession omitted");
   ok(
     skipEmpty.indexOf("BASE_ONLY") < skipEmpty.indexOf("TASK_ONLY"),
@@ -104,8 +104,16 @@ const baseTask: TaskEnvelope = {
   );
 
   ok(layers.task.includes("Target:"), "Task has target");
-  ok(layers.task.includes("Scope:"), "Task has scope");
+  ok(
+    layers.task.includes("Scope allow:") || layers.task.includes("Scope:"),
+    "Task has scope",
+  );
   ok(layers.task.includes("Instruction:"), "Task has instruction");
+  ok(layers.task.includes("### Engagement"), "Task envelope is markdown");
+  ok(
+    !layers.task.includes('{"type":'),
+    "Task target/scope are not raw JSON",
+  );
   ok(
     !layers.task.includes("## Standing node policies"),
     "Task does not own Standing",
@@ -148,6 +156,10 @@ const baseTask: TaskEnvelope = {
   ok(workModeIdx > toolsIdx, "work-mode after capability header (Runtime)");
   ok(targetIdx > workModeIdx, "Task target after Runtime work-mode");
   ok(instructionIdx > targetIdx, "Instruction after Target in Task");
+  const profH = prompt.indexOf("## Profession");
+  const runH = prompt.indexOf("## Runtime");
+  const taskH = prompt.indexOf("## Task");
+  ok(profH > standingIdx && runH > profH && taskH > runH, "visible layer headings keep Base → Profession → Runtime → Task");
 
   // Profession (mission/work) sits between Base persona and Runtime tools
   const personaIdx = prompt.indexOf("untrusted display label");
@@ -213,6 +225,10 @@ const baseTask: TaskEnvelope = {
       prompt.includes("Booking mode: none"),
     "Default booking mode none",
   );
+  ok(
+    !prompt.includes("only_if_default=true"),
+    "Default does not assign auto-title (housekeeping owns it)",
+  );
   // No Expert skill encyclopedia / progressive skill list unless pack declares skills
   ok(
     !DEFAULT_SEAT_PACK.skillIds?.length || !prompt.includes("Skills available"),
@@ -222,7 +238,10 @@ const baseTask: TaskEnvelope = {
     prompt.indexOf(STANDING_HEADING) < prompt.indexOf("Tools:"),
     "Default Base before Runtime tools",
   );
-  ok(prompt.includes("Target:"), "Default Task includes target");
+  ok(
+    prompt.includes("### Engagement") && prompt.includes("Instruction:"),
+    "Default Task includes engagement/instruction",
+  );
 }
 
 // --- Expert Free: workModeInjection free + skill ids ---
@@ -477,6 +496,64 @@ const baseTask: TaskEnvelope = {
     /never hard-blocks settlement/i.test(workBody) ||
       /Open NEW untested never hard-blocks/i.test(workBody),
     "T3 work.md: open NEW untested does not hard-block settlement",
+  );
+  ok(
+    /Before wrap\/next_steps: optional upsert if worth keeping/i.test(workBody) &&
+      /Compact persist is a separate pass/i.test(workBody),
+    "T3 work.md: settle persist optional; compact persist separate",
+  );
+  ok(
+    /This-turn Task first/i.test(workBody) && /session login/i.test(workBody),
+    "T3 work.md: Task inject + session login before ledger dump",
+  );
+  ok(
+    /after first live use/i.test(workBody) && /确认台账/i.test(workBody),
+    "T3 work.md: todo after first live use; not kickoff 确认台账",
+  );
+}
+
+{
+  const withCreds: TaskEnvelope = {
+    ...baseTask,
+    caseContext: {
+      intel_summary: [
+        {
+          id: "i1",
+          kind: "credential_status",
+          summary: "gordonb/test123 valid",
+          asset_id: "a1",
+          port: "8080",
+        },
+      ],
+    },
+  };
+  const prompt = buildSystemPrompt(withCreds, PENTEST_ROLE_PACK);
+  ok(
+    /session-login this turn/i.test(prompt),
+    "Runtime adds session-login line when living creds are injected",
+  );
+}
+
+{
+  const plain = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK);
+  ok(
+    !/Read this-turn Case inject first/i.test(plain),
+    "eager todo is not in system unless the session asks for it",
+  );
+  const withReminders = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, {
+    eagerTodo: true,
+    eagerBooking: true,
+  });
+  ok(
+    /Read this-turn Case inject first/i.test(withReminders) &&
+      /todo\(init\)/i.test(withReminders),
+    "eager todo reminder lives in system when opted in",
+  );
+  ok(/Book only issues you can \*prove\*/i.test(withReminders), "eager booking reminder in system");
+  const chat = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, { chatOnly: true });
+  ok(
+    /no authorized engagement target/i.test(chat),
+    "chat-only Runtime forbids recon without a target",
   );
 }
 

@@ -123,7 +123,7 @@ Process death: park is memory-only. Reseed is mode-correct + Store / Todo / Inte
 
 **Forbidden dumps:** raw scanner stdout, every 404/retry, skill bodies, thinking text, restating the same fact in ten rows. Tool streams stay under `tool-output/` (existing governance).
 
-**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤20**; findings **≤20**; Todo = current product map.
+**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤20** (Scope Host-level + matching Scope Service ports; see owner-intel); findings **≤20**; Todo = current product map.
 
 **Enforcement:** tool schemas and existing size/L0 gates. **Not** platform NLP scrape of chat (`AGENTS.md`). Agent chooses what to persist; host rejects oversized bodies (`MAX_SUMMARY` / `MAX_BODY` on facts already).
 
@@ -132,6 +132,7 @@ Process death: park is memory-only. Reseed is mode-correct + Store / Todo / Inte
 - **Mid-run:** Agent **may** `record_intel` / book / fact whenever it wants. **No** periodic nudge. Frequent mandatory writes are out.
 - **At threshold:** one **persist pass** — a single structured follow-up (not NLP): occupancy is high; persist living intel (and other Store rows it already knows how to write) that should survive the smaller view; then continue. Host does **not** scrape the transcript.
 - **If the pass writes nothing:** still shrink. Compact does not wait forever. Unwritten process is lost — that is acceptable.
+- **Settle persist** (wrap / next_steps) is a **separate** optional notebook write (owner-intel persist cadence). It does not replace this compact pass; both may run in one Session.
 
 ---
 
@@ -184,3 +185,5 @@ Optional later: Status chrome that occupancy shrink ran. **Not** Spec-blocking.
 | 2026-08-15 | First publish — map #461 / ticket #468. |
 | 2026-08-15 | Persist cadence: optional mid-run writes; one Agent persist pass at threshold; then shrink (#471). |
 | 2026-08-15 | Shipped: `NODE4_COMPACT_THRESHOLD` (default 0.8) + `transformContext` persist-then-checkpoint. |
+| 2026-08-15 | Settle persist called out as a separate optional pass (does not replace compact persist). |
+| 2026-08-15 | Living intel inject follows owner-intel Case hang filter (Host-level + Scope Service ports). |

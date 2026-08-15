@@ -22,14 +22,14 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/session-owns-runtime.md`](specs/session-owns-runtime.md) | Session owns captain runtime; Task is dispatch package only (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354)) |
 | [`specs/context-window-management.md`](specs/context-window-management.md) | Agent Runtime occupancy shrink = **checkpoint** (Store rehydrate + current Todo slice); not chat-summary / not AgentHarness — map [#461](https://github.com/zangjiaao/my-ai-pen/issues/461) |
 | [`specs/session-dialogue-path.md`](specs/session-dialogue-path.md) | Session-first dialogue path — continue turn = operator utterance; Task out of conversational middle (Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455)) |
-| [`specs/session-auto-title.md`](specs/session-auto-title.md) | Session auto-title — Agent renames default「新会话」(Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)) |
+| [`specs/session-auto-title.md`](specs/session-auto-title.md) | Session auto-title — harness housekeeping names default「新会话」(Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)) |
 | [`specs/graph-catalog-work-mode-ui.md`](specs/graph-catalog-work-mode-ui.md) | Graph L1 catalog (skill-like) + dual-rail composer/AgentRow (Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278)) |
 | [`specs/composer-graph-harness-bind.md`](specs/composer-graph-harness-bind.md) | Composer Graph + Expert → harness bind fail-closed; re-verify booking (Spec [#284](https://github.com/zangjiaao/my-ai-pen/issues/284)) |
 | [`specs/engagement-graph-back-edges.md`](specs/engagement-graph-back-edges.md) | Constrained Engagement Graph (declarative back-edges) + `hypothesis_cycle` (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)) |
 | [`specs/engagement-graph-json-boundary.md`](specs/engagement-graph-json-boundary.md) | Graph JSON data-plane vs code standards-plane (topology/budgets in JSON; interpreter/predicates/projection/booking in code) |
 | [`specs/lab-scorecard-hypothesis-cycle.md`](specs/lab-scorecard-hypothesis-cycle.md) | Offline dual-arm D0–D3 × R0–R3 scorecard (DVWA+Juice); never agent-facing (Spec #285 S6) |
 | [`specs/hypothesis-evidence.md`](specs/hypothesis-evidence.md) | Optional Expert Graph hypothesis queue + progressive skill disclosure (map #266) |
-| [`specs/prompt-layers.md`](specs/prompt-layers.md) | Layered system-prompt assembly (Base / Profession / Runtime / Task; Default · Expert Free · Expert Graph · Package) — Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) |
+| [`specs/prompt-layers.md`](specs/prompt-layers.md) | Locked prompt assembly: four system layers + utterance-only user turn; where a new sentence goes — Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) |
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
 | [`specs/base-booking-finding-id.md`](specs/base-booking-finding-id.md) | Base Runtime booking + unified finding_id mint (Spec [#279](https://github.com/zangjiaao/my-ai-pen/issues/279)) |
 | [`specs/product-state-ui-projection.md`](specs/product-state-ui-projection.md) | Product state → UI passive projection; Findings/Evidence SoT (Spec [#280](https://github.com/zangjiaao/my-ai-pen/issues/280)) |
@@ -64,6 +64,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`agents/issue-tracker.md`](agents/issue-tracker.md) | GitHub Issues / wayfinder operations |
 | [`agents/triage-labels.md`](agents/triage-labels.md) | Triage label vocabulary |
 | [`agents/domain.md`](agents/domain.md) | Domain docs consumer rules |
+| [`agents/ui-render-audit.md`](agents/ui-render-audit.md) | DEV render audit: typed input must not re-render page chrome / lists |
 
 ### Related (outside `docs/`)
 
