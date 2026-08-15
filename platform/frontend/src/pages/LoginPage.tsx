@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useAuthStore } from "../stores/authStore";
 import LoginHero from "../components/LoginHero";
+import { useRenderAudit } from "../lib/renderAudit";
 export default function LoginPage() {
+  useRenderAudit("LoginPage");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

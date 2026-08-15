@@ -32,6 +32,7 @@ import type { TaskMapRevision } from "../lib/taskMapHistory";
 import { isViewingHistory, planTreeForView } from "../lib/taskMapHistory";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
 import { authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
   TRAFFIC_EMPTY_COPY,
   bodyDisplayText,
@@ -233,6 +234,7 @@ export default function RightPanel({
   packageWorking = false,
   packageExpertId = null,
 }: Props) {
+  useRenderAudit("RightPanel");
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
@@ -452,7 +454,7 @@ export default function RightPanel({
           </button>
         ))}
       </nav>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="no-scrollbar flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
             {/* Spec #324 D1: Case tokens+cost primary; active count secondary. No elapsed hero. */}
@@ -705,6 +707,7 @@ function TrafficAuditList({
   emptyCopy: string;
   onOpen: (exchangeId: string) => void;
 }) {
+  useRenderAudit("TrafficAuditList");
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<TrafficSourceFilter>("all");
   const visible = useMemo(
@@ -718,7 +721,7 @@ function TrafficAuditList({
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={handleTypedInput("TrafficAuditList", setQuery)}
           placeholder="Search method, domain, path…"
           data-testid="traffic-search"
           className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-muted outline-none focus:border-ink"

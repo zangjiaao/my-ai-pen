@@ -30,7 +30,7 @@ const TOOL_LABEL_ZH: Record<string, string> = {
   edit: "编辑文件",
   read: "读取文件",
   finding: "登记发现",
-  fact: "记录过程事实",
+  fact: "记录线索",
   surface: "记录攻击面",
   todo: "更新任务清单",
   skill: "加载技能",

@@ -11,6 +11,7 @@ export type IntelRow = {
   body?: string;
   status?: string;
   forget_count?: number;
+  access_count?: number;
   is_new?: boolean;
   created_task_id?: string | null;
   source?: string;
@@ -33,10 +34,16 @@ export function intelStatus(row: IntelRow): IntelStatus {
 
 export function isIntelNew(row: IntelRow, currentTaskId?: string | null): boolean {
   if (row.is_new === true) return true;
-  if (row.is_new === false) return false;
   const cur = String(currentTaskId || "").trim();
   const created = String(row.created_task_id || "").trim();
-  return Boolean(cur && created && cur === created);
+  if (cur && created && cur === created) return true;
+  return false;
+}
+
+export function accessCount(row: IntelRow | null | undefined): number {
+  const n = Number(row?.access_count ?? 0);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
 }
 
 export function hangLabel(row: IntelRow): string {
@@ -59,4 +66,18 @@ export function upsertIntelRow(prev: IntelRow[], incoming: IntelRow): IntelRow[]
   const next = prev.filter((row) => String(row.id || "") !== id);
   next.unshift(incoming);
   return next;
+}
+
+/**
+ * Snapshot is SoT for ids it includes. Keep live-only rows (intel_upsert that
+ * raced a refresh) so 线索 does not flash New and then vanish.
+ */
+export function mergeIntelSnapshot(prev: IntelRow[], incoming: IntelRow[]): IntelRow[] {
+  const next = Array.isArray(incoming) ? incoming.filter((row) => String(row.id || "").trim()) : [];
+  const seen = new Set(next.map((row) => String(row.id || "").trim()));
+  const extras = (Array.isArray(prev) ? prev : []).filter((row) => {
+    const id = String(row.id || "").trim();
+    return Boolean(id && !seen.has(id));
+  });
+  return extras.length ? [...extras, ...next] : next;
 }

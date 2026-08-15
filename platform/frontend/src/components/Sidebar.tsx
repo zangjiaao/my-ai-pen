@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   CalendarClock,
@@ -29,6 +29,7 @@ import {
   isConversationSurfacePath,
 } from "../lib/caseRoutes";
 import { packageStatusDotClass, packageStatusTitle } from "../lib/packageStatusLight";
+import { useRenderAudit } from "../lib/renderAudit";
 
 interface Props {
   activeId: string | null;
@@ -114,7 +115,8 @@ function NavRow(props: {
   );
 }
 
-export default function Sidebar({ activeId }: Props) {
+function Sidebar({ activeId }: Props) {
+  useRenderAudit("Sidebar");
   const { user, logout } = useAuthStore();
   const { conversations, fetchAll, removeLocal } = useConversationStore();
   const navigate = useNavigate();
@@ -349,7 +351,7 @@ export default function Sidebar({ activeId }: Props) {
             会话
           </p>
         )}
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+        <div className="no-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           {compact ? (
             <div className="flex flex-col items-center gap-1 py-1">
               {conversations.slice(0, 8).map((c) => (
@@ -556,4 +558,5 @@ export default function Sidebar({ activeId }: Props) {
   );
 }
 
+export default memo(Sidebar);
 

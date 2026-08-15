@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { Check, Copy, Moon, Sun } from "lucide-react";
 import ReportDrawer from "./ReportDrawer";
 import { BRAND_NAME } from "../lib/brand";
 import { useThemeStore } from "../stores/themeStore";
+import { useRenderAudit } from "../lib/renderAudit";
 
 interface Props {
   title?: string;
@@ -11,7 +12,8 @@ interface Props {
   actions?: ReactNode;
 }
 
-export default function TopBar({ title, conversationId, actions }: Props) {
+function TopBar({ title, conversationId, actions }: Props) {
+  useRenderAudit("TopBar");
   const [copied, setCopied] = useState(false);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
@@ -67,3 +69,5 @@ export default function TopBar({ title, conversationId, actions }: Props) {
     </header>
   );
 }
+
+export default memo(TopBar);
