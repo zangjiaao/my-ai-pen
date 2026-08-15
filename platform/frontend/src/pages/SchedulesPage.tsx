@@ -7,6 +7,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import ConfirmDialog from "../components/ConfirmDialog";
 
 type Schedule = {
@@ -64,6 +65,7 @@ const EMPTY_FORM = {
 };
 
 export default function SchedulesPage() {
+  useRenderAudit("SchedulesPage");
   const [items, setItems] = useState<Schedule[]>([]);
   const [nodes, setNodes] = useState<NodeOpt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -221,7 +223,7 @@ export default function SchedulesPage() {
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={handleTypedInput("SchedulesPage.search", setSearch, { allow: ["SchedulesPage"] })}
                 placeholder="搜索目标 / pack / 指令"
                 className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
               />

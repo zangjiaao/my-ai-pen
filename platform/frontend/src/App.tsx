@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { Routes, Route, Navigate, useParams } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
+import { resetRenderAudit } from "./lib/renderAudit";
 import { useAuthStore } from "./stores/authStore";
 import LoginPage from "./pages/LoginPage";
 import ConversationPage from "./pages/ConversationPage";
@@ -11,7 +12,16 @@ import NodePage from "./pages/NodePage";
 import ExpertPage from "./pages/ExpertPage";
 import AuditPage from "./pages/AuditPage";
 import SonnerToast from "./components/SonnerToast";
+import RenderAuditBadge from "./components/RenderAuditBadge";
 import { casePath, isCaseId } from "./lib/caseRoutes";
+
+function RouteAuditReset() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (import.meta.env.DEV) resetRenderAudit();
+  }, [pathname]);
+  return null;
+}
 
 /** Old `/case/:caseId` bookmarks → canonical `/:caseId`. */
 function LegacyCaseRedirect() {
@@ -30,6 +40,7 @@ export default function App() {
 
   return (
     <>
+      <RouteAuditReset />
       <Routes>
         <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
         {/* Feature routes first so they never lose to `/:caseId`. */}
@@ -56,6 +67,7 @@ export default function App() {
         />
       </Routes>
       {user && <SonnerToast />}
+      <RenderAuditBadge />
     </>
   );
 }

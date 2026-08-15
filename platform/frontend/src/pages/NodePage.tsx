@@ -1,4 +1,5 @@
 import { ApiError, authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { Check, Copy, Eye, EyeOff, Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
@@ -66,6 +67,7 @@ type NodeRecord = {
 };
 
 export default function NodePage() {
+  useRenderAudit("NodePage");
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("全部");
@@ -165,7 +167,7 @@ export default function NodePage() {
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleTypedInput("NodePage.search", setSearch, { allow: ["NodePage"] })}
               placeholder="搜索节点名称、IP…"
               className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />

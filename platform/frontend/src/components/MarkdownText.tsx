@@ -1,6 +1,7 @@
 import type { Components } from "react-markdown";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import { useRenderAudit } from "../lib/renderAudit";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
@@ -11,7 +12,7 @@ const DEFAULT_CLASS_NAME =
  * Shared Case-dialog Markdown renderer for agent-side prose (text, thinking body, Choice).
  * Full GFM via remark-gfm; no raw HTML; optional soft breaks for thinking streams.
  */
-export default function MarkdownText({
+function MarkdownText({
   text,
   className = DEFAULT_CLASS_NAME,
   breaks = false,
@@ -21,6 +22,7 @@ export default function MarkdownText({
   /** When true, single newlines become hard breaks (thinking density). Default GFM paragraphs. */
   breaks?: boolean;
 }) {
+  useRenderAudit("MarkdownText");
   const remarkPlugins = breaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
 
   return (
@@ -31,6 +33,8 @@ export default function MarkdownText({
     </div>
   );
 }
+
+export default memo(MarkdownText);
 
 const headingClass: Record<number, string> = {
   1: "text-lg font-semibold text-ink",

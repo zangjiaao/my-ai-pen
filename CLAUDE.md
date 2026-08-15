@@ -77,3 +77,7 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context layout (`CONTEXT.md` + `docs/adr/` at repo root). See `docs/agents/domain.md`.
+
+### UI render audit
+
+When verifying any page with a text field + list, type 3–5 characters and read `window.__RENDER_AUDIT__.report()`. Composer must not increment ConversationPage / MessageRenderer / RightPanel. Filter boxes may increment their page. Prefer a populated list or long Case. See `docs/agents/ui-render-audit.md`.
