@@ -70,7 +70,7 @@ try {
       conversationId,
       expertId,
       sessionId,
-      systemPrompt: "## Standing node policies\n## Profession\nbe careful\n## Task\n- Target: x",
+      systemPrompt: "## Standing node policies\n## Profession\nbe careful\n## This turn\n- Target: x",
       cwd: "/tmp/task",
       taskId: "task-1",
       rolePackId: "pentest",
@@ -184,11 +184,15 @@ try {
         timestamp: 2,
       },
     } as AgentEvent);
+    await session.emit({
+      type: "message_end",
+      message: { role: "harness", content: "### Continue\nresume", timestamp: 3 },
+    } as AgentEvent);
     await handle.drain();
     const roles = linesOf(handle.path)
       .filter((r) => r.type === "message")
       .map((r) => (r.message as { role?: string }).role);
-    assert.deepEqual(roles, ["user", "assistant"], "only message_end persisted");
+    assert.deepEqual(roles, ["user", "assistant", "harness"], "message_end includes harness");
     await session.dispose();
   }
 

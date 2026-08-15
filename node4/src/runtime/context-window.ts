@@ -9,13 +9,14 @@ import type { ToolRuntime } from "../types.js";
 import { formatProcessFactIndexInjection } from "../stores/process-fact.js";
 import { formatTodoSummary } from "../stores/todo.js";
 import { formatIntelInjectLine, sortIntelSummaryForInject } from "./case-context.js";
+import { isHarnessMessage, makeHarnessMessage } from "./harness-channel.js";
 import { LlmTurnError } from "./llm-turn-error.js";
 
 export const DEFAULT_COMPACT_THRESHOLD = 0.8;
 export const CHECKPOINT_POINTER = "细节以 Store / 归档为准";
 export const PERSIST_PASS_MARKER = "[context-window]";
 export const PERSIST_PASS_TEXT =
-  "[context-window] Occupancy is high. Persist living notebook clues with fact(upsert)/fact(forget) (Host hang) and any Store rows that should survive the smaller view, then continue. Unwritten process will be dropped.";
+  "### Context window\n[context-window] Occupancy is high. Persist living notebook clues with fact(upsert)/fact(forget) (Host hang) and any Store rows that should survive the smaller view, then continue. Unwritten process will be dropped.";
 
 export type OccupancyEstimate = {
   tokens: number;
@@ -166,7 +167,11 @@ export function buildCheckpointMessages(
   keepTailStart: number,
   rehydrate: CheckpointRehydrate,
 ): AgentMessage[] {
-  const tail = messages.slice(Math.max(0, keepTailStart));
+  const tail = messages.slice(Math.max(0, keepTailStart)).filter((m) => {
+    if (!isHarnessMessage(m)) return true;
+    const text = typeof m.content === "string" ? m.content : "";
+    return !text.includes(PERSIST_PASS_MARKER);
+  });
   const lines = [
     CHECKPOINT_POINTER,
     "",
@@ -192,28 +197,17 @@ export function buildCheckpointMessages(
   if (rehydrate.goalText) {
     lines.push("", rehydrate.goalText);
   }
-  const checkpoint: AgentMessage = {
-    role: "user",
-    content: lines.join("\n"),
-    timestamp: Date.now(),
-  };
+  const checkpoint: AgentMessage = makeHarnessMessage(lines.join("\n"));
   return [checkpoint, ...tail];
 }
 
 export function withPersistPass(messages: readonly AgentMessage[]): AgentMessage[] {
   const last = messages[messages.length - 1];
-  if (last && typeof last === "object" && last.role === "user") {
+  if (last && typeof last === "object" && (last.role === "user" || isHarnessMessage(last))) {
     const text = typeof last.content === "string" ? last.content : "";
     if (text.includes(PERSIST_PASS_MARKER)) return [...messages];
   }
-  return [
-    ...messages,
-    {
-      role: "user",
-      content: PERSIST_PASS_TEXT,
-      timestamp: Date.now(),
-    },
-  ];
+  return [...messages, makeHarnessMessage(PERSIST_PASS_TEXT)];
 }
 
 export function occupancyLlmTurnError(detail: string): LlmTurnError {

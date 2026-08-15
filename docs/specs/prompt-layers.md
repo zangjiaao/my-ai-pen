@@ -56,11 +56,13 @@ Learned from pi-coding-agent (`research/pi/packages/coding-agent/src/core/system
 | Channel | What the model sees | Put here | Never put here |
 |---------|---------------------|----------|----------------|
 | **System** | Four layers, one string, Standing-first | Policy, how this seat works, this-run switches, this-turn facts | Operator utterance; skill encyclopedia; tool JSON schema |
-| **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope (those are system) |
+| **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope, outer continue |
+| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint | Operator utterance; always-on policy (that stays system) |
+| **Tool result** | Appended tool text | Mid-run todo / booking / surface nudges (`### This-run …`) | Operator utterance |
 | **Tool definitions** | Name + description + parameters (parallel to text) | How to call the tool | Policy essays, start-order, Case facts |
 | **Skill body** | After `skill(get)` / worker load | Attack-class procedure | Always-on Profession; Graph settlement law |
 
-Park continue and cold Free now share the same user-turn law: **utterance only**. System is not rebuilt on park-hit.
+Harness is a **channel**, not a fifth system layer. Park continue and cold Free share the same user-turn law: **utterance only**. System is not rebuilt on park-hit. Lab outer continue uses `session.prompt(..., { channel: "harness" })`, never a fake user turn.
 
 ### System order (fixed)
 
@@ -69,16 +71,17 @@ Park continue and cold Free now share the same user-turn law: **utterance only**
   Base            Standing language → pack id/label → persona (display-only)
   ## Profession   citizen (today) + mission.md + work.md
   ## Runtime      tools / skill ids / work-mode / RoE / optional todo·booking reminders
-  ## Task         Case (markdown lists) → Engagement (target/scope/instruction as bullets) → goals
+  ## This turn    ### Case (markdown lists) → Engagement (target/scope/instruction as bullets) → goals
+[harness]         ## Runtime / ### Continue  (outer continue, persist-pass, checkpoint — not operator)
 [user]
   <operator utterance>
 ```
 
-Empty layers omit. **Order never rearranges.** `#352`: the first bytes of system (and of Base) are `## Standing node policies`. Later layers get a visible `## Profession` / `## Runtime` / `## Task` fence so blocks do not bleed.
+Empty layers omit. **Order never rearranges.** `#352`: the first bytes of system (and of Base) are `## Standing node policies`. Later layers get a visible `## Profession` / `## Runtime` / `## This turn` fence so blocks do not bleed. The fourth layer’s **code/spec name remains Task** (this-turn facts). The Agent-visible heading is **This turn** so it is not read as the product Task/package (#455 Session-first). Case is the work group; it is not contained by a Task package.
 
 Assembler: `assembleSystemPrompt` in `node4/src/runtime/prompt-layers.ts`. Cold Free wires this via `session-runner` `buildSystemPrompt`; user turn is `task.instruction`. Graph stage / Package workers use the same assembler (`buildStagePromptLayers` / `buildSubagentPromptLayers`).
 
-**Audit (not Product SOT):** each pi-agent-core instance appends the assembled system string plus every `message_end` (user / assistant / toolResult) to `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl` (`node4/src/runtime/pi-session-audit.ts`). Same shape as pi-coding-agent session v3, plus a `customType=system_prompt` snapshot because our system is assembled at runtime and cannot be rebuilt from files alone. Park continue writes the same file; Session Reset (new `sessionId`) starts a new `pi-*` dir. `NODE4_PI_SESSION_AUDIT=0` disables.
+**Audit (not Product SOT):** each pi-agent-core instance appends the assembled system string plus every `message_end` (user / assistant / toolResult / harness) to `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/session.jsonl` (`node4/src/runtime/pi-session-audit.ts`). Same shape as pi-coding-agent session v3, plus a `customType=system_prompt` snapshot because our system is assembled at runtime and cannot be rebuilt from files alone. Park continue writes the same file; Session Reset (new `sessionId`) starts a new `pi-*` dir. `NODE4_PI_SESSION_AUDIT=0` disables.
 
 ### Where a new sentence goes
 
@@ -93,13 +96,15 @@ Ask one question; put the sentence in **exactly one** home.
 | True only because of *this run* (Free vs Graph, tool list, skill ids, RoE flags, cold todo/booking reminder, chat-only “no target”) | **Runtime** |
 | True only for *this turn* (Case 活情报 / prior catalog, Target, Scope, Instruction, session title, process-fact index, goals) | **Task** |
 | What the human just said | **User turn** |
+| Lab outer continue / occupancy persist or checkpoint (not the operator) | **Harness** (`### Continue` / `### Context window` / `### Checkpoint rehydrate`) |
+| Mid-run todo / booking / surface nudge after a tool | **Tool result** (`### This-run todo` / `### This-run booking` / `### Surface`) |
 | How to invoke a tool | **Tool schema** |
 
 ### Pollution rules
 
 - **One home.** If citizen already says it, do not restate in `work.md`, Runtime one-liners, and the user turn.
 - **Facts last in system, not first in user.** Case / Target / Scope stay in Task. User is not a second Case dump.
-- **Reminders are Runtime, not user.** `eagerTodo` / `eagerBooking` / chat-only “no target” are opted-in system Runtime (`BuildSystemPromptOptions`).
+- **Reminders are Runtime, not user.** `eagerTodo` / `eagerBooking` / chat-only “no target” are opted-in system Runtime (`BuildSystemPromptOptions`). They render as markdown (`### This-run todo` / `### This-run booking`). Runtime work-mode, graph catalog, and RoE use `### Work mode` / `### Available graphs` / `### Rules of engagement`. Goal inject in This turn uses `### Goal`. Outer continue / goal / budget use the **Harness** channel (`### Continue`, `session.prompt(..., { channel: "harness" })`). Mid-run nudges append to the **tool result** with the same `###` headings. Do not wrap harness in XML. Do not put harness in the user turn.
 - **No encyclopedia in always-on.** Graph settlement, package `plan_node_id` law, and class playbooks stay out of Free Profession.
 - **Skill ids ≠ skill bodies.** Runtime lists ids; bodies enter only via `skill` / worker load.
 - **Do not invent a sixth layer** for “environment.” Environment = Task (Case + target) + RoE (Runtime).
@@ -140,7 +145,7 @@ Do not reintroduce L0–L5 as product vocabulary in new code or docs.
 
 ### 3.1 Order (fixed)
 
-See **§1.5** (locked assembly). Same four layers; Standing-first; later layers fenced with `## Profession` / `## Runtime` / `## Task`.
+See **§1.5** (locked assembly). Same four layers; Standing-first; later layers fenced with `## Profession` / `## Runtime` / `## This turn`.
 
 ### 3.2 One question per layer (management rule)
 
@@ -174,7 +179,7 @@ The **conceptual** ownership above still guides pack authors and future moves. *
 | **Language Standing** | Base | `buildBaseLayer` — **first** content when injected (#352) |
 | **Persona / seat meta** | Base | `buildBaseLayer` (pack id/label + untrusted persona display label) |
 | **Platform citizen** (ledger honesty, re-verify, handoff, next_steps, no invent hosts) | Base (duty) | **Not** a separate Base block yet. At pack load (`mergePlatformCitizenMission` / `roles/platform-citizen.ts`), citizen lines are **prepended into `pack.missionLines`** and therefore render inside **Profession** via `buildProfessionLayer` for Default / Expert Free (and any path that uses full pack mission). Graph stage uses **compact** Profession, which **filters** citizen longform for size — stages do **not** re-get citizen as a Base string. |
-| **RoE instance** (`formatRoeInjection`: template, allow_postex, allow_destructive, focus/bans) | Base shell pattern + run-varying flags | **Free Runtime** primarily (`buildPromptLayers` → `formatRoeInjection`). Stage Runtime carries a **fail-closed** destructive / no-invent one-liner only — not the full `<rules-of-engagement>` block. |
+| **RoE instance** (`formatRoeInjection`: template, allow_postex, allow_destructive, focus/bans) | Base shell pattern + run-varying flags | **Free Runtime** primarily (`buildPromptLayers` → `formatRoeInjection` as `### Rules of engagement`). Stage Runtime carries a **fail-closed** destructive / no-invent one-liner only — not the full RoE block. |
 | **Tools / skill ids / gated one-liners** | Runtime · capability | Free / stage / worker Runtime builders |
 
 **Pack authors:** do **not** duplicate platform-citizen or next_steps longform in `work.md` / pack how-to (already slimmed in T3). Rely on load-time citizen inject + Base Standing-first. Future **Option A** (move citizen into `buildBaseLayer` by splitting mission at `PLATFORM_CITIZEN_MARKER`, strip from Profession to avoid double-inject) remains valid but is **not** required for Spec/code agreement under this partial.
@@ -398,4 +403,5 @@ Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai
 | Date | Change |
 |------|--------|
 | 2026-08-15 | Locked assembly §1.5: four channels; user turn = utterance only; visible Profession/Runtime/Task fences; placement table; pi-coding-agent lessons. |
-| 2026-08-15 | Task/Case inject is markdown lists only — no JSON.stringify of target/scope; Case block is facts, not policy essays. | 
+| 2026-08-15 | Task/Case inject is markdown lists only — no JSON.stringify of target/scope; Case block is facts, not policy essays. |
+| 2026-08-16 | Harness channel: outer continue / persist-pass / checkpoint are `role=harness` (markdown `## Runtime`), not fake user turns. Mid-run nudges stay on the tool result. | 

@@ -70,7 +70,7 @@ Default seat / ledger-assist turns are in scope only if they reuse a growing par
 |------|---------|--------|
 | **Window** | Catalog `Model.contextWindow` | `getBuiltinModel`. **Unknown** model only: `LLM_CONTEXT_WINDOW` (default `128000`, min 1024). |
 | **Trigger** | **80%** of that window | `NODE4_COMPACT_THRESHOLD` — fraction `0.50`–`0.95` (or percent `50`–`95`; Spec implementer picks one parse, clamp, disclose). |
-| **Keep-tail** | Current **Todo slice** | Not env-tuned. Slice = messages since the current `in_progress` item was started (that user turn + following assistant/tool). If no `in_progress`, keep the last user turn only. |
+| **Keep-tail** | Current **Todo slice** | Not env-tuned. Slice = messages since the current `in_progress` item was started (that **operator** user turn + following assistant/tool). If no `in_progress`, keep the last operator user turn only. Harness messages (`role=harness`: persist-pass, checkpoint, outer continue) are not operator turns. |
 | **Reserve** | Implied by 80% | Equivalent spirit to coding-agent `window - reserveTokens`; product default is the ratio, not a 16k constant. |
 
 Not a Case-user slider. Wrong window (env larger than the real model) must not be “fixed” by guessing; overflow still fail-closes (section 4).

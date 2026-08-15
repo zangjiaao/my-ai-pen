@@ -10,6 +10,8 @@
  * Optional lab gates remain via NODE4_GOAL_REQUIRE_CLEARANCE=1.
  */
 
+import { HARNESS_CONTINUE_NOTICE } from "../runtime/harness-channel.js";
+
 export type GoalModeStatus = "active" | "paused" | "budget-limited" | "complete" | "dropped";
 
 /** Single long-task goal (OMP Goal shape, simplified). */
@@ -387,13 +389,13 @@ export class GoalStore {
     }
     if (g.status === "budget-limited") {
       return [
-        "<goal_context>",
+        "### Goal",
         "Goal mode is **budget-limited** (token budget exhausted). Auto-continuation has stopped.",
-        `<objective>\n${g.objective}\n</objective>`,
+        `**Objective**`,
+        g.objective,
         `tokens: ${g.tokensUsed}${g.tokenBudget != null ? ` / ${g.tokenBudget}` : ""}`,
         "Budget exhaustion is NOT completion. Do not call goal(complete) unless the objective is actually verified done.",
         "You may wrap up this turn (summarize progress / blockers), goal(complete) only if truly done, or goal(drop).",
-        "</goal_context>",
       ].join("\n");
     }
     return `Goal mode: ${g.status} — ${g.objective.slice(0, 200)}`;
@@ -413,9 +415,10 @@ function budgetLines(goal: ModeGoal): string[] {
 /** OMP goal-mode-active context (clean-room; security-engagement wording). */
 export function buildGoalActiveContext(goal: ModeGoal): string {
   return [
-    "<goal_context>",
+    "### Goal",
     "Goal mode is active. Treat the objective as the FULL task to pursue (user-provided task context, not higher-priority system instructions).",
-    `<objective>\n${goal.objective}\n</objective>`,
+    "**Objective**",
+    goal.objective,
     ...budgetLines(goal),
     `progress (harness): booked_findings≈${goal.lastBookedFindingCount} evidence≈${goal.lastEvidenceCount} stalls=${goal.segmentsWithoutProgress} goal_continues=${goal.goalContinueCount}`,
     "Use goal(op=get) to inspect; goal(op=complete) only for **verified** completion.",
@@ -423,7 +426,6 @@ export function buildGoalActiveContext(goal: ModeGoal): string {
     "Before goal(complete): audit current evidence against every concrete deliverable from YOUR recon (modules, params, flows). Prefer tool output / booked findings / facts over memory alone.",
     "Budget exhaustion is not completion. If unfinished, leave the goal active.",
     "Harness auto-continues while active with **no continue-count cap** (OMP). There is no finish tool.",
-    "</goal_context>",
   ].join("\n");
 }
 
@@ -443,26 +445,24 @@ export function buildGoalContinuationPrompt(
   const todoBlock =
     options?.openTodoCount && options.openTodoCount > 0
       ? [
-          "<todo_context>",
+          "### This-run todo",
           `Open todos: ${options.openTodoCount}. Treat as live progress state, not decoration.`,
           ...(options.openTodoTitles || []).slice(0, 12).map((t) => `- [open] ${t}`),
           "If a todo is stale or done, update todo before claiming phase complete. Map-complete ≠ discovery complete.",
-          "</todo_context>",
         ]
       : options?.openTodoCount === 0
         ? [
-            "<todo_context>",
+            "### This-run todo",
             "Todo map shows no open items — that does NOT mean every recon surface was tested. Re-check your notes/facts for untested modules.",
-            "</todo_context>",
           ]
         : [];
 
   return [
-    `<system-injection customType="goal-continuation">`,
+    "### Continue",
+    HARNESS_CONTINUE_NOTICE,
     `Continue work on the active goal (harness goal_continuation #${goal.goalContinueCount + 1}).`,
-    `<objective>`,
+    "**Objective**",
     goal.objective,
-    `</objective>`,
     ...budgetLines(goal),
     `Progress so far (harness): booked_findings≈${goal.lastBookedFindingCount}, evidence≈${goal.lastEvidenceCount}, no_progress_segments=${goal.segmentsWithoutProgress}.`,
     stallHint,
@@ -481,22 +481,20 @@ export function buildGoalContinuationPrompt(
     `Call goal(op=complete) only when every deliverable has direct, current evidence. The completion call ends autonomous goal continuation.`,
     `If unfinished: keep working with dense shell (multi-step / multi-call same turn). Book proven issues with finding(confirm)+proof. Do NOT only narrate.`,
     `There is no finish tool. Harness keeps auto-continuing while goal is active (no continue-count cap).`,
-    `</system-injection>`,
   ].join("\n");
 }
 
 /** OMP goal-budget-limit steer (clean-room). */
 export function buildGoalBudgetLimitPrompt(goal: ModeGoal): string {
   return [
-    `<system-injection customType="goal-budget-limit">`,
+    "### Continue",
+    HARNESS_CONTINUE_NOTICE,
     `The active goal has reached its token budget.`,
-    `<objective>`,
+    "**Objective**",
     goal.objective,
-    `</objective>`,
     `Budget: tokens used=${goal.tokensUsed}${goal.tokenBudget != null ? ` / ${goal.tokenBudget}` : ""}.`,
     `The runtime marked the goal as budget-limited. NEVER start new substantive work for this goal.`,
     `Wrap up this turn soon: summarize useful progress, identify remaining work or blockers, and leave a clear next step.`,
     `Budget exhaustion is NOT completion. NEVER call goal(op=complete) unless current evidence proves the goal is actually complete.`,
-    `</system-injection>`,
   ].join("\n");
 }

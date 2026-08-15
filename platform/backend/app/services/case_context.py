@@ -1209,6 +1209,27 @@ def _task_from_conv_context(conv_context: dict | None) -> dict:
     return {}
 
 
+def conv_context_with_this_turn_task(
+    conv_context: dict | None,
+    task_override: dict | None,
+) -> dict:
+    """Sticky conversation.context plus this-turn structured target/scope.
+
+    This-turn envelope wins when present. No free-text invent.
+    """
+    ctx = dict(conv_context or {}) if isinstance(conv_context, dict) else {}
+    sticky = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    merged = dict(sticky) if isinstance(sticky, dict) else {}
+    if isinstance(task_override, dict):
+        if task_override.get("target"):
+            merged["target"] = task_override["target"]
+        if task_override.get("scope"):
+            merged["scope"] = task_override["scope"]
+    if merged:
+        ctx["task"] = merged
+    return ctx
+
+
 async def _scope_intel_port_map(
     db,
     *,
@@ -1267,8 +1288,14 @@ async def load_case_context_for_conversation(
     thread_limit: int = DEFAULT_THREAD_LIMIT,
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
+    task: dict | None = None,
 ) -> dict[str, Any]:
-    """Load messages + this-Case findings + thin scope_intel + evidence snippets."""
+    """Load messages + this-Case findings + thin scope_intel + evidence snippets.
+
+    ``task`` is this-turn structured target/scope from the dispatch envelope.
+    It overlays sticky conversation.context.task so first-turn inject sees
+    the host even before the Case row is updated.
+    """
     import uuid as uuid_mod
 
     from sqlalchemy import select
@@ -1304,6 +1331,9 @@ async def load_case_context_for_conversation(
     except Exception:
         conv = None
         conv_context = {}
+
+    if task is not None:
+        conv_context = conv_context_with_this_turn_task(conv_context, task)
 
     # findings_summary board: **this Case only** (avoid dumping cross-Case priors here).
     findings: list[dict] = []

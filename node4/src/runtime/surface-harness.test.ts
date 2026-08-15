@@ -81,6 +81,8 @@ const composedStop = composeContinuePrompt({
 });
 assert.match(composedStop, /NEW untested/i, "empty stop includes NEW reminder");
 assert.match(composedStop, /\/ftp/, "empty stop includes sample");
+assert.ok(!composedStop.includes("<system-reminder>"), "continue is markdown, not XML");
+assert.match(composedStop, /### Continue/, "empty stop uses Continue heading");
 
 // Legacy option names still compose
 const legacyOpts = composeContinuePrompt({

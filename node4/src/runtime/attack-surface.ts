@@ -11,9 +11,47 @@ export type AttackSurfaceCandidate = {
   in_scope: boolean;
 };
 
+/** Last-label tokens that are file extensions, not TLDs (login.php, cmd.png). */
+const FILE_EXT_LAST_LABEL = new Set([
+  "php",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "html",
+  "htm",
+  "js",
+  "css",
+  "json",
+  "xml",
+  "txt",
+  "pdf",
+  "svg",
+  "asp",
+  "aspx",
+  "jsp",
+  "cgi",
+  "env",
+  "bak",
+  "zip",
+  "tar",
+  "gz",
+  "sh",
+  "py",
+  "rb",
+  "exe",
+  "dll",
+  "so",
+  "ico",
+  "map",
+  "wasm",
+]);
+
 function parseHostPort(raw: string): { host: string; port?: string } {
   const s = String(raw || "").trim();
   if (!s) return { host: "" };
+  // Path / location prose — do not scan "login.php" out of "/login.php (...)".
+  if (s.startsWith("/")) return { host: "" };
   try {
     const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : s.startsWith("//") ? `http:${s}` : "";
     if (withScheme || s.includes("://")) {
@@ -25,10 +63,13 @@ function parseHostPort(raw: string): { host: string; port?: string } {
     /* ignore */
   }
   const m = s.match(
-    /(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|localhost|host\.docker\.internal|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?/i,
+    /^(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|localhost|host\.docker\.internal|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?/i,
   );
-  if (m) return { host: m[1]!.toLowerCase(), port: m[2] };
-  return { host: "" };
+  if (!m) return { host: "" };
+  const host = m[1]!.toLowerCase();
+  const last = host.split(".").pop() || "";
+  if (FILE_EXT_LAST_LABEL.has(last)) return { host: "" };
+  return { host, port: m[2] };
 }
 
 export function scopeHostsFromTask(task: {

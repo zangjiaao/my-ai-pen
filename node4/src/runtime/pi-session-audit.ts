@@ -255,7 +255,7 @@ export function attachPiSessionAudit(
     const message = (event as { message?: unknown }).message;
     if (!message || typeof message !== "object") return;
     const role = (message as { role?: unknown }).role;
-    if (role !== "user" && role !== "assistant" && role !== "toolResult") return;
+    if (role !== "user" && role !== "assistant" && role !== "toolResult" && role !== "harness") return;
     void handle.appendMessage(message);
   });
 

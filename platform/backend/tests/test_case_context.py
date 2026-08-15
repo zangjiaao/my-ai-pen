@@ -213,6 +213,32 @@ def test_payload_has_version_and_evidence_snippets():
     assert any("source_dump" in h or "HANDOFF" in h for h in payload["artifact_hints"])
 
 
+def test_this_turn_task_overlays_empty_sticky_context():
+    from app.services.case_context import conv_context_with_this_turn_task
+
+    overlay = conv_context_with_this_turn_task(
+        {},
+        {
+            "target": {"type": "url", "value": "http://host.docker.internal:8080"},
+            "scope": {"allow": ["http://host.docker.internal:8080"]},
+        },
+    )
+    hosts = extract_hosts_from_task(overlay.get("task"))
+    assert "host.docker.internal" in hosts
+
+
+def test_this_turn_target_wins_over_sticky_task():
+    from app.services.case_context import conv_context_with_this_turn_task
+
+    overlay = conv_context_with_this_turn_task(
+        {"task": {"target": {"type": "url", "value": "http://old.example"}}},
+        {"target": {"type": "url", "value": "http://host.docker.internal:8080"}},
+    )
+    hosts = extract_hosts_from_task(overlay.get("task"))
+    assert "host.docker.internal" in hosts
+    assert "old.example" not in hosts
+
+
 def test_extract_hosts_from_task_target_and_scope():
     hosts = extract_hosts_from_task(
         {

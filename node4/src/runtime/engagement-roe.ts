@@ -186,7 +186,7 @@ export function resolveEngagementRoe(input: {
 /** Multi-line system/user prompt block for RoE. */
 export function formatRoeInjection(roe: RoeFlags): string {
   const lines = [
-    "<rules-of-engagement>",
+    "### Rules of engagement",
     `Engagement template: ${roe.template}`,
     `allow_postex: ${roe.allowPostex ? "true" : "false"}`,
     `allow_destructive: ${roe.allowDestructive ? "true" : "false"}`,
@@ -204,7 +204,6 @@ export function formatRoeInjection(roe: RoeFlags): string {
       ? "Destructive tests are allowed within Scope; still require proof bar / L0 for booking."
       : "Destructive tests are DENIED by default. If a destructive entry point is found, record surface note=skipped_roe and do not execute wipe/flood/bulk-delete. Book capability only with non-destructive proof.",
     "Do not invent target answer keys or fixed vulnerability checklists.",
-    "</rules-of-engagement>",
   ];
   return lines.join("\n");
 }

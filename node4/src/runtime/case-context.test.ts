@@ -76,7 +76,7 @@ assert.equal(ctx!.next_work!.workset_open?.[0]?.id, "w1");
 assert.ok(ctx!.scope_intel);
 assert.equal(ctx!.scope_intel!.hosts?.[0]?.address, "host.docker.internal");
 const block = formatCaseContextInjection(ctx);
-assert.match(block, /^## Case/m);
+assert.match(block, /^### Case/m);
 assert.match(block, /Please audit the dumped source/);
 assert.match(block, /RCE via upload/);
 assert.match(block, /### Scope hosts/);

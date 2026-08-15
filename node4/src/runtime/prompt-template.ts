@@ -71,9 +71,12 @@ export function renderPromptTemplate(
   vars: Record<string, string>,
   options?: { sanitizeValue?: (raw: unknown, fallback?: string) => string },
 ): string {
-  const sanitize = options?.sanitizeValue ?? ((raw, fallback) => sanitizePromptLabel(raw, fallback ?? ""));
   return String(text || "").replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_m, key: string) => {
     if (!Object.prototype.hasOwnProperty.call(vars, key)) return "";
-    return sanitize(vars[key], "");
+    if (options?.sanitizeValue) return options.sanitizeValue(vars[key], "");
+    // Pack display labels may contain spaces (e.g. "Application security assessment").
+    // Persona / ids stay on the strict alphabet (no spaces).
+    if (key === "pack_label") return sanitizeLanguageTemplateValue(vars[key], "");
+    return sanitizePromptLabel(vars[key], "");
   });
 }

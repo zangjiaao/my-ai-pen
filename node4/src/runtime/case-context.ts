@@ -272,7 +272,7 @@ function parseIntelSummary(raw: unknown): CaseIntelLine[] | undefined {
 /** Render case work-group block for LLM (budgeted). Facts only — policy lives in Profession/Runtime. */
 export function formatCaseContextInjection(ctx: CaseContext | undefined | null): string {
   if (!ctx) return "";
-  const lines: string[] = ["## Case"];
+  const lines: string[] = ["### Case"];
   if (ctx.conversation_id) {
     lines.push(`id: ${ctx.conversation_id}`);
   }

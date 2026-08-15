@@ -23,6 +23,7 @@ import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
   renderPromptTemplate,
+  sanitizeLanguageTemplateValue,
   sanitizePromptLabel,
 } from "./prompt-template.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
@@ -220,7 +221,8 @@ export function joinNonEmptyPromptParts(
 export const LAYER_HEADING = {
   profession: "## Profession",
   runtime: "## Runtime",
-  task: "## Task",
+  // Agent-visible name is "This turn" — not product Task/package (Session-first, #455).
+  task: "## This turn",
 } as const;
 
 function prefixLayerHeading(heading: string, body: string): string {
@@ -252,7 +254,7 @@ export function promptTemplateVarsFromBase(input: BaseLayerInput): PromptTemplat
     expert_name: sanitizePromptLabel(input.expertName, fallback),
     expert_id: sanitizePromptLabel(input.expertId, ""),
     pack_id: sanitizePromptLabel(input.packId, "runtime"),
-    pack_label: sanitizePromptLabel(input.packLabel || input.packId, "Assistant"),
+    pack_label: sanitizeLanguageTemplateValue(input.packLabel || input.packId, "Assistant"),
   };
 }
 
@@ -429,14 +431,9 @@ export function buildPromptLayers(
     }
   }
   if (pack.toolNames.includes("subagent")) {
-    // Graph/free <work-mode> already owns captain/dispatch detail — one line here only.
+    // Graph/free Work mode block already owns captain/dispatch detail — one line here only.
     runtimeParts.push(
       "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
-    );
-  }
-  if (pack.toolNames.includes("fact")) {
-    runtimeParts.push(
-      "fact: write confirmed cognition now. Host/Service 线索 via upsert — 情报 tab, not Finding/Evidence. this-task keys stay in facts/. list=index — get body by id or fact_key.",
     );
   }
   const loginIntel = (task.caseContext?.intel_summary || []).some((c) =>
@@ -449,7 +446,7 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("surface")) {
     runtimeParts.push(
-      "Attack surface (surface tool): summary|list|get for coverage (seen=first-touch still owed deepen; touched=further traffic; booked=confirm only); ledger from Traffic settle + TARGET seed; before next_steps/wrap disclose remaining seen; upsert optional corrective only.",
+      "surface: summary|list|get — this-Case **NEW** untested → **TESTED** (or disclose remaining NEW before next_steps/wrap). Traffic settle + TARGET seed; upsert optional, cannot fake TESTED.",
     );
   }
   if (pack.recipeDir) {
