@@ -51,8 +51,9 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 ### 3.1 Identity and sharing
 
 1. **Session identity** = `conversation_id + expert_id` (long session per Expert on the Case).  
-2. **Case shared** = what the user sees (thread, Findings, evidence).  
-3. **Session private** = work mode, harness, non-ledger working memory.  
+2. **Case shared** = what the user sees (thread, Findings, evidence) **and** visible group speech in `messages` (append-only). Thinking and tool process are not Case speech.  
+3. **Session private** = work mode, harness, non-ledger working memory, **speech cursor** (last scanned Case speech id).  
+3a. **Group speech to a Session** = unread others only, via harness `### Case speech`. A Session does not re-read its own replies or this-turn operator text. Park-hit is incremental; do not dump 1–3 then 1–4.  
 4. **v1 concurrency** = round-robin: only the **current Mention** Session may run. Multiple Sessions may exist; they do not run true-parallel product work in v1.
 
 ### 3.2 Work mode authority

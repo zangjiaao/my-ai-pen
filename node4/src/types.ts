@@ -103,7 +103,7 @@ export type TaskEnvelope = {
   pendingHandoff?: boolean;
   /**
    * Spec #455: same-Session dialogue continue (package is accounting only).
-   * Park-hit prompts utterance only; cold/park-miss may still inject case_context.
+   * Park-hit prompts utterance only; unread Case speech is harness prefix, not a second user turn.
    */
   sessionContinue?: boolean;
   /**

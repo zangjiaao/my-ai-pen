@@ -60,6 +60,8 @@ export type ParkedWorkingRuntime = {
   agentSessionId?: string;
   /** After Reset: next createBoundNode4Session must mint a brand-new Agent (not reattach). */
   needsAgentReseed?: boolean;
+  /** Last scanned Case speech id (unread-others cursor). Cold / reseed starts empty. */
+  speechCursor?: string;
 };
 
 export type CaptainEndDisposition =

@@ -88,6 +88,7 @@ import {
   resolveWorkingSessionContinue,
 } from "./working-session-park.js";
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
+import { formatCaseSpeechHarness, selectCaseSpeechDelta } from "./case-speech.js";
 import type { TodoStore as TodoStoreType } from "../stores/todo.js";
 import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
 import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
@@ -702,9 +703,14 @@ export async function runNode4Task(
   const promptAndAssert = async (
     promptText: string,
     channel: "user" | "harness" = "user",
+    prefixHarness?: string,
   ) => {
     try {
-      await session.prompt(promptText, { source: "interactive", channel });
+      await session.prompt(promptText, {
+        source: "interactive",
+        channel,
+        ...(prefixHarness ? { prefixHarness } : {}),
+      });
     } catch (err) {
       // Spec #353: structured classes only (idle / incomplete / LlmTurnError).
       const mapped = mapPromptFailureToLlmTurnError(err, health());
@@ -725,12 +731,24 @@ export async function runNode4Task(
     await assertNoLlmTurnError();
   };
 
+  let speechCursor = "";
   try {
     // Spec #334/#427: hold seat for lease heartbeat only while this try/finally owns the burst.
     if (seatForHold) holdBrowserSandboxSeat(seatForHold);
 
     if (!cancelled()) {
-      await promptAndAssert(userPrompt);
+      const speech = selectCaseSpeechDelta(task.caseContext, {
+        cursor: "",
+        selfExpertId: task.expertId,
+        selfExpertName: task.expertName,
+        thisTurnText: userPrompt,
+      });
+      await promptAndAssert(
+        userPrompt,
+        "user",
+        formatCaseSpeechHarness(speech.lines) || undefined,
+      );
+      speechCursor = speech.cursorAfter;
     }
 
     while (!cancelled()) {
@@ -1061,6 +1079,7 @@ export async function runNode4Task(
         todo: runtime.todo,
         accounts: task.accounts,
         runtime,
+        speechCursor: speechCursor || undefined,
         dispose: () => {
           try {
             void Promise.resolve(session.dispose());

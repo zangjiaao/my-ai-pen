@@ -1,6 +1,7 @@
 /**
- * Format Case work-group context for the agent first prompt.
- * Mirrors platform case_context envelope (thread + findings board + evidence snippets).
+ * Format Case work-group context for the system This turn block.
+ * Findings / intel / evidence live here. Visible group speech is harness
+ * (`case-speech.ts`), not ### Thread.
  */
 
 export type CaseThreadLine = {
@@ -8,7 +9,12 @@ export type CaseThreadLine = {
   kind?: string;
   text?: string;
   ts?: string;
+  id?: string;
+  expert_id?: string;
 };
+
+/** Visible group speech (id-bearing). Distinct from thread crumbs / finding cards. */
+export type CaseSpeechLine = CaseThreadLine;
 
 export type CaseFindingLine = {
   id?: string;
@@ -95,6 +101,8 @@ export type CaseContext = {
   conversation_id?: string;
   note?: string;
   thread?: CaseThreadLine[];
+  /** Append-only visible group speech for harness delta (not system ### Thread). */
+  speech?: CaseSpeechLine[];
   findings_summary?: CaseFindingLine[];
   evidence_snippets?: CaseEvidenceSnippet[];
   artifact_hints?: string[];
@@ -115,7 +123,47 @@ export type CaseIntelLine = {
   is_new?: boolean;
 };
 
-const MAX_THREAD_LINES = 50;
+/** Login/session working memory — inject before path/config clues. */
+export const LOGIN_INTEL_KINDS = new Set(["credential_status", "secret", "token", "account"]);
+
+export function formatIntelInjectLine(c: CaseIntelLine): string {
+  const bits: string[] = [];
+  if (c.kind) bits.push(String(c.kind));
+  if (c.port) bits.push(`:${c.port}`);
+  else if (c.asset_id) bits.push("host");
+  if (c.id) bits.push(`id=${c.id}`);
+  const meta = bits.length ? ` (${bits.join(", ")})` : "";
+  return `- ${c.summary || "(no summary)"}${meta}`;
+}
+
+export function sortIntelSummaryForInject(clues: CaseIntelLine[]): CaseIntelLine[] {
+  const creds: CaseIntelLine[] = [];
+  const rest: CaseIntelLine[] = [];
+  for (const c of clues) {
+    if (LOGIN_INTEL_KINDS.has(String(c.kind || ""))) creds.push(c);
+    else rest.push(c);
+  }
+  return [...creds, ...rest];
+}
+
+function appendLivingNotebook(lines: string[], ctx: CaseContext): void {
+  const clues = (ctx.intel_summary || []).slice(0, 20);
+  if (!clues.length) return;
+  const ordered = sortIntelSummaryForInject(clues);
+  const creds = ordered.filter((c) => LOGIN_INTEL_KINDS.has(String(c.kind || "")));
+  const rest = ordered.filter((c) => !LOGIN_INTEL_KINDS.has(String(c.kind || "")));
+  lines.push("", "### Living notebook");
+  if (creds.length) {
+    lines.push("Use first (try these creds/tokens before defaults or hash dump):");
+    for (const c of creds) lines.push(formatIntelInjectLine(c));
+  }
+  if (rest.length) {
+    if (creds.length) lines.push("Other clues:");
+    for (const c of rest) lines.push(formatIntelInjectLine(c));
+  }
+  lines.push("Full body: fact(op=get, id=…).");
+}
+
 const MAX_FINDINGS = 25;
 const MAX_EVIDENCE = 12;
 const MAX_TOTAL_CHARS = 18000;
@@ -164,6 +212,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const o = raw as Record<string, unknown>;
   const thread = Array.isArray(o.thread) ? (o.thread as CaseThreadLine[]) : [];
+  const speech = Array.isArray(o.speech) ? (o.speech as CaseSpeechLine[]) : [];
   const findings = Array.isArray(o.findings_summary)
     ? (o.findings_summary as CaseFindingLine[])
     : Array.isArray(o.findings)
@@ -183,6 +232,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
   const intel_summary = parseIntelSummary(o.intel_summary);
   if (
     !thread.length &&
+    !speech.length &&
     !findings.length &&
     !hints.length &&
     !snippets.length &&
@@ -197,6 +247,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     conversation_id: o.conversation_id != null ? String(o.conversation_id) : undefined,
     note: o.note != null ? String(o.note) : undefined,
     thread,
+    speech,
     findings_summary: findings,
     evidence_snippets: snippets,
     artifact_hints: hints,
@@ -303,18 +354,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
     }
   }
 
-  const thread = (ctx.thread || []).slice(-MAX_THREAD_LINES);
-  if (thread.length) {
-    lines.push("", "### Group thread (oldest → newest)");
-    for (const item of thread) {
-      const sp = String(item.speaker || "member").trim() || "member";
-      const tx = String(item.text || "").trim();
-      if (!tx) continue;
-      lines.push(`- ${sp}: ${tx}`);
-    }
-  } else {
-    lines.push("", "### Group thread", "(no prior messages — this may be the first turn)");
-  }
+  appendLivingNotebook(lines, ctx);
 
   const findings = (ctx.findings_summary || []).slice(0, MAX_FINDINGS);
   if (findings.length) {

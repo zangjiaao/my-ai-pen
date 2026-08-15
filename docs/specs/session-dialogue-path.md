@@ -111,7 +111,8 @@ What they see instead often feels like a restart: a new Task package id, a long 
 - `runParkedWorkingContinue`: keep single `session.prompt(task.instruction \|\| "继续")` (operator channel).  
 - Cold Free / Graph first prompt paths retain case_context + target/scope blocks (Spec #386 layers).  
 - Park-miss reseed uses cold path honesty (Todo seed / handoff rules unchanged).  
-- Lab outer continue / goal / budget injects use `session.prompt(..., { channel: "harness" })` — product `role=harness`, markdown `## Runtime` / `### Continue`. Never a fake operator user turn. Occupancy persist-pass and checkpoint are the same channel. Mid-run todo/booking/surface nudges append to the tool result.
+- Lab outer continue / goal / budget injects use `session.prompt(..., { channel: "harness" })` — product `role=harness`, markdown `## Runtime` / `### Continue`. Never a fake operator user turn. Occupancy persist-pass and checkpoint are the same channel. Mid-run todo/booking/surface nudges append to the tool result.  
+- **Case speech:** unread visible talk from other Sessions (and operator lines this Session has not heard) arrives as harness `### Case speech` on the same prompt as the operator utterance (`prefixHarness`). Cursor lives on the parked runtime. Cold / park-miss starts empty (recent window once). Park-hit is delta only. System does not re-inject `### Thread`.
 
 ### Phases
 
