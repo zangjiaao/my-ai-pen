@@ -28,13 +28,14 @@ from app.models.node import PLATFORM_AGENT_NODE_ID, Node
 from app.models.vulnerability import Vulnerability
 from app.services.conversation_state import reconcile_conversation_status_from_checkpoint
 from app.services.schedule_tasks import get_schedule_store
+from app.services.traffic_exchange import traffic_exchanges_for_panel
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 _STATUSES = ("to_fix", "fixing", "fixed")
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-_DAILY_OPEN_DAYS = 14
+_DAILY_OPEN_DAYS = 20
 
 _STATUS_LABEL = {
     "to_fix": "待修复",
@@ -197,6 +198,29 @@ class FindingPace(BaseModel):
     prev_7d: int = 0
 
 
+class TrafficItem(BaseModel):
+    """List-shaped Case traffic row (no bodies) for the status-board card."""
+
+    exchange_id: str
+    conversation_id: str | None = None
+    sequence: int | None = None
+    source: str = "http"
+    phase: str = "completed"
+    method: str = "GET"
+    url: str = ""
+    status_code: int | None = None
+    duration_ms: float | None = None
+    started_at: str | None = None
+    error: str | None = None
+    browser_resource_class: str | None = None
+    is_websocket: bool = False
+
+
+class TrafficSection(BaseModel):
+    total: int = 0
+    items: list[TrafficItem] = Field(default_factory=list)
+
+
 class DashboardSummaryOut(BaseModel):
     vulnerabilities: VulnSection = Field(default_factory=VulnSection)
     daily_open: DailyOpenSection = Field(default_factory=DailyOpenSection)
@@ -206,6 +230,7 @@ class DashboardSummaryOut(BaseModel):
     tasks: TaskSection = Field(default_factory=TaskSection)
     schedules: ScheduleSection = Field(default_factory=ScheduleSection)
     finding_pace: FindingPace = Field(default_factory=FindingPace)
+    traffic: TrafficSection = Field(default_factory=TrafficSection)
 
     # flat KPI helpers
     assets_total: int = 0
@@ -229,6 +254,24 @@ def _highest_sev(sevs: list[str]) -> str | None:
     if not sevs:
         return None
     return min(sevs, key=lambda s: _SEV_RANK.get(s, 9))
+
+
+def _as_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _vuln_day(v: Vulnerability) -> date | None:
@@ -503,6 +546,33 @@ async def dashboard_summary(
         ],
     )
 
+    traffic_acc: list[TrafficItem] = []
+    for c in convs:
+        cid = str(c.id)
+        for ex in traffic_exchanges_for_panel(c.context, conversation_id=cid):
+            eid = str(ex.get("exchange_id") or "").strip()
+            if not eid:
+                continue
+            traffic_acc.append(
+                TrafficItem(
+                    exchange_id=eid,
+                    conversation_id=cid,
+                    sequence=_as_int(ex.get("sequence")),
+                    source=str(ex.get("source") or "http"),
+                    phase=str(ex.get("phase") or "completed"),
+                    method=str(ex.get("method") or "GET"),
+                    url=str(ex.get("url") or ""),
+                    status_code=_as_int(ex.get("status_code")),
+                    duration_ms=_as_float(ex.get("duration_ms")),
+                    started_at=str(ex.get("started_at") or "") or None,
+                    error=str(ex.get("error") or "") or None,
+                    browser_resource_class=str(ex.get("browser_resource_class") or "") or None,
+                    is_websocket=bool(ex.get("is_websocket")),
+                )
+            )
+    traffic_acc.sort(key=lambda r: (r.started_at or "", r.sequence or 0), reverse=True)
+    traffic_section = TrafficSection(total=len(traffic_acc), items=traffic_acc[:40])
+
     # --- schedules (still in payload for task card footer / future) ---
     store = _schedule_store()
     schedules = store.list_for_user(uid_str)
@@ -532,6 +602,7 @@ async def dashboard_summary(
         tasks=task_section,
         schedules=schedule_section,
         finding_pace=FindingPace(last_7d=last_7d, prev_7d=prev_7d),
+        traffic=traffic_section,
         assets_total=len(assets),
         conversations_total=conv_total,
         nodes_online=online,

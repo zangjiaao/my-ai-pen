@@ -4,11 +4,24 @@
  * Layout:
  *  1. KPI strip (small cards)
  *  2. 每日未修复漏洞 chart (3/5) | 新增漏洞列表 (2/5)
- *  3. 节点信息 | 专家信息 | 计划任务
+ *  3. 事实流量 | 节点/专家 | 计划任务
  */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TrendingDown, TrendingUp } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  CalendarClock,
+  ClipboardList,
+  Network,
+  Server,
+  Shield,
+  ShieldAlert,
+  TrendingDown,
+  TrendingUp,
+  type LucideIcon,
+} from "lucide-react";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
@@ -20,8 +33,17 @@ import {
   type ChartConfig,
 } from "../components/ui/chart";
 import { authFetch } from "../lib/api";
+import { casePath } from "../lib/caseRoutes";
 import { expertLabel, packCapabilities, resolveExpertColor } from "../lib/experts";
 import type { SecurityVulnerability } from "../lib/securityTypes";
+import {
+  TRAFFIC_EMPTY_COPY,
+  filterTrafficListRows,
+  projectTrafficListRows,
+  type TrafficExchange,
+  type TrafficListRow,
+  type TrafficSourceFilter,
+} from "../lib/trafficAuditView";
 
 type FindingItem = {
   id: string;
@@ -141,6 +163,10 @@ type Summary = {
     last_7d: number;
     prev_7d: number;
   };
+  traffic?: {
+    total: number;
+    items: TrafficExchange[];
+  };
 };
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -158,7 +184,7 @@ const SEV_COLOR: Record<(typeof SEVERITIES)[number], string> = {
   high: "var(--color-severity-high)",
   medium: "var(--color-severity-medium)",
   low: "var(--color-severity-low)",
-  info: "var(--color-ink-secondary)",
+  info: "var(--color-severity-info)",
 };
 
 const SEV_FILL: Record<(typeof SEVERITIES)[number], string> = {
@@ -166,7 +192,7 @@ const SEV_FILL: Record<(typeof SEVERITIES)[number], string> = {
   high: "fill-severity-high",
   medium: "fill-severity-medium",
   low: "fill-severity-low",
-  info: "fill-ink-secondary",
+  info: "fill-severity-info",
 };
 
 const SEV_LABEL: Record<(typeof SEVERITIES)[number], string> = {
@@ -256,6 +282,8 @@ export default function DashboardPage() {
   const [chartAssetId, setChartAssetId] = useState("");
   /** Inline vuln detail — list row opens dialog, not /vulnerabilities. */
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
+  const [opsTab, setOpsTab] = useState<"nodes" | "experts">("experts");
+  const [trafficSource, setTrafficSource] = useState<TrafficSourceFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
@@ -295,7 +323,7 @@ export default function DashboardPage() {
   const recentFindings = summary?.vulnerabilities?.recent ?? [];
 
   const chartAssetOptions = summary?.assets?.chart_options ?? [];
-  const days = summary?.daily_open?.days ?? 14;
+  const days = summary?.daily_open?.days ?? 20;
   const openPoints = summary?.daily_open?.open_points ?? [];
 
   const dailyChartData = useMemo(
@@ -328,30 +356,35 @@ export default function DashboardPage() {
               {/* 1. KPI strip — title / value / trend */}
               <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <Kpi
+                  icon={ShieldAlert}
                   label="待处理漏洞"
                   value={openTotal}
                   hint={vulnsTotal > 0 ? `占总数 ${Math.round((openTotal / vulnsTotal) * 100)}%` : undefined}
                   onClick={() => navigate("/vulnerabilities?status=to_fix")}
                 />
                 <Kpi
+                  icon={Shield}
                   label="漏洞总数"
                   value={vulnsTotal}
                   {...paceProps(summary.finding_pace?.last_7d ?? 0, summary.finding_pace?.prev_7d ?? 0)}
                   onClick={() => navigate("/vulnerabilities")}
                 />
                 <Kpi
+                  icon={Server}
                   label="资产"
                   value={summary.assets?.total ?? 0}
                   hint={`${summary.assets?.with_open_vulns ?? 0} 个有未修复`}
                   onClick={() => navigate("/assets")}
                 />
                 <Kpi
+                  icon={Network}
                   label="在线节点"
                   value={summary.nodes?.online ?? 0}
                   hint={`共 ${summary.nodes?.total ?? 0}`}
                   onClick={() => navigate("/nodes")}
                 />
                 <Kpi
+                  icon={Bot}
                   label="专家"
                   value={summary.experts?.total ?? summary.experts_total ?? 0}
                   onClick={() => navigate("/experts")}
@@ -361,10 +394,10 @@ export default function DashboardPage() {
               <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,6fr)_minmax(0,4fr)] gap-4">
               {/* 2. 每日未修复 (6fr) | 新增漏洞 (4fr) */}
               <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] lg:items-stretch">
-                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
                   <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <h2 className="text-sm font-semibold tracking-tight text-ink">每日未修复漏洞</h2>
+                      <CardTitle icon={BarChart3}>每日未修复漏洞</CardTitle>
                       <p className="mt-0.5 text-[11px] text-ink-muted">
                         近 {days} 天 · 仅统计待修复 / 修复中
                       </p>
@@ -420,8 +453,8 @@ export default function DashboardPage() {
                           tick={{ fontSize: 11, fill: "var(--color-chart-tick)" }}
                         />
                         <ChartTooltip cursor={false} content={<ChartTooltipContent hideZero />} />
-                        {/* PaceUI chart-3: stacked bars, radius 6, 3px canvas stroke between segments */}
-                        {[...SEVERITIES].reverse().map((sev) => (
+                        {/* Bottom → top: critical … info so 严重 sits at the base */}
+                        {SEVERITIES.map((sev) => (
                           <Bar
                             key={sev}
                             dataKey={sev}
@@ -438,10 +471,10 @@ export default function DashboardPage() {
                   )}
                 </section>
 
-                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
                   <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h2 className="text-sm font-semibold tracking-tight text-ink">新增漏洞</h2>
+                      <CardTitle icon={ClipboardList}>新增漏洞</CardTitle>
                       <p className="mt-0.5 text-[11px] text-ink-muted">最近 {recentFindings.length} 条</p>
                     </div>
                     <button
@@ -498,54 +531,94 @@ export default function DashboardPage() {
                 </section>
               </div>
 
-              {/* 3. 节点 | 专家 | 计划任务 */}
+              {/* 3. 事实流量 | 节点/专家 | 计划任务 */}
               <div className="grid min-h-0 gap-4 lg:grid-cols-3">
                 <Card
-                  title="节点信息"
-                  meta={`在线 ${summary.nodes?.online ?? 0} · 离线 ${summary.nodes?.offline ?? 0}`}
-                  actionLabel="节点"
-                  onAction={() => navigate("/nodes")}
+                  icon={Activity}
+                  title="事实流量"
+                  meta={`最近 ${summary.traffic?.items?.length ?? 0} 条`}
+                  headerRight={
+                    <select
+                      value={trafficSource}
+                      onChange={(e) => setTrafficSource(e.target.value as TrafficSourceFilter)}
+                      className="h-7 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink outline-none focus:border-ink"
+                      aria-label="Filter by source"
+                    >
+                      <option value="all">All sources</option>
+                      <option value="http">http</option>
+                      <option value="browser">browser</option>
+                      <option value="curl">curl</option>
+                    </select>
+                  }
                 >
-                  {(summary.nodes?.items?.length ?? 0) === 0 ? (
-                    <Empty>暂无节点</Empty>
-                  ) : (
-                    <ul className="flex flex-col">
-                      {summary.nodes.items.map((n) => (
-                        <li key={n.id}>
-                          <Tile
-                            flush
-                            title={n.name}
-                            meta={`${n.type} · ${n.current_sessions} 会话`}
-                            dot={n.status === "online" ? "var(--color-status-success)" : "var(--color-ink-muted)"}
-                            badge={
-                              <StatusPill on={n.status === "online"}>
-                                {n.status === "online" ? "在线" : n.status}
-                              </StatusPill>
-                            }
-                            onClick={() => navigate("/nodes")}
-                          />
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                  <DashboardTrafficTable
+                    exchanges={summary.traffic?.items ?? []}
+                    source={trafficSource}
+                    onOpenCase={(id) => navigate(casePath(id))}
+                  />
                 </Card>
 
                 <Card
-                  title="专家信息"
-                  meta={`共 ${summary.experts?.total ?? 0} 个实例`}
-                  actionLabel="专家"
-                  onAction={() => navigate("/experts")}
+                  icon={opsTab === "nodes" ? Network : Bot}
+                  title={opsTab === "nodes" ? "节点信息" : "专家信息"}
+                  meta={
+                    opsTab === "nodes"
+                      ? `在线 ${summary.nodes?.online ?? 0} · 离线 ${summary.nodes?.offline ?? 0}`
+                      : `共 ${summary.experts?.total ?? 0} 个实例`
+                  }
+                  headerRight={
+                    <div className="flex h-7 items-center rounded-md border border-hairline p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setOpsTab("nodes")}
+                        className={`h-full rounded px-2 text-[11px] leading-none ${
+                          opsTab === "nodes" ? "bg-canvas-inset font-medium text-ink" : "text-ink-muted hover:text-ink"
+                        }`}
+                      >
+                        节点
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpsTab("experts")}
+                        className={`h-full rounded px-2 text-[11px] leading-none ${
+                          opsTab === "experts" ? "bg-canvas-inset font-medium text-ink" : "text-ink-muted hover:text-ink"
+                        }`}
+                      >
+                        专家
+                      </button>
+                    </div>
+                  }
                 >
-                  {(summary.experts?.items?.length ?? 0) === 0 ? (
+                  {opsTab === "nodes" ? (
+                    (summary.nodes?.items?.length ?? 0) === 0 ? (
+                      <Empty>暂无节点</Empty>
+                    ) : (
+                      <ul className="flex flex-col">
+                        {summary.nodes.items.map((n) => (
+                          <li key={n.id}>
+                            <Tile
+                              flush
+                              title={n.name}
+                              meta={`${n.type} · ${n.current_sessions} 会话`}
+                              dot={n.status === "online" ? "var(--color-status-success)" : "var(--color-ink-muted)"}
+                              badge={
+                                <StatusPill on={n.status === "online"}>
+                                  {n.status === "online" ? "在线" : n.status}
+                                </StatusPill>
+                              }
+                              onClick={() => navigate("/nodes")}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  ) : (summary.experts?.items?.length ?? 0) === 0 ? (
                     <Empty>暂无专家实例</Empty>
                   ) : (
                     <ul className="flex flex-col">
                       {summary.experts.items.map((e) => (
                         <li key={e.id}>
-                          <ExpertTile
-                            expert={e}
-                            onClick={() => navigate("/experts")}
-                          />
+                          <ExpertTile expert={e} onClick={() => navigate("/experts")} />
                         </li>
                       ))}
                     </ul>
@@ -553,10 +626,18 @@ export default function DashboardPage() {
                 </Card>
 
                 <Card
+                  icon={CalendarClock}
                   title="计划任务"
                   meta={`启用 ${summary.schedules?.enabled ?? 0} / 共 ${summary.schedules?.total ?? 0}`}
-                  actionLabel="计划"
-                  onAction={() => navigate("/schedules")}
+                  headerRight={
+                    <button
+                      type="button"
+                      onClick={() => navigate("/schedules")}
+                      className="h-7 rounded-md border border-hairline bg-canvas px-2 text-[11px] leading-none text-ink-secondary hover:text-ink"
+                    >
+                      计划 →
+                    </button>
+                  }
                 >
                   {(summary.schedules?.items?.length ?? 0) === 0 ? (
                     <Empty>暂无计划任务</Empty>
@@ -592,21 +673,34 @@ export default function DashboardPage() {
   );
 }
 
+function CardTitle(props: { icon: LucideIcon; children: React.ReactNode }) {
+  const Icon = props.icon;
+  return (
+    <h2 className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-ink">
+      <Icon size={14} strokeWidth={1.75} className="shrink-0" />
+      {props.children}
+    </h2>
+  );
+}
+
 function Card(props: {
+  icon: LucideIcon;
   title: string;
   meta?: string;
   children: React.ReactNode;
   actionLabel?: string;
   onAction?: () => void;
+  headerRight?: React.ReactNode;
 }) {
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
       <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight text-ink">{props.title}</h2>
+          <CardTitle icon={props.icon}>{props.title}</CardTitle>
           {props.meta ? <p className="mt-0.5 text-[11px] text-ink-muted">{props.meta}</p> : null}
         </div>
-        {props.actionLabel && props.onAction ? (
+        {props.headerRight ? <div className="shrink-0">{props.headerRight}</div> : null}
+        {!props.headerRight && props.actionLabel && props.onAction ? (
           <button type="button" onClick={props.onAction} className="shrink-0 text-xs text-ink-secondary hover:text-ink">
             {props.actionLabel} →
           </button>
@@ -614,6 +708,125 @@ function Card(props: {
       </div>
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </section>
+  );
+}
+
+function trafficMethodTextClass(method: string): string {
+  switch (String(method || "").toUpperCase()) {
+    case "GET":
+      return "text-status-running";
+    case "POST":
+      return "text-status-success";
+    case "PUT":
+    case "PATCH":
+      return "text-severity-high";
+    case "DELETE":
+      return "text-severity-critical";
+    case "HEAD":
+    case "OPTIONS":
+      return "text-ink-secondary";
+    default:
+      return "text-ink";
+  }
+}
+
+function trafficStatusTextClass(row: Pick<TrafficListRow, "status" | "pending" | "phase">): string {
+  if (row.pending) return "text-status-running";
+  if (row.phase === "failed" || row.status === "failed" || row.status === "err") {
+    return "text-severity-critical";
+  }
+  const code = Number(row.status);
+  if (!Number.isFinite(code)) return "text-ink-secondary";
+  if (code >= 200 && code < 300) return "text-status-success";
+  if (code >= 300 && code < 400) return "text-status-running";
+  if (code >= 400 && code < 500) return "text-severity-high";
+  if (code >= 500) return "text-severity-critical";
+  return "text-ink-secondary";
+}
+
+function DashboardTrafficTable(props: {
+  exchanges: TrafficExchange[];
+  source: TrafficSourceFilter;
+  onOpenCase: (conversationId: string) => void;
+}) {
+  const rows = useMemo(() => projectTrafficListRows(props.exchanges), [props.exchanges]);
+  const visible = useMemo(
+    () => filterTrafficListRows(rows, { source: props.source }),
+    [rows, props.source],
+  );
+  const convByExchange = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const ex of props.exchanges) {
+      const id = String(ex.exchange_id || "");
+      const cid = String(ex.conversation_id || "");
+      if (id && cid) m.set(id, cid);
+    }
+    return m;
+  }, [props.exchanges]);
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {!props.exchanges.length ? (
+        <p className="text-sm text-ink-muted">{TRAFFIC_EMPTY_COPY}</p>
+      ) : !visible.length ? (
+        <p className="text-sm text-ink-muted">No exchanges match filter</p>
+      ) : (
+        <div className="no-scrollbar min-h-0 flex-1 overflow-auto">
+          <table className="w-full min-w-[420px] table-fixed border-collapse text-left">
+            <thead className="sticky top-0 z-10 bg-canvas">
+              <tr className="border-b border-hairline-soft text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+                <th className="bg-canvas px-1 py-1.5 font-medium">#</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Method</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Domain</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Path</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Status</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Source</th>
+                <th className="bg-canvas px-1 py-1.5 font-medium">Time</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-hairline-soft">
+              {visible.map((row) => {
+                const convId = convByExchange.get(row.exchange_id) || "";
+                return (
+                  <tr
+                    key={row.exchange_id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (convId) props.onOpenCase(convId);
+                    }}
+                    onKeyDown={(e) => {
+                      if ((e.key === "Enter" || e.key === " ") && convId) {
+                        e.preventDefault();
+                        props.onOpenCase(convId);
+                      }
+                    }}
+                    className="cursor-pointer font-mono text-[11px] text-ink hover:bg-canvas-inset/60"
+                    title={row.url}
+                  >
+                    <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.index}</td>
+                    <td className={`whitespace-nowrap px-1 py-1.5 font-semibold ${trafficMethodTextClass(row.method)}`}>
+                      {row.method}
+                    </td>
+                    <td className="truncate px-1 py-1.5" title={row.domain}>
+                      {row.domain || "—"}
+                    </td>
+                    <td className="truncate px-1 py-1.5" title={row.path}>
+                      {row.path || "/"}
+                    </td>
+                    <td className={`whitespace-nowrap px-1 py-1.5 font-medium ${trafficStatusTextClass(row)}`}>
+                      {row.status}
+                    </td>
+                    <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.source}</td>
+                    <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.duration}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -724,21 +937,26 @@ function paceProps(last: number, prev: number): { hint: string; tone: "up" | "do
 }
 
 function Kpi(props: {
+  icon: LucideIcon;
   label: string;
   value: number;
   hint?: string;
   tone?: "up" | "down" | "flat";
   onClick?: () => void;
 }) {
+  const Icon = props.icon;
   const toneClass =
     props.tone === "up" ? "text-severity-critical" : props.tone === "down" ? "text-status-success" : "text-ink-muted";
   return (
     <button
       type="button"
       onClick={props.onClick}
-      className="flex min-h-[9rem] flex-col rounded-lg border border-hairline bg-canvas px-4 py-5 text-left transition-colors hover:bg-canvas-inset"
+      className="flex min-h-[9rem] flex-col rounded-lg border border-hairline bg-canvas p-6 text-left transition-colors hover:bg-canvas-inset"
     >
-      <p className="text-[11px] font-medium text-ink-muted">{props.label}</p>
+      <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink-muted">
+        <Icon size={13} strokeWidth={1.75} className="shrink-0" />
+        {props.label}
+      </p>
       <p className="mt-2 font-mono text-2xl font-semibold tracking-tight text-ink">{props.value}</p>
       {props.hint ? (
         <p className={`mt-auto flex items-center gap-1 pt-3 text-xs ${toneClass}`}>

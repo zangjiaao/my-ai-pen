@@ -28,14 +28,14 @@ colors:
   accent-subtle: "#f2f2f0"
 
   # ── Semantic: Severity (安全等级 — 这是我们的"色块系统") ──
-  severity-critical: "#d73a31"
+  severity-critical: "#ef4444"
   severity-critical-subtle: "#fef2f2"
-  severity-high: "#d97706"
-  severity-high-subtle: "#fffbea"
-  severity-medium: "#b45309"
-  severity-medium-subtle: "#fff8f0"
-  severity-low: "#2563eb"
-  severity-low-subtle: "#eff6ff"
+  severity-high: "#f59e0b"
+  severity-high-subtle: "#fffbeb"
+  severity-medium: "#3b82f6"
+  severity-medium-subtle: "#eff6ff"
+  severity-low: "#22c55e"
+  severity-low-subtle: "#f0fdf4"
   severity-info: "#6b7280"
   severity-info-subtle: "#f9fafb"
 
@@ -553,10 +553,10 @@ AI 安全运营平台的界面是一个**黑白编辑式控制台**。设计语�
 
 Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平台用安全等级色来标记风险——每个 severity 有一个**饱和前景色**和一个**极淡的 subtle 背景色**。
 
-- **Critical** (`{colors.severity-critical}` #d73a31)：RCE、获取服务器权限。Subtle: #fef2f2。
-- **High** (`{colors.severity-high}` #d97706)：SQL 注入、任意文件读取。Subtle: #fffbea。
-- **Medium** (`{colors.severity-medium}` #b45309)：XSS、CSRF、信息泄露。Subtle: #fff8f0。
-- **Low** (`{colors.severity-low}` #2563eb)：安全头缺失、版本泄露。Subtle: #eff6ff。
+- **Critical** (`{colors.severity-critical}` #ef4444)：红。Subtle: #fef2f2。
+- **High** (`{colors.severity-high}` #f59e0b)：黄。Subtle: #fffbeb。
+- **Medium** (`{colors.severity-medium}` #3b82f6)：蓝。Subtle: #eff6ff。
+- **Low** (`{colors.severity-low}` #22c55e)：绿。Subtle: #f0fdf4。
 - **Info** (`{colors.severity-info}` #6b7280)：观察项、不确定发现。Subtle: #f9fafb。
 
 ### Semantic: Status
