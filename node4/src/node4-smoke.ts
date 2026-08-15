@@ -728,7 +728,7 @@ async function main() {
     "active context steers honest complete",
   );
   const contPrompt = buildGoalContinuationPrompt(goals.getMode()!, { openTodoCount: 0 });
-  assert(contPrompt.includes("completion audit") && contPrompt.includes("goal-continuation"), "continuation has OMP audit");
+  assert(contPrompt.includes("completion audit") && contPrompt.includes("goal_continuation"), "continuation has OMP audit");
   assert(contPrompt.includes("todo_context") || contPrompt.includes("Todo map"), "continuation notes empty todo map");
   // Goal continuation policy (lab): active + unlimited maxGoalContinues → continue after tools
   const goalCont = shouldContinueAfterNaturalStop({

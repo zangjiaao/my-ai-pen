@@ -6537,6 +6537,11 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
             if not c:
                 return out
             user_id = getattr(c, "user_id", None)
+            this_turn_task: dict = {}
+            if out.get("target"):
+                this_turn_task["target"] = out["target"]
+            if out.get("scope"):
+                this_turn_task["scope"] = out["scope"]
             pre = out.get("case_context") if isinstance(out.get("case_context"), dict) else None
             pre_attached = bool(
                 pre
@@ -6551,12 +6556,15 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
                 needs_enrich = (
                     not isinstance(ctx.get("next_work"), dict)
                     or ctx.get("_has_legal_next_steps_choice") is None
+                    or not ctx.get("scope_intel")
+                    or not ctx.get("intel_summary")
                 )
                 if needs_enrich:
                     loaded = await load_case_context_for_conversation(
                         db,
                         c.id,
                         user_id=user_id,
+                        task=this_turn_task or None,
                     )
                     if isinstance(loaded, dict):
                         if not isinstance(ctx.get("next_work"), dict) and isinstance(
@@ -6579,11 +6587,16 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
                             nw = dict(nw)
                             nw["has_legal_choice_card"] = lnw.get("has_legal_choice_card")
                             ctx["next_work"] = nw
+                        if not ctx.get("scope_intel") and loaded.get("scope_intel"):
+                            ctx["scope_intel"] = loaded["scope_intel"]
+                        if not ctx.get("intel_summary") and loaded.get("intel_summary"):
+                            ctx["intel_summary"] = loaded["intel_summary"]
             else:
                 ctx = await load_case_context_for_conversation(
                     db,
                     c.id,
                     user_id=user_id,
+                    task=this_turn_task or None,
                 )
             # Soft gate always (pre-attached or loaded).
             try:

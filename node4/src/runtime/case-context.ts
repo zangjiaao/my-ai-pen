@@ -227,11 +227,7 @@ function parseIntelSummary(raw: unknown): CaseIntelLine[] | undefined {
 /** Render case work-group block for LLM (budgeted). */
 export function formatCaseContextInjection(ctx: CaseContext | undefined | null): string {
   if (!ctx) return "";
-  const lines: string[] = [
-    "## Case work-group context (same conversation — read before acting)",
-    ctx.note ||
-      "You are joining an ongoing case. Prior messages, findings, and evidence below are shared. Do not pretend you were offline.",
-  ];
+  const lines: string[] = ["### Case"];
   if (ctx.conversation_id) {
     lines.push(`Case/conversation id: ${ctx.conversation_id}`);
   }

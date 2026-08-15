@@ -70,21 +70,18 @@ export function noteToolForMidRunTodoNudge(
 export function eagerTodoInjection(options?: { forced?: boolean }): string {
   if (options?.forced) {
     return [
-      "<system-reminder>",
-      "Before substantive work, create a phased todo.",
-      "You MUST call todo first in this turn with a single init op.",
-      "Cover the whole engagement as a coarse phased map — categories from YOUR role/mission and recon, not just the next step.",
+      "### This-run todo",
+      "Read this-turn Case inject first (living creds, prior index, Scope). If recorded valid creds exist, login via session before any ledger dump.",
+      "After first live use, call todo(init) once with a coarse phased map — categories from YOUR recon, not kickoff 确认台账 / 复验 / load-skills.",
       "Task labels: concise 5–10 word category-level work (what, not how). Unique content strings.",
       "Bad: meta prep (configure environment, load skills), micro-checklists, or one todo per atomic item if the mission says use categories.",
       "After todo succeeds, continue act work in the SAME turn (high-density primary tools).",
       "NEVER call todo again unless task state has materially changed (start/done when you switch or finish a category).",
-      "</system-reminder>",
     ].join("\n");
   }
   return [
-    "<system-reminder>",
+    "### This-run todo",
     "Consider todo(init) once with a coarse phased map for the whole engagement; keep task labels 5–10 words. Continue act work in the same turn; avoid re-calling todo unless state changes.",
-    "</system-reminder>",
   ].join("\n");
 }
 
@@ -96,11 +93,10 @@ export function midRunTodoNudge(openCount: number): string {
   if (openCount < 1) return "";
   const plural = openCount === 1 ? "is" : "are";
   return [
-    "<system-reminder>",
+    "### This-run todo",
     `Gentle reminder: ${openCount} todo item${openCount === 1 ? "" : "s"} ${plural} still open.`,
     "If you finished a category since the last todo update, mark it done now (done task=... or done phase=...) so progress stays visible; otherwise just keep working.",
     "Do not batch-flip every phase at the end. Prefer high-density shell over todo thrash — but do not leave finished categories open.",
-    "</system-reminder>",
   ].join("\n");
 }
 
@@ -120,22 +116,20 @@ export function incompleteTodoStopReminder(
           .join("\n")
       : "";
   return [
-    "<system-reminder>",
+    "### This-run todo",
     `You stopped with ${openCount} incomplete todo item(s)${list ? `:\n${list}` : "."}`,
     "Continue working on these categories or mark them complete if finished.",
     `(Reminder ${attempt}/${maxAttempts})`,
-    "</system-reminder>",
   ].join("\n");
 }
 
 export function todoErrorReminder(errors: string[]): string {
   const detail = errors.length ? errors.join("; ") : "previous todo call failed";
   return [
-    "<system-reminder>",
+    "### This-run todo",
     `Your last todo update failed (${detail}). Todo progress is not visible until you retry with a valid op.`,
     "Tasks are referenced by verbatim content from the list (view first if unsure). Do not invent task-1 ids.",
     "Keep the list coarse; do not expand into a per-vuln checklist.",
-    "</system-reminder>",
   ].join("\n");
 }
 

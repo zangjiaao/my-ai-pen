@@ -699,9 +699,12 @@ export async function runNode4Task(
   };
 
   /** Single prompt + soft-error assert (throws LlmTurnError → main task_error). */
-  const promptAndAssert = async (promptText: string) => {
+  const promptAndAssert = async (
+    promptText: string,
+    channel: "user" | "harness" = "user",
+  ) => {
     try {
-      await session.prompt(promptText, { source: "interactive" });
+      await session.prompt(promptText, { source: "interactive", channel });
     } catch (err) {
       // Spec #353: structured classes only (idle / incomplete / LlmTurnError).
       const mapped = mapPromptFailureToLlmTurnError(err, health());
@@ -763,7 +766,7 @@ export async function runNode4Task(
         segmentCounter.tools = 0;
         runtime.lifecycle.toolsInLastSegment = 0;
         try {
-          await promptAndAssert(buildGoalBudgetLimitPrompt(budgetSteerGoal));
+          await promptAndAssert(buildGoalBudgetLimitPrompt(budgetSteerGoal), "harness");
         } catch (err) {
           if (cancelled()) break;
           throw err;
@@ -891,6 +894,7 @@ export async function runNode4Task(
             prematureMax: maxPrematureStops,
             goalContinuationBody,
           }),
+          "harness",
         );
       } catch (err) {
         if (cancelled()) break;

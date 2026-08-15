@@ -30,12 +30,20 @@ import {
   enrichArgsWithCommand,
   surfaceFieldsFromToolArgs,
 } from "./tool-result-wire.js";
+import { convertNode4MessagesToLlm, makeHarnessMessage } from "./harness-channel.js";
 
 export type Node4AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /** Minimal session handle used by idle pool and runners. */
 export type Node4AgentSession = {
-  prompt: (text: string, opts?: { source?: string }) => Promise<void>;
+  /**
+   * Default channel is operator (`user`). Pass `channel: "harness"` for
+   * outer continue / goal / budget — never a fake operator utterance (#455).
+   */
+  prompt: (
+    text: string,
+    opts?: { source?: string; channel?: "user" | "harness" },
+  ) => Promise<void>;
   abort: () => void;
   dispose: () => void | Promise<void>;
   /**
@@ -198,6 +206,7 @@ export async function runNode4Agent(options: RunNode4AgentOptions): Promise<Node
     },
     // streamSimple is the stable Agent streamFn today (pi-ai Models.streamSimple is equivalent once providers are registered).
     streamFn: streamSimple,
+    convertToLlm: convertNode4MessagesToLlm,
     getApiKey: options.getApiKey ?? ((provider: string) => resolveNode4ApiKey(provider)),
     beforeToolCall: options.beforeToolCall,
     afterToolCall: options.afterToolCall,
@@ -213,11 +222,15 @@ export function wrapAgentAsSession(
   opts?: { occupancyError?: () => string | undefined },
 ): Node4AgentSession {
   return {
-    prompt: async (text: string, _opts?: { source?: string }) => {
+    prompt: async (text: string, promptOpts?: { source?: string; channel?: "user" | "harness" }) => {
       const occ = opts?.occupancyError?.();
       if (occ) {
         const { occupancyLlmTurnError } = await import("./context-window.js");
         throw occupancyLlmTurnError(occ);
+      }
+      if (promptOpts?.channel === "harness") {
+        await agent.prompt(makeHarnessMessage(text));
+        return;
       }
       await agent.prompt(text);
     },
@@ -289,7 +302,7 @@ export function wrapAgentAsSession(
 /**
  * Single product boot path for Main / subagent / Hard Graph stages.
  * - tools from pack
- * - mid-run todo via afterToolCall → session.followUp
+ * - mid-run todo via afterToolCall → tool-result append (not user)
  * - tool_output + segment counters via AgentEvent bridge only (no dual fan-out)
  */
 export async function createBoundNode4Session(
@@ -303,9 +316,6 @@ export async function createBoundNode4Session(
   if (!runtime.lifecycle.midRunTodo) {
     runtime.lifecycle.midRunTodo = createMidRunTodoTracker();
   }
-
-  /** Filled after session wrap so afterToolCall can followUp without onAgent handshake. */
-  const followUpHold: { fn?: (text: string) => void } = {};
 
   const compactCycle: import("./context-window.js").CompactCycle = {
     persistPassIssued: false,
@@ -337,18 +347,18 @@ export async function createBoundNode4Session(
           isError,
         });
         if (nudge) {
-          try {
-            followUpHold.fn?.(nudge);
-          } catch {
-            /* non-fatal */
-          }
+          // Append onto the tool result — never followUp as a user turn (#455).
+          const prev = Array.isArray(context.result?.content) ? context.result.content : [];
+          return {
+            content: [...prev, { type: "text" as const, text: `\n${nudge}` }],
+            ...(promoteError ? { isError: true } : {}),
+          };
         }
       }
       return promoteError ? { isError: true } : undefined;
     },
   });
 
-  followUpHold.fn = (text) => session.followUp(text);
   attachProductToolEventBridge(session, runtime, segmentCounter);
 
   return { session, segmentCounter };

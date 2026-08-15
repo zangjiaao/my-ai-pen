@@ -41,7 +41,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 
 | # | Lock |
 |---|------|
-| **L1** | Same-Session continue turn text = **operator utterance only** (or ChoiceCard confirm display text). |
+| **L1** | Same-Session continue turn text = **operator utterance only** (or ChoiceCard confirm display text). Harness continue is not a user turn. |
 | **L2** | Platform must **not** concatenate sticky prior `instruction` + `User continuation: …` into `text` / `initial_instruction`. |
 | **L3** | Sticky **target / scope / RoE / expert / engagement / goal** remain structured fields on the envelope (not prose paste into the turn body). |
 | **L4** | New `task_id` on continue is **allowed** for accounting; minting a package id must not imply dialogue restart. |
@@ -108,9 +108,10 @@ What they see instead often feels like a restart: a new Task package id, a long 
 
 ### Node
 
-- `runParkedWorkingContinue`: keep single `session.prompt(task.instruction \|\| "继续")`.  
+- `runParkedWorkingContinue`: keep single `session.prompt(task.instruction \|\| "继续")` (operator channel).  
 - Cold Free / Graph first prompt paths retain case_context + target/scope blocks (Spec #386 layers).  
-- Park-miss reseed uses cold path honesty (Todo seed / handoff rules unchanged).
+- Park-miss reseed uses cold path honesty (Todo seed / handoff rules unchanged).  
+- Lab outer continue / goal / budget injects use `session.prompt(..., { channel: "harness" })` — product `role=harness`, markdown `## Runtime` / `### Continue`. Never a fake operator user turn. Occupancy persist-pass and checkpoint are the same channel. Mid-run todo/booking/surface nudges append to the tool result.
 
 ### Phases
 

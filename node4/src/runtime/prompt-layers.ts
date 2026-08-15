@@ -21,6 +21,7 @@ import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
   renderPromptTemplate,
+  sanitizeLanguageTemplateValue,
   sanitizePromptLabel,
 } from "./prompt-template.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
@@ -112,12 +113,33 @@ export function joinNonEmptyPromptParts(
   return parts.filter((l): l is string => typeof l === "string" && l !== "").join("\n");
 }
 
+/** Visible layer fences in the assembled system prompt (Base has none — Standing stays first). */
+export const LAYER_HEADING = {
+  profession: "## Profession",
+  runtime: "## Runtime",
+  // Agent-visible name is "This turn" — not product Task/package (Session-first, #455).
+  task: "## This turn",
+} as const;
+
+function prefixLayerHeading(heading: string, body: string): string {
+  const t = typeof body === "string" ? body.trim() : "";
+  if (!t) return "";
+  if (t.startsWith(heading)) return t;
+  return `${heading}\n${t}`;
+}
+
+
 /**
  * Single public assembler seam: fixed order Base → Profession → Runtime → Task.
  * Empty layers omit; order never rearranges.
  */
 export function assembleSystemPrompt(layers: PromptLayers): string {
-  return [layers.base, layers.profession, layers.runtime, layers.task]
+  return [
+    layers.base,
+    prefixLayerHeading(LAYER_HEADING.profession, layers.profession),
+    prefixLayerHeading(LAYER_HEADING.runtime, layers.runtime),
+    prefixLayerHeading(LAYER_HEADING.task, layers.task),
+  ]
     .map((s) => (typeof s === "string" ? s.trim() : ""))
     .filter((s) => s.length > 0)
     .join("\n\n");
@@ -130,7 +152,7 @@ export function promptTemplateVarsFromBase(input: BaseLayerInput): PromptTemplat
     expert_name: sanitizePromptLabel(input.expertName, fallback),
     expert_id: sanitizePromptLabel(input.expertId, ""),
     pack_id: sanitizePromptLabel(input.packId, "runtime"),
-    pack_label: sanitizePromptLabel(input.packLabel || input.packId, "Assistant"),
+    pack_label: sanitizeLanguageTemplateValue(input.packLabel || input.packId, "Assistant"),
   };
 }
 
@@ -307,7 +329,7 @@ export function buildPromptLayers(
     }
   }
   if (pack.toolNames.includes("subagent")) {
-    // Graph/free <work-mode> already owns captain/dispatch detail — one line here only.
+    // Graph/free Work mode block already owns captain/dispatch detail — one line here only.
     runtimeParts.push(
       "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
     );
