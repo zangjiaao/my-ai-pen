@@ -435,6 +435,7 @@ export async function runNode4Task(
     goals,
     processFactIndex,
     workModeInjection: graphCtx.formatInjection(),
+
     allowPostexOverride:
       graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,
   });

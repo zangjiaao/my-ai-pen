@@ -1,7 +1,7 @@
 # Spec: Session auto-title (Agent renames default「新会话」)
 
 **Status:** Implementable Spec (product contract) — **living**  
-**Tracker:** [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)  
+**Tracker:** [#457](https://github.com/zangjiaao/my-ai-pen/issues/457); follow-up [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)  
 **Decision source:** Product UX demand — new Cases default to「新会话」; operators rarely rename; long lists of identical titles. Agent should set a short title from the first **substantive** user task.
 
 **Product path:** Platform conversation list + top bar + Node4 Agent tools (ADR 0001).  
@@ -20,7 +20,7 @@
 
 New conversations are created with the default title **「新会话」**. Operators seldom rename them. Over time the sidebar is full of identical titles, so Cases cannot be told apart.
 
-Operators want the **Agent** (any product seat that participates, including Default) to infer a **short, useful title** from the first real task message and write it to the Case title (sidebar + top bar), without forcing a manual rename every time.
+Operators want a **short, useful title** from the first real task, written to the Case (sidebar + top bar), without forcing a manual rename — and **without a dedicated naming Session**. Auto-title is a **Main Task-layer** duty on the addressed Default / Expert Free turn. Graph stages and Package workers do not name the Case.
 
 Constraints:
 
@@ -35,11 +35,12 @@ Constraints:
 
 1. **Default remains「新会话」** (and known English placeholders) at Case create.  
 2. **Agent tool** `platform_set_conversation_title` updates **this** conversation’s title via Node-authenticated ledger API.  
-3. **Auto path:** when the current title is still a default placeholder and the user message is a **substantive task**, the Agent calls the tool once with `only_if_default=true` and a short title (target / unit / task type). Prefer **silent** (no chat narration).  
-4. **Explicit rename:** user asks to rename → tool with `only_if_default=false`.  
-5. **Live UI:** after success, Node emits `conversation_title_updated`; frontend patches the conversation store (sidebar + top bar) without full reload.  
-6. **Wire:** `task_assign` may include `conversation_title` so the Agent knows the current placeholder without an extra read.  
-7. **Manual rename** in Sidebar (existing PATCH) remains; after that, auto path skips.
+3. **Auto path (Main Task layer):** when the title is still a default placeholder **and** the task envelope has a **structured** target / `scope.allow`, the assembled Task hint tells the current Main to call `platform_set_conversation_title` once with `only_if_default=true`. Silent — do not announce, do not add a todo. No second Agent Session.  
+4. **Gate is the envelope, not greeting NLP.** No target and empty allow → treat as chat / 寒暄 → skip.  
+5. **Explicit rename:** user asks the current Main → tool with `only_if_default=false`.  
+6. **Live UI:** after success, Node emits `conversation_title_updated`; frontend patches the conversation store (sidebar + top bar) without full reload.  
+7. **Wire:** `task_assign` may include `conversation_title` so the Task hint knows the current placeholder.  
+8. **Manual rename** in Sidebar (existing PATCH) remains; after that, auto path skips (`only_if_default`).
 
 ### Product locks
 
@@ -49,11 +50,11 @@ Constraints:
 | **L2** | Placeholders include at least: `新会话`, `New session`, `Untitled`, `未命名会话`, empty/whitespace. |
 | **L3** | Pure greeting / small-talk turns **must not** auto-title. |
 | **L4** | Title length: short (product guidance ≤~24 Chinese chars or ~40 Latin); server max 255; non-empty. |
-| **L5** | No platform free-text keyword table inventing titles; Agent authors title; tool persists. |
+| **L5** | No platform free-text keyword table inventing titles. Main authors via the title tool (judgment from envelope + user turn). |
 | **L6** | `conversation_title_updated` is **not** a chat timeline message (do not persist as agent chat row). |
 | **L7** | User manual rename and explicit Agent rename always allowed when not restricted by empty title. |
 | **L8** | Tool is scoped to the **current** `conversation_id` on the task (no cross-Case rename). |
-| **L9** | Available on Default and citizen-inherited seats (any pack that can act in a Case). |
+| **L9** | Auto-title is a **Main Task-layer** duty on Default / Expert Free when L1+L3 hold. Graph stages and Package workers do **not** auto-title. |
 | **L10** | Orthogonal to #454 owner ledger and #455 Task/Session dialogue packaging. |
 
 ---
@@ -68,9 +69,9 @@ Constraints:
 6. As an operator, I want the top bar title to update live, so that I need not refresh.  
 7. As an operator, I want the sidebar list to update live, so that multi-Case navigation stays honest.  
 8. As an operator, I want no chat bubble for “I renamed the session”, so that the timeline stays about work.  
-9. As an Expert Agent, I want `conversation_title` on the task envelope, so that I know when the title is still default.  
-10. As an Expert Agent, I want `only_if_default` on the tool, so that retries do not clobber user titles.  
-11. As a Default seat Agent, I want the same tool, so that handoff-only Cases still get titles before or with handoff.  
+9. As a Main Agent, I want auto-title as a short Task hint, so that naming does not need a second Session.  
+10. As an Expert Agent, I want `only_if_default` on the tool, so that a user-asked rename cannot clobber a later custom title by mistake.  
+11. As a Graph stage / Package worker, I do not own Case naming.  
 12. As a platform implementer, I want Node token auth on the title PATCH, so that only bound Nodes can write.  
 13. As a platform implementer, I want audit optional/lightweight, so that title churn is not noisy (may share conversation.update patterns).  
 14. As a QA engineer, I want unit tests for placeholder detection and only_if_default skip, so that L1/L2 hold.  
@@ -83,23 +84,26 @@ Constraints:
 1. **API:** `PATCH /api/node/ledger/conversations/{id}/title` with body `{ title, only_if_default? }`; resolve owner via conversation; return `{ ok, skipped?, title, before?, conversation_id }`.  
 2. **Tool:** `platform_set_conversation_title` on Node platform tools; citizen + default tool lists; on success send WS `conversation_title_updated`.  
 3. **Envelope:** Platform attaches `conversation_title` when building `task_assign` (from Conversation row).  
-4. **Prompts:** Short guidance in default / platform-citizen / ledger-assist session-runner: auto once with only_if_default; silent; greetings skip.  
-5. **Frontend:** Handle `conversation_title_updated` (bypass case gate so sidebar updates); existing Sidebar manual PATCH unchanged.  
-6. **Placeholders:** Shared server frozenset + Node helper for default detection.  
-7. **Ship separately from #454:** own Spec, issue, and PR.
+4. **Task hint:** `node4/src/runtime/session-title.ts` `formatSessionTitleHint` — assembled into Free/Default Main Task by `buildPromptLayers`. One home; not restated in citizen / Default work lines.  
+5. **Prompts:** Task layer assigns auto-title when placeholder + structured target; otherwise user-asked rename only. Graph stage / worker Task builders omit the hint.  
+6. **Frontend:** Handle `conversation_title_updated` (bypass case gate so sidebar updates); existing Sidebar manual PATCH unchanged.  
+7. **Placeholders:** Shared server frozenset + Node helper for default detection.  
+8. **Ship separately from #454:** own Spec, issue, and PR.
 
 ---
 
 ## Testing Decisions
 
-- **Good tests:** only_if_default skip when title custom; empty title rejected; placeholder membership; tool registered on default seat.  
-- **Prior art:** `test_conversation_title_node.py`, `platform.policy.test.ts`.  
-- **Optional e2e:** create Case → send substantive message → title leaves「新会话」(manual or integration).
+- **Good tests:** only_if_default skip when title custom; empty title rejected; placeholder membership; tool registered on default seat; Task hint (default+target assigns; greeting without target does not; custom title skips).  
+- **Prior art:** `test_conversation_title_node.py`, `platform.policy.test.ts`, `node4/src/runtime/session-title.test.ts`, `node4/src/runtime/prompt-layers.test.ts`.  
+- **Optional e2e:** create Case → send substantive message with target → title leaves「新会话」(manual or integration).
 
 ---
 
 ## Out of Scope
 
+- A second Participant Session / UI participant for naming.  
+- Platform-side keyword/NLP title tables on free text.  
 - Platform-side non-Agent LLM title generation.  
 - Renaming other Cases from this tool.  
 - Full history of title changes UI.  
@@ -110,4 +114,11 @@ Constraints:
 
 ## Further Notes
 
-Design.md already described auto-naming; this Spec freezes Agent-tool + only_if_default as the product path (not a silent platform NLP table).
+Design.md already described auto-naming; this Spec freezes Agent-tool + only_if_default as the persist path. Auto-title lives in the Main Task layer — not a dedicated naming Session.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-08-15 | First publish — #457. |
+| 2026-08-16 | Auto-title moved onto Main Task-layer hint; no housekeeping Session (#482). |

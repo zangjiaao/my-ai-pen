@@ -104,7 +104,22 @@ const baseTask: TaskEnvelope = {
   );
 
   ok(layers.task.includes("Target:"), "Task has target");
-  ok(layers.task.includes("Scope:"), "Task has scope");
+  ok(
+    layers.task.includes("only_if_default=true"),
+    "Task assigns auto-title when placeholder + structured target",
+  );
+  const titled = buildPromptLayers(
+    { ...baseTask, conversationTitle: "Juice Shop 复测" },
+    PENTEST_ROLE_PACK,
+  );
+  ok(
+    titled.task.includes("Juice Shop 复测") && !titled.task.includes("only_if_default=true"),
+    "Task does not auto-title when the Case title is already custom",
+  );
+  ok(
+    layers.task.includes("Scope allow:") || layers.task.includes("Scope:"),
+    "Task has scope",
+  );
   ok(layers.task.includes("Instruction:"), "Task has instruction");
   ok(
     !layers.task.includes("## Standing node policies"),
@@ -212,6 +227,10 @@ const baseTask: TaskEnvelope = {
     layers.runtime.includes("Booking mode: none") ||
       prompt.includes("Booking mode: none"),
     "Default booking mode none",
+  );
+  ok(
+    !prompt.includes("only_if_default=true"),
+    "Default greeting / no-target turn does not assign auto-title",
   );
   // No Expert skill encyclopedia / progressive skill list unless pack declares skills
   ok(

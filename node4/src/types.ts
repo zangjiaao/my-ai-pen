@@ -80,7 +80,7 @@ export type TaskEnvelope = {
   expertId?: string;
   /**
    * Current Case/session title from the platform (e.g. default "新会话").
-   * Spec #457: Agent auto-names when still a placeholder.
+   * Spec #457 / #482: Main Task layer auto-names when still a placeholder + structured target.
    */
   conversationTitle?: string;
   /**
