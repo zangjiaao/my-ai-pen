@@ -513,7 +513,7 @@ export default function DashboardPage() {
                                 <span
                                   className={`inline-block rounded px-1.5 py-0.5 font-mono text-[10px] font-medium ${SEV_CLASS[f.severity] || SEV_CLASS.info}`}
                                 >
-                                  {SEV_LABEL[f.severity as (typeof SEVERITIES)[number]] || f.severity}
+                                  {String(f.severity || "info").toUpperCase()}
                                 </span>
                               </td>
                               <td className="truncate py-2 pr-2 align-middle text-xs text-ink" title={f.title}>
