@@ -2,6 +2,9 @@
 
 Public seam: app.services.owner_intel helpers. No ORM / HTTP.
 """
+import uuid
+
+from app.api.intel import _user_id
 from app.services.owner_intel import (
     INTEL_KINDS,
     MAX_INTEL_INJECT,
@@ -11,7 +14,9 @@ from app.services.owner_intel import (
     agent_may_update,
     apply_forget,
     default_sensitivity,
+    next_access_count,
     format_intel_inject_line,
+    intel_matches_case_scope,
     intel_summary_lines,
     normalize_hang,
     normalize_kind,
@@ -19,6 +24,11 @@ from app.services.owner_intel import (
     status_from_forget_count,
     strip_agent_audit_fields,
 )
+
+
+def test_auth_dict_user_id_matches_assets_api():
+    uid = uuid.uuid4()
+    assert _user_id({"user_id": str(uid), "email": "a@b.c", "role": "user"}) == uid
 
 
 def test_kinds_are_closed_v1():
@@ -82,6 +92,16 @@ def test_agent_surface_by_lifecycle():
     assert agent_may_update(sealed) is False
 
 
+def test_intel_matches_case_scope_host_level_and_named_ports():
+    named = {"host-1": {"3000"}}
+    assert intel_matches_case_scope(asset_id="host-1", port=None, port_scope=named) is True
+    assert intel_matches_case_scope(asset_id="host-1", port="3000", port_scope=named) is True
+    assert intel_matches_case_scope(asset_id="host-1", port="8080", port_scope=named) is False
+    assert intel_matches_case_scope(asset_id="other", port="3000", port_scope=named) is False
+    whole = {"host-1": None}
+    assert intel_matches_case_scope(asset_id="host-1", port="8080", port_scope=whole) is True
+
+
 def test_hang_is_host_or_host_port_never_group():
     assert normalize_hang({"asset_id": "a1"}) == {"asset_id": "a1", "port": None}
     assert normalize_hang({"asset_id": "a1", "port": "443"}) == {"asset_id": "a1", "port": "443"}
@@ -112,6 +132,7 @@ def test_agent_cannot_author_audit_fields():
             "new": True,
             "is_new": True,
             "forget_count": 9,
+            "access_count": 99,
             "status": "sealed",
             "sensitivity": "secret",
             "created_task_id": "forged",
@@ -123,11 +144,19 @@ def test_agent_cannot_author_audit_fields():
     assert "new" not in cleaned
     assert "is_new" not in cleaned
     assert "forget_count" not in cleaned
+    assert "access_count" not in cleaned
     assert "status" not in cleaned
     assert "sensitivity" not in cleaned
     assert "created_task_id" not in cleaned
     assert cleaned["summary"] == "admin:admin invalid"
     assert cleaned["kind"] == "credential_status"
+
+
+def test_access_count_increments_from_get_not_agent_authored():
+    assert next_access_count(0) == 1
+    assert next_access_count(3) == 4
+    assert next_access_count(None) == 1
+    assert next_access_count("2") == 3
 
 
 def test_new_is_projection_from_created_task_id():

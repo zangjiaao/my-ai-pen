@@ -289,6 +289,8 @@ async def list_vulns(
     status: str | None = Query(default=None),
     asset_id: str | None = Query(default=None, description="Filter by one Host asset id"),
     asset_ids: list[str] | None = Query(default=None, description="Filter by multiple Host asset ids"),
+    port: str | None = Query(default=None, description="Filter by Service port"),
+    q: str | None = Query(default=None, description="Title / location / description needle"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -307,6 +309,8 @@ async def list_vulns(
         offset=offset,
         asset_id=asset_id,
         asset_ids=asset_ids,
+        port=port,
+        q=q,
     )
     return {
         "ok": True,

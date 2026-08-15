@@ -22,7 +22,7 @@ UI already has **情报** tabs with empty honest copy. Product law for the rows 
 
 ## Solution
 
-**Intel** = the Agent’s **notebook** on a **Host** or **Service**: things worth remembering so the next turn / Session / compact does not forget. Not a Finding. Not a Case-owned dump. Case **projects** Scope ∩ living intel into the Findings pane (a **section**, not a new right-panel tab).
+**Intel** = operational notes worth keeping **during testing** (how login works, which creds still valid, a path to retry) hung on a **Host** or **Service**. Not a Finding. **Not Evidence.** Evidence exists only to **support a booked vuln**; Intel is leftover process knowledge for the next turn / Session. The two directions do not overlap — do not copy Finding titles, PoC, or Evidence into Intel. Not a Case-owned dump. Case **projects** Scope ∩ living intel into the Findings pane (a **section**, not a new right-panel tab).
 
 Prompt framing (pack / Runtime): this is your notebook. Write what you need to keep. Do not treat it as a chore checklist.
 
@@ -46,6 +46,7 @@ Prompt framing (pack / Runtime): this is your notebook. Write what you need to k
 | `source` | `agent` \| `user` from who invoked the tool — not a tool argument. |
 | `created_task_id` | Task package id at create (for **New**). |
 | `forget_count` | Incremented on each `forget`. 0 living; 1 soft-forgotten; ≥2 遗忘区. |
+| `access_count` | Incremented on **get(id)** (operator open / Agent `fact(get)`). List and compact inject do **not** increment. Operator signal for how often the note was actually read. |
 | `status` | Derived: `active` / `forgotten` / `sealed`. |
 | `sensitivity` | Default from kind. |
 | **New** | Projection, not a stored Agent flag: `created_task_id` = current Task (or first seen this Case burst). Same spirit as Finding **New**. |
@@ -63,7 +64,7 @@ Later kinds: **Spec amendment**, not an open string. Agent must not invent kinds
 | `credential_status` | no | Status only (valid / invalid / untried). Password **material** → `secret`. |
 | `secret` | **yes** | Password / cookie / token **value**. Inject: pointer only. |
 | `token` | **yes** | JWT / shape / location; full value not auto-injected. |
-| `flag` | **yes** | CTF flag. Dual-write to Finding is allowed when the pack books flags as findings; Intel may still hold the operational note. |
+| `flag` | **yes** | CTF flag **value** as an operational leftover. Pack still books the vuln/flag as a **Finding** with **Evidence**. Do not put the Finding proof in Intel. |
 | `path_hint` | no | Worth-following path/param — not a scan dump. |
 | `account` | no | Username/role enum; no password. |
 | `config` | no | Version, WAF, default-page observations. |
@@ -121,7 +122,8 @@ Home-first. Intel is leftover operational memory about an **existing** asset.
 | New internal CIDR | **Scope / next-scope**, then Hosts. |
 | Path exists / tested | **Surface**. |
 | Bookable vuln / pack flag-as-finding | **Finding**. |
-| Reusable knowledge about an existing Host/Service that is none of the above | **Intel**. |
+| Proof that supports that Finding | **Evidence**. Never Intel. |
+| How the app/auth/config actually behaves so the next probe can continue | **Intel**. Never Evidence. |
 | Scan noise, one-off 404, retries | Discard. |
 
 `kind` is not an admissions exam. Body is NL; pick the closest kind. Missing kind → still record (closest) rather than drop; add kinds later by Spec.
@@ -132,29 +134,34 @@ Home-first. Intel is leftover operational memory about an **existing** asset.
 
 Notebook, not a chore:
 
-- **Mid-run:** optional. Record when something is worth keeping. **No** periodic write nudge.  
-- **Compact threshold:** one persist pass (context-window Spec), then shrink. Agent may record or `forget` to 查漏补缺. Host does not extract. Empty pass still shrinks.  
-- **Settle / after a burst:** operator reviews the 线索 section (New = harness). No confirm-all gate.
+- **Mid-run:** `fact(upsert)` when something is worth keeping. **No** periodic write nudge.  
+- **Compact threshold:** one persist pass (context-window Spec), then shrink. Agent may `fact(upsert)` or `fact(forget)` to 查漏补缺. Host does not extract. Empty pass still shrinks.  
+- **Settle / wrap / next_steps:** one **optional** persist — write only clues the Agent judges worth the next Session. Skip if nothing new. Not a confirm-all gate; not a keyword scan of the user saying “总结”. Compact persist is a **different** pass; both may run in one Session.  
+- **After a burst:** operator reviews the 线索 section (New = harness).
 
 ---
 
 ## 7. Tools (v1)
 
-| Tool | Role |
-|------|------|
-| `platform_record_intel` | Create (no `id`) or update (`id`). Args: hang, kind, summary, body **only**. Harness fills id/audit. |
-| `platform_list_intel` | Default **living** only. Never returns sealed. Soft-forgotten omitted unless a later explicit Agent filter is added (v1: omit). |
-| `platform_get_intel` | Living or soft-forgotten: full row. **Sealed: not found** to Agent. UI may still open sealed in 遗忘区. |
-| `platform_forget_intel` | `id` required. Harness ++`forget_count`. First forget → soft-forgotten; second → 遗忘区. |
+Agent surface is **`fact`** (same tool as this-task process keys). Host/Service 线索 is not a second platform_* family.
 
-Do **not** extend `platform_enrich_asset`. Do **not** let Agent set timestamps, `source`, or `new`.
+| `fact` op | Role |
+|-----------|------|
+| `upsert` | This-task `fact_key` plus living Intel when hang is known (`asset_id`, or the single on-ledger Scope Host). `kind` + summary + body. Harness stamps Intel id/audit. |
+| `list` | Living Intel + this-task fact index. Never returns sealed. |
+| `get` | Intel `id` (living or soft-forgotten) or local `fact_key`. Sealed: not found. Each successful Intel get increments `access_count`. |
+| `forget` | Intel `id`. First = soft; second = 遗忘区. |
+
+Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `platform_enrich_asset`. Do **not** let Agent set timestamps, `source`, or `new`.
 
 ---
 
 ## 8. UI
 
 - **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **遗忘区** filter for sealed (and optionally soft-forgotten). Group tab stays empty/honest; **no Group writes in v1**.  
-- **Case right panel:** **not** a new tab. **线索** section in the Findings pane = living only (`id` + summary + New). A **遗忘区** entry (same pane or a disclosure under 线索 — **not** a new right-panel tab) lists sealed rows for the operator only.  
+- **Case right panel:** **not** a new tab. **线索** section in the Findings pane = living only (`id` + summary + New + access eye-count), **Scope-filtered**: Host-level (empty port) plus Service rows whose port is named on structured task target/scope. Sibling Service ports on the same Host (e.g. Scope `:3000` vs notebook `:8080`) are omitted. A **遗忘区** entry (same pane or a disclosure under 线索 — **not** a new right-panel tab) lists sealed rows for the operator only, same hang filter. Host / Service **情报** tabs stay unfiltered (the asset being viewed). Live `intel_upsert` must not be wiped by a racing `/state` snapshot (merge live-only ids). **New** follows `created_task_id` = current Task even if a later snapshot stamped `is_new: false`.  
+
+- Access count is an **eye + number** on the row and on the Finding-style detail dialog. Not a second tab.
 - Cards in chat must **not** invent a second list (same law as Findings projection).
 
 ---
@@ -162,8 +169,11 @@ Do **not** extend `platform_enrich_asset`. Do **not** let Agent set timestamps, 
 ## 9. Inject
 
 - Cold `task_assign` / compact checkpoint: `intel_summary` = up to **20** **living** lines (id + summary + hang). Soft-forgotten and 遗忘区 **excluded**.  
+- Hang filter (inject and Case 线索 share it): **Host-level** (no port) **+ Scope Service ports** from structured `target` / `scope.allow` (explicit `:port` or `port` field — no invented 80/443). If Scope names a Host with **no** port, that Host is whole-Host (all Service intel). `fact(list)` / asset 情报 tabs are **not** this filter — Agent can still open a sibling-port id.  
+
+- Render **before** prior-finding dumps (`scope_intel` / this-Case findings board). Login kinds (`credential_status` / `secret` / `token` / `account`) first. Summary is enough to act — recorded valid creds are the login path (do not recover via defaults / hash dump / booked RCE). Body via `fact(get)`, not `platform_get_intel` (that tool is not on the Expert pack).  
 - Secret kinds: summary/pointer only.  
-- Distinct from existing `case_context.scope_intel` (that remains **prior findings**). Do not overload that field.
+- Distinct from existing `case_context.scope_intel` (that remains a **prior-finding index**: path/module-folded title + one-line summary on Scope ports — not a retest queue). Do not overload that field.
 
 ---
 
@@ -184,3 +194,10 @@ Do **not** extend `platform_enrich_asset`. Do **not** let Agent set timestamps, 
 | 2026-08-15 | Notebook model: harness stamps id/audit/New; Agent record + forget only. |
 | 2026-08-15 | Two-step forget: 1st = soft (update still allowed); 2nd = 遗忘区, user-only, never to Agent. |
 | 2026-08-15 | Shipped: `asset_intel` + node/user APIs + citizen tools + Findings 线索 + Host/Service 情报. |
+| 2026-08-15 | Agent surface merged into `fact` (upsert/list/get/forget). platform_*_intel is harness HTTP only. |
+| 2026-08-15 | `access_count` harness stamp on get(id); UI eye + number. |
+| 2026-08-15 | Settle persist: optional wrap/next_steps notebook write; compact persist remains a separate pass. |
+| 2026-08-15 | `fact(op=surface)` removed. Attack surface is the `surface` tool; harness may copy deposits into `facts/`. |
+| 2026-08-15 | Case inject / 线索: Host-level + matching Scope Service ports; sibling ports on the same Host excluded. |
+| 2026-08-15 | Inject: living notebook before prior dumps; login kinds first; summary is enough to act; body via `fact(get)`. |
+| 2026-08-15 | Intel ≠ Evidence: Evidence supports Findings only; Intel is in-test operational notes. No restating booked proof into the notebook. |
