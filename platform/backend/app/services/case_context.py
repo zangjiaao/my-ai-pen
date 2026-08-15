@@ -22,6 +22,14 @@ _THREAD_INCLUDE_TYPES = frozenset({
     "user_steer",
     "user_input",
 })
+# Visible group speech only — thinking / tools / status / finding cards stay out.
+_SPEECH_INCLUDE_TYPES = frozenset({
+    "text",
+    "decision",
+    "confirm_card",
+    "user_steer",
+    "user_input",
+})
 # Status lines that are useful once (settlement), not every checkpoint.
 _STATUS_KEEP_SUBSTRINGS = (
     "completed",
@@ -158,6 +166,17 @@ def _speaker_from_message(role: str, content: dict, msg_type: str) -> str:
     return role or "agent"
 
 
+def _line_identity(msg: dict, content: dict) -> dict[str, str]:
+    mid = str(msg.get("id") or "").strip()
+    eid = str(content.get("expert_id") or content.get("expertId") or "").strip()
+    out: dict[str, str] = {}
+    if mid:
+        out["id"] = mid[:80]
+    if eid:
+        out["expert_id"] = eid[:80]
+    return out
+
+
 def _line_from_message(msg: dict) -> dict[str, str] | None:
     """Turn a stored message summary into one thread line, or None to skip."""
     role = str(msg.get("role") or "")
@@ -165,6 +184,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
     content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
     if not isinstance(content, dict):
         content = {}
+    ident = _line_identity(msg, content)
 
     if msg_type in _THREAD_INCLUDE_TYPES or role == "user":
         text = ""
@@ -187,6 +207,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
         if not text:
             return None
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": msg_type or "text",
             "text": _clip(text),
@@ -207,6 +228,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
         if not text:
             return None
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": "status",
             "text": _clip(text, 400),
@@ -220,6 +242,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
             return None
         tool = content.get("tool_name") or "tool"
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": "tool",
             "text": _clip(f"[{tool}] {summary}", 240),
@@ -246,6 +269,46 @@ def build_thread_from_messages(
     if limit > 0 and len(lines) > limit:
         lines = lines[-limit:]
     # Enforce total char budget from the end (keep latest)
+    kept: list[dict[str, str]] = []
+    used = 0
+    for line in reversed(lines):
+        n = len(line.get("text") or "") + len(line.get("speaker") or "") + 8
+        if used + n > total_chars and kept:
+            break
+        kept.append(line)
+        used += n
+    kept.reverse()
+    return kept
+
+
+def build_speech_from_messages(
+    messages: list[dict],
+    *,
+    limit: int = DEFAULT_THREAD_LIMIT,
+    total_chars: int = DEFAULT_TOTAL_CHARS,
+) -> list[dict[str, str]]:
+    """Append-only Case group speech (visible talk only), oldest→newest."""
+    lines: list[dict[str, str]] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        line = _line_from_message(msg)
+        if not line:
+            continue
+        kind = str(line.get("kind") or "")
+        role = str(msg.get("role") or "")
+        if kind not in _SPEECH_INCLUDE_TYPES and role != "user":
+            continue
+        if kind in {"vuln_found", "vuln_card", "status", "tool"}:
+            continue
+        if not str(line.get("text") or "").strip():
+            continue
+        if not str(line.get("id") or "").strip():
+            # Cursor needs a stable id; skip unidentifiable rows.
+            continue
+        lines.append(line)
+    if limit > 0 and len(lines) > limit:
+        lines = lines[-limit:]
     kept: list[dict[str, str]] = []
     used = 0
     for line in reversed(lines):
@@ -753,6 +816,7 @@ def build_case_context_payload(
     never full PoC dumps.
     """
     thread = build_thread_from_messages(messages, limit=thread_limit)
+    speech = build_speech_from_messages(messages, limit=thread_limit)
     findings_list = findings or []
     findings_summary = build_findings_summary(findings_list, limit=findings_limit)
     # Also fold vuln lines already in thread into board if findings empty
@@ -799,6 +863,7 @@ def build_case_context_payload(
         "version": 2,
         "conversation_id": conversation_id,
         "thread": thread,
+        "speech": speech,
         "findings_summary": findings_summary,
         "evidence_snippets": evidence_snippets,
         "artifact_hints": hints[:16],

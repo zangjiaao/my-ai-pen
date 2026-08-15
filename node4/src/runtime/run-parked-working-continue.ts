@@ -33,6 +33,7 @@ import {
   type ParkedWorkingRuntime,
   type WorkingWorkMode,
 } from "./working-session-park.js";
+import { formatCaseSpeechHarness, selectCaseSpeechDelta } from "./case-speech.js";
 
 export type ParkedContinueResult = {
   terminalStatus: "completed" | "incomplete" | "blocked";
@@ -232,7 +233,17 @@ export async function runParkedWorkingContinue(options: {
     if (cancelled()) {
       stop = "aborted";
     } else {
-      await session.prompt(task.instruction || "继续");
+      const userTurn = task.instruction || "继续";
+      const speech = selectCaseSpeechDelta(task.caseContext, {
+        cursor: parked.speechCursor,
+        selfExpertId: task.expertId || parked.expertId,
+        selfExpertName: task.expertName,
+        thisTurnText: userTurn,
+      });
+      await session.prompt(userTurn, {
+        prefixHarness: formatCaseSpeechHarness(speech.lines) || undefined,
+      });
+      parked.speechCursor = speech.cursorAfter || parked.speechCursor;
       if (cancelled()) {
         stop = "aborted";
       } else {
@@ -296,6 +307,7 @@ export async function runParkedWorkingContinue(options: {
         todo: parked.todo,
         accounts: task.accounts ?? parked.accounts,
         runtime: parked.runtime,
+        speechCursor: parked.speechCursor,
         dispose: parked.dispose,
       },
     });

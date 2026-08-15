@@ -15,8 +15,8 @@ A specialized pack instance (e.g. pentest, CTF, code audit) addressable by @ment
 _Avoid_: role seat; plugin (when meaning a full specialist pack); silent Free→Graph on resume
 
 **Case**:
-One conversation = one work group. Shares user-visible thread, Findings, evidence, scope/RoE.
-_Avoid_: Case sticky template as sole work-mode authority for every Expert resume
+One conversation = one work group. Shares user-visible thread, Findings, evidence, scope/RoE, and **visible group speech** (who said what — not thinking, not tools). Each Participant Session reads unread others’ speech via harness; it does not re-ingest its own talk.
+_Avoid_: Case sticky template as sole work-mode authority for every Expert resume; treating the UI thread as already inside a parked Session transcript
 
 **Participant Session**:
 Long-lived `conversation_id + expert_id` work identity. Private work mode, parked Graph, working memory. Multiple Sessions may exist on one Case; v1 only the current Mention runs.

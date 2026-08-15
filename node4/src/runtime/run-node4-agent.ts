@@ -42,7 +42,7 @@ export type Node4AgentSession = {
    */
   prompt: (
     text: string,
-    opts?: { source?: string; channel?: "user" | "harness" },
+    opts?: { source?: string; channel?: "user" | "harness"; prefixHarness?: string },
   ) => Promise<void>;
   abort: () => void;
   dispose: () => void | Promise<void>;
@@ -222,14 +222,25 @@ export function wrapAgentAsSession(
   opts?: { occupancyError?: () => string | undefined },
 ): Node4AgentSession {
   return {
-    prompt: async (text: string, promptOpts?: { source?: string; channel?: "user" | "harness" }) => {
+    prompt: async (
+      text: string,
+      promptOpts?: { source?: string; channel?: "user" | "harness"; prefixHarness?: string },
+    ) => {
       const occ = opts?.occupancyError?.();
       if (occ) {
         const { occupancyLlmTurnError } = await import("./context-window.js");
         throw occupancyLlmTurnError(occ);
       }
+      const prefix = String(promptOpts?.prefixHarness || "").trim();
       if (promptOpts?.channel === "harness") {
         await agent.prompt(makeHarnessMessage(text));
+        return;
+      }
+      if (prefix) {
+        await agent.prompt([
+          makeHarnessMessage(prefix),
+          { role: "user", content: text, timestamp: Date.now() },
+        ]);
         return;
       }
       await agent.prompt(text);

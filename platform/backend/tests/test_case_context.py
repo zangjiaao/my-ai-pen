@@ -5,6 +5,7 @@ from app.services.case_context import (
     build_evidence_snippets,
     build_findings_summary,
     build_scope_intel_card,
+    build_speech_from_messages,
     build_thread_from_messages,
     case_intel_port_scope,
     collapse_prior_index,
@@ -61,6 +62,66 @@ def test_thread_keeps_user_and_agent_text_skips_noise_status():
     assert "RCE confirmed" in texts
     assert "Command injection" in texts
     assert "checkpoint tick" not in texts
+
+
+def test_speech_is_visible_talk_with_ids_skips_findings_and_status():
+    messages = [
+        {
+            "id": "m1",
+            "role": "user",
+            "msg_type": "text",
+            "content": {"text": "Please assess http://lab/app"},
+            "created_at": "2026-01-01T00:00:00",
+        },
+        {
+            "id": "m2",
+            "role": "agent",
+            "msg_type": "status",
+            "content": {"text": "checkpoint tick", "status": "running"},
+            "created_at": "2026-01-01T00:00:01",
+        },
+        {
+            "id": "m3",
+            "role": "agent",
+            "msg_type": "text",
+            "content": {
+                "text": "RCE confirmed; source dumped.",
+                "expert_name": "app-sec",
+                "expert_id": "exp-1",
+            },
+            "created_at": "2026-01-01T00:01:00",
+        },
+        {
+            "id": "m4",
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {
+                "title": "Command injection RCE",
+                "severity": "critical",
+                "location": "/upload",
+                "status": "confirmed",
+            },
+            "created_at": "2026-01-01T00:01:05",
+        },
+        {
+            "id": "m5",
+            "role": "agent",
+            "msg_type": "thinking",
+            "content": {"text": "I should try upload next"},
+            "created_at": "2026-01-01T00:01:06",
+        },
+    ]
+    speech = build_speech_from_messages(messages)
+    ids = [s["id"] for s in speech]
+    kinds = [s["kind"] for s in speech]
+    assert ids == ["m1", "m3"]
+    assert "tool" not in kinds
+    assert "status" not in kinds
+    assert speech[1]["expert_id"] == "exp-1"
+    texts = " ".join(s["text"] for s in speech)
+    assert "checkpoint tick" not in texts
+    assert "Command injection" not in texts
+    assert "I should try upload" not in texts
 
 
 def test_findings_summary_includes_evidence_ids_and_proof():
@@ -164,6 +225,7 @@ def test_evidence_snippets_prefer_linked_proof():
 def test_payload_has_version_and_evidence_snippets():
     messages = [
         {
+            "id": "u1",
             "role": "user",
             "msg_type": "text",
             "content": {
@@ -205,6 +267,8 @@ def test_payload_has_version_and_evidence_snippets():
     assert payload["version"] == 2
     assert payload["conversation_id"] == "conv-1"
     assert payload["thread"]
+    assert payload["speech"]
+    assert payload["speech"][0]["id"] == "u1"
     assert payload["findings_summary"][0]["title"] == "RCE"
     assert payload["findings_summary"][0]["evidence_ids"] == ["ev_src"]
     assert payload["evidence_snippets"]

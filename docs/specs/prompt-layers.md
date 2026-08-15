@@ -57,7 +57,7 @@ Learned from pi-coding-agent (`research/pi/packages/coding-agent/src/core/system
 |---------|---------------------|----------|----------------|
 | **System** | Four layers, one string, Standing-first | Policy, how this seat works, this-run switches, this-turn facts | Operator utterance; skill encyclopedia; tool JSON schema |
 | **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope, outer continue |
-| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint | Operator utterance; always-on policy (that stays system) |
+| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint; **unread Case speech from others** (`### Case speech`) | Operator utterance; this Session’s own speech; always-on policy |
 | **Tool result** | Appended tool text | Mid-run todo / booking / surface nudges (`### This-run …`) | Operator utterance |
 | **Tool definitions** | Name + description + parameters (parallel to text) | How to call the tool | Policy essays, start-order, Case facts |
 | **Skill body** | After `skill(get)` / worker load | Attack-class procedure | Always-on Profession; Graph settlement law |
@@ -72,7 +72,8 @@ Harness is a **channel**, not a fifth system layer. Park continue and cold Free 
   ## Profession   citizen (today) + mission.md + work.md
   ## Runtime      tools / skill ids / work-mode / RoE / optional todo·booking reminders
   ## This turn    ### Case (markdown lists) → Engagement (target/scope/instruction as bullets) → goals
-[harness]         ## Runtime / ### Continue  (outer continue, persist-pass, checkpoint — not operator)
+[harness]         ## Runtime / ### Continue  (outer continue, persist-pass, checkpoint)
+                  ### Case speech            (unread others only — cursor, not a 123+1234 dump)
 [user]
   <operator utterance>
 ```
@@ -97,6 +98,7 @@ Ask one question; put the sentence in **exactly one** home.
 | True only for *this turn* (Case 活情报 / prior catalog, Target, Scope, Instruction, session title, process-fact index, goals) | **Task** |
 | What the human just said | **User turn** |
 | Lab outer continue / occupancy persist or checkpoint (not the operator) | **Harness** (`### Continue` / `### Context window` / `### Checkpoint rehydrate`) |
+| Unread Case group speech from other Sessions / the operator (not self, not this-turn user) | **Harness** `### Case speech` (delta after Session cursor) |
 | Mid-run todo / booking / surface nudge after a tool | **Tool result** (`### This-run todo` / `### This-run booking` / `### Surface`) |
 | How to invoke a tool | **Tool schema** |
 
@@ -105,6 +107,7 @@ Ask one question; put the sentence in **exactly one** home.
 - **One home.** If citizen already says it, do not restate in `work.md`, Runtime one-liners, and the user turn.
 - **Facts last in system, not first in user.** Case / Target / Scope stay in Task. User is not a second Case dump.
 - **Reminders are Runtime, not user.** `eagerTodo` / `eagerBooking` / chat-only “no target” are opted-in system Runtime (`BuildSystemPromptOptions`). They render as markdown (`### This-run todo` / `### This-run booking`). Runtime work-mode, graph catalog, and RoE use `### Work mode` / `### Available graphs` / `### Rules of engagement`. Goal inject in This turn uses `### Goal`. Outer continue / goal / budget use the **Harness** channel (`### Continue`, `session.prompt(..., { channel: "harness" })`). Mid-run nudges append to the **tool result** with the same `###` headings. Do not wrap harness in XML. Do not put harness in the user turn.
+- **Case speech is harness, not system Thread.** Case `messages` is the append-only group log (visible talk only). Each Main / park turn injects **unread others** after the Session cursor (`speechCursor` on the parked runtime). Do not re-dump 1–3 then 1–4. Do not put `### Thread` back in This turn. Thinking and tool process stay Session-private.
 - **No encyclopedia in always-on.** Graph settlement, package `plan_node_id` law, and class playbooks stay out of Free Profession.
 - **Skill ids ≠ skill bodies.** Runtime lists ids; bodies enter only via `skill` / worker load.
 - **Do not invent a sixth layer** for “environment.” Environment = Task (Case + target) + RoE (Runtime).
@@ -404,4 +407,5 @@ Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai
 |------|--------|
 | 2026-08-15 | Locked assembly §1.5: four channels; user turn = utterance only; visible Profession/Runtime/Task fences; placement table; pi-coding-agent lessons. |
 | 2026-08-15 | Task/Case inject is markdown lists only — no JSON.stringify of target/scope; Case block is facts, not policy essays. |
-| 2026-08-16 | Harness channel: outer continue / persist-pass / checkpoint are `role=harness` (markdown `## Runtime`), not fake user turns. Mid-run nudges stay on the tool result. | 
+| 2026-08-16 | Harness channel: outer continue / persist-pass / checkpoint are `role=harness` (markdown `## Runtime`), not fake user turns. Mid-run nudges stay on the tool result. |
+| 2026-08-16 | Case group speech: `case_context.speech` log + Session cursor; harness `### Case speech` is unread others only. System `### Thread` retired. | 
