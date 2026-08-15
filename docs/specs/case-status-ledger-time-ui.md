@@ -71,6 +71,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
 | **Work seconds (S)** | Sum of busy intervals — **not** wall-clock `now − started_at` |
 | **Parallel (U)** | **Union** of busy intervals (at least one worker busy), not sum of Main+Sub seconds |
 | **Authorize wait (H1)** | Pending user authorize/cancel is **not** busy; Task package status **`paused`** (yellow light; not covered by `working` blue; alias `pause` normalizes to `paused`) |
+| **Park / incomplete** | Harness half-settle (user interrupt / Session continue). No live task. Light is **yellow** (`incomplete`) — same wait family as paused. Sticky `working` must not repaint it blue. |
 | **Same-user-message auto-retry (R1)** | Same work-burst; mergeable busy until final success/abandon |
 | **API error** | Closes **current** busy interval; updates last activity; **does not** close Case or clear `started_at` |
 | **Reset (Z1)** | No mid-Case reset |
@@ -81,6 +82,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
 |-----------|----------|
 | **Chat day/time stamps** | Chat-app style date separators / message times; long-lived |
 | **Composer live timer** (near Send) | Visible only while Case has active work-burst busy (**C1**); pauses on authorize; **stops and disappears** on burst settle |
+| **List-tail Working chrome** | Same **C1** seconds as composer (work-burst ledger). Not mount-local — remount / route change must resume, not restart. |
 | **Agent result anchor** (bottom-right of burst result) | **One duration per work-burst (B1)** — finalized work-seconds from the same C1 clock; long-lived; not on every tool/thinking card |
 | **Internal status notices** | Do **not** render infra notices such as `tooling_health` as chat status chrome |
 

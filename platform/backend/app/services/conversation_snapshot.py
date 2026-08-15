@@ -382,24 +382,24 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         )
     except Exception:
         surface_ledger_doc = {"version": 1, "updated_at": None, "surfaces": []}
-    intel_items: list[dict] = []
-    intel_forgotten_items: list[dict] = []
-    intel_sealed_items: list[dict] = []
+    intel_items: list[dict] | None = None
+    intel_forgotten_items: list[dict] | None = None
+    intel_sealed_items: list[dict] | None = None
     try:
-        from app.services.case_context import _scope_asset_ids
+        from app.services.case_context import _scope_intel_port_map
         from app.services.owner_intel import list_intel
 
-        scope_ids = await _scope_asset_ids(
+        port_scope = await _scope_intel_port_map(
             db, cid=conversation.id, uid=user_id, conv_context=context
         )
         task_id = None
         if isinstance(task_context, dict):
             task_id = str(task_context.get("task_id") or task_context.get("id") or "").strip() or None
-        if scope_ids:
+        if port_scope:
             intel_items, _ = await list_intel(
                 db,
                 user_id=user_id,
-                asset_ids=scope_ids,
+                port_scope=port_scope,
                 status="active",
                 audience="user",
                 current_task_id=task_id,
@@ -409,7 +409,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             intel_forgotten_items, _ = await list_intel(
                 db,
                 user_id=user_id,
-                asset_ids=scope_ids,
+                port_scope=port_scope,
                 status="forgotten",
                 audience="user",
                 current_task_id=task_id,
@@ -419,17 +419,22 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             intel_sealed_items, _ = await list_intel(
                 db,
                 user_id=user_id,
-                asset_ids=scope_ids,
+                port_scope=port_scope,
                 status="sealed",
                 audience="user",
                 current_task_id=task_id,
                 limit=100,
                 include_body=False,
             )
+        else:
+            intel_items = []
+            intel_forgotten_items = []
+            intel_sealed_items = []
     except Exception:
-        intel_items = []
-        intel_forgotten_items = []
-        intel_sealed_items = []
+        # Fail open for the panel: omit keys so FE keeps live intel_upsert rows.
+        intel_items = None
+        intel_forgotten_items = None
+        intel_sealed_items = None
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
     # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
@@ -493,9 +498,15 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "kanban": kanban,
         "todos": todos,
         "findings": findings,
-        "intel": intel_items,
-        "intel_forgotten": intel_forgotten_items,
-        "intel_sealed": intel_sealed_items,
+        **(
+            {
+                "intel": intel_items,
+                "intel_forgotten": intel_forgotten_items,
+                "intel_sealed": intel_sealed_items,
+            }
+            if intel_items is not None
+            else {}
+        ),
         "assets": asset_items,
         "checkpoint": checkpoint or {},
         # Spec #163: latest Graph engagement close-out (same JSON as Node taskDir file)

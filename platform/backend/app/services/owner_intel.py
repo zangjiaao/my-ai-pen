@@ -1,7 +1,8 @@
 """Owner-ledger Intel (线索 / 情报) — Spec owner-intel.md / map #459.
 
 Agent supplies summary + body + hang + kind. Harness stamps id / time / source /
-created_task_id / forget_count / New. Status is derived from forget_count.
+created_task_id / forget_count / access_count / New. Status is derived from forget_count.
+access_count increments on get(id) only (operator open / Agent get), not list or inject.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Iterable, Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.asset import Asset
@@ -66,6 +67,14 @@ def apply_forget(forget_count: int) -> dict[str, Any]:
     return {"forget_count": nxt, "status": status_from_forget_count(nxt)}
 
 
+def next_access_count(access_count: object) -> int:
+    try:
+        n = int(access_count or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return max(0, n) + 1
+
+
 def agent_may_list(row: dict[str, Any]) -> bool:
     return status_from_forget_count(int(row.get("forget_count") or 0)) == "active"
 
@@ -76,6 +85,64 @@ def agent_may_get(row: dict[str, Any]) -> bool:
 
 def agent_may_update(row: dict[str, Any]) -> bool:
     return agent_may_get(row)
+
+
+def intel_port_key(port: object) -> str | None:
+    """Empty / missing hang port → Host-level. Else a normalized Service port."""
+    if port is None or str(port).strip() == "":
+        return None
+    return normalize_port(port) or str(port).strip()
+
+
+def intel_matches_case_scope(
+    *,
+    asset_id: str,
+    port: object,
+    port_scope: dict[str, set[str] | None],
+) -> bool:
+    """Case 线索 / inject: Host-level + Scope Service ports; sibling ports out.
+
+    port_scope[asset_id]:
+      None — Scope named the Host with no ports → whole Host
+      set  — those Service ports plus Host-level (empty port)
+    """
+    aid = str(asset_id or "").strip()
+    if not aid or aid not in port_scope:
+        return False
+    allowed = port_scope[aid]
+    if allowed is None:
+        return True
+    key = intel_port_key(port)
+    if key is None:
+        return True
+    allowed_n = {intel_port_key(p) for p in allowed}
+    allowed_n.discard(None)
+    return key in allowed_n
+
+
+def case_scope_sql_clause(port_scope: dict[str, set[str] | None]):
+    """SQLAlchemy predicate matching intel_matches_case_scope."""
+    parts: list[Any] = []
+    host_level = or_(AssetIntel.port.is_(None), AssetIntel.port == "")
+    for aid_raw, ports in (port_scope or {}).items():
+        try:
+            aid = uuid.UUID(str(aid_raw))
+        except ValueError:
+            continue
+        if ports is None:
+            parts.append(AssetIntel.asset_id == aid)
+            continue
+        allowed = sorted({p for p in (intel_port_key(x) for x in ports) if p})
+        if allowed:
+            parts.append(
+                and_(
+                    AssetIntel.asset_id == aid,
+                    or_(host_level, AssetIntel.port.in_(allowed)),
+                )
+            )
+        else:
+            parts.append(and_(AssetIntel.asset_id == aid, host_level))
+    return or_(*parts) if parts else false()
 
 
 def normalize_hang(payload: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +166,7 @@ _AGENT_AUDIT_KEYS = frozenset(
         "new",
         "is_new",
         "forget_count",
+        "access_count",
         "status",
         "sensitivity",
         "created_task_id",
@@ -154,6 +222,7 @@ def intel_to_dict(row: AssetIntel, *, include_body: bool = True) -> dict[str, An
         "source": row.source,
         "created_task_id": row.created_task_id,
         "forget_count": forget,
+        "access_count": int(row.access_count or 0),
         "status": status_from_forget_count(forget),
         "sensitivity": row.sensitivity,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -245,6 +314,7 @@ async def record_intel(
         source=src,
         created_task_id=str(created_task_id or "").strip() or None,
         forget_count=0,
+        access_count=0,
         sensitivity=default_sensitivity(kind),
         created_at=now,
         updated_at=now,
@@ -262,6 +332,7 @@ async def list_intel(
     asset_id: str | None = None,
     asset_ids: list[str] | None = None,
     port: str | None = None,
+    port_scope: dict[str, set[str] | None] | None = None,
     status: str | None = None,
     audience: Audience = "agent",
     current_task_id: str | None = None,
@@ -291,7 +362,9 @@ async def list_intel(
             continue
         seen.add(a)
         aids.append(a)
-    if aids:
+    if port_scope:
+        filters.append(case_scope_sql_clause(port_scope))
+    elif aids:
         filters.append(AssetIntel.asset_id.in_(aids))
 
     if port is not None and str(port).strip() != "":
@@ -349,7 +422,14 @@ async def get_intel(
     data = project_new(intel_to_dict(row), current_task_id=current_task_id)
     if audience == "agent" and not agent_may_get(data):
         raise IntelError("forgotten", status_code=404)
-    return data
+    await db.execute(
+        update(AssetIntel)
+        .where(AssetIntel.id == row.id)
+        .values(access_count=AssetIntel.access_count + 1)
+    )
+    await db.commit()
+    await db.refresh(row)
+    return project_new(intel_to_dict(row), current_task_id=current_task_id)
 
 
 async def forget_intel(
@@ -383,11 +463,13 @@ async def living_intel_for_assets(
     asset_ids: list[str],
     current_task_id: str | None = None,
     limit: int = MAX_INTEL_INJECT,
+    port_scope: dict[str, set[str] | None] | None = None,
 ) -> list[dict[str, Any]]:
     items, _ = await list_intel(
         db,
         user_id=user_id,
-        asset_ids=asset_ids,
+        asset_ids=None if port_scope else asset_ids,
+        port_scope=port_scope,
         audience="agent",
         current_task_id=current_task_id,
         limit=limit,

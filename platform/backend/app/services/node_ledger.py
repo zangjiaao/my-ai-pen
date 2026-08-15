@@ -794,6 +794,8 @@ async def list_vulnerabilities(
     conversation_only: bool = False,
     asset_id: str | None = None,
     asset_ids: list[str] | None = None,
+    port: str | None = None,
+    q: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
     List ledger findings for agent tools.
@@ -845,6 +847,22 @@ async def list_vulnerabilities(
         aids.append(a)
     if aids:
         filters.append(Vulnerability.asset_id.in_(aids))
+
+    port_s = str(port or "").strip()
+    if port_s:
+        from app.services.asset_ledger import normalize_port
+
+        filters.append(Vulnerability.port == (normalize_port(port_s) or port_s))
+    needle = str(q or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        filters.append(
+            or_(
+                Vulnerability.title.ilike(like),
+                Vulnerability.description.ilike(like),
+                Vulnerability.location_key.ilike(like),
+            )
+        )
 
     count_stmt = select(func.count()).select_from(Vulnerability)
     for f in filters:

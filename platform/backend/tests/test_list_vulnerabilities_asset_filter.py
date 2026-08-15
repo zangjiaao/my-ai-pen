@@ -11,6 +11,8 @@ def test_list_vulnerabilities_signature_has_asset_filters():
     assert "asset_id" in sig.parameters
     assert "asset_ids" in sig.parameters
     assert "offset" in sig.parameters
+    assert "port" in sig.parameters
+    assert "q" in sig.parameters
 
 
 def test_aid_dedupe_logic():
