@@ -8,11 +8,12 @@ import {
   hangLabel,
   intelStatus,
   isIntelNew,
+  sortIntelRowsByAccess,
   type IntelRow,
   type IntelStatus,
 } from "../lib/intelView";
 
-type Filter = "active" | "forgotten" | "sealed";
+type Filter = "active" | "folded" | "forgotten";
 
 export function IntelList({
   rows,
@@ -20,20 +21,25 @@ export function IntelList({
   emptyCopy,
   showHang = false,
   showArchive = true,
+  onRowChange,
 }: {
   rows: IntelRow[];
   currentTaskId?: string | null;
   emptyCopy: string;
   showHang?: boolean;
   showArchive?: boolean;
+  onRowChange?: (row: IntelRow, action: "upsert" | "delete") => void;
 }) {
   const [filter, setFilter] = useState<Filter>("active");
   const [opened, setOpened] = useState<IntelRow | null>(null);
   const [accessById, setAccessById] = useState<Record<string, number>>({});
   const living = useMemo(() => filterIntelRows(rows, "active"), [rows]);
+  const folded = useMemo(() => filterIntelRows(rows, "folded"), [rows]);
   const forgotten = useMemo(() => filterIntelRows(rows, "forgotten"), [rows]);
-  const sealed = useMemo(() => filterIntelRows(rows, "sealed"), [rows]);
-  const visible = filter === "active" ? living : filter === "forgotten" ? forgotten : sealed;
+  const visible = useMemo(() => {
+    const list = filter === "active" ? living : filter === "folded" ? folded : forgotten;
+    return sortIntelRowsByAccess(list, accessById);
+  }, [filter, living, folded, forgotten, accessById]);
 
   return (
     <div className="space-y-3" data-testid="intel-list">
@@ -49,25 +55,29 @@ export function IntelList({
           </button>
           <button
             type="button"
+            data-testid="intel-filter-folded"
+            onClick={() => setFilter("folded")}
+            className={`rounded-md px-2 py-1 text-[11px] ${filter === "folded" ? "bg-canvas-inset text-ink" : "text-ink-muted hover:text-ink"}`}
+          >
+            遗忘区 ({folded.length})
+          </button>
+          <button
+            type="button"
             data-testid="intel-filter-forgotten"
             onClick={() => setFilter("forgotten")}
             className={`rounded-md px-2 py-1 text-[11px] ${filter === "forgotten" ? "bg-canvas-inset text-ink" : "text-ink-muted hover:text-ink"}`}
           >
-            已遗忘 ({forgotten.length})
-          </button>
-          <button
-            type="button"
-            data-testid="intel-filter-sealed"
-            onClick={() => setFilter("sealed")}
-            className={`rounded-md px-2 py-1 text-[11px] ${filter === "sealed" ? "bg-canvas-inset text-ink" : "text-ink-muted hover:text-ink"}`}
-          >
-            遗忘区 ({sealed.length})
+            已忘记 ({forgotten.length})
           </button>
         </div>
       ) : null}
       {!visible.length ? (
         <p className="text-sm text-ink-muted" data-testid="intel-empty">
-          {filter === "forgotten" ? "没有已遗忘的线索。" : filter === "sealed" ? "遗忘区是空的。" : emptyCopy}
+          {filter === "folded"
+            ? "遗忘区是空的。"
+            : filter === "forgotten"
+              ? "没有已忘记的线索。"
+              : emptyCopy}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -115,6 +125,11 @@ export function IntelList({
             setAccessById((prev) => ({ ...prev, [id]: accessCount(next) }));
             setOpened(next);
           }}
+          onRowChange={(row, action) => {
+            onRowChange?.(row, action);
+            if (action === "delete") setOpened(null);
+            else setOpened(row);
+          }}
           onClose={() => setOpened(null)}
         />
       ) : null}
@@ -144,8 +159,8 @@ const KIND_CHIP: Record<string, string> = {
 
 const STATUS_STEPS: Array<{ id: IntelStatus; label: string }> = [
   { id: "active", label: "在用" },
-  { id: "forgotten", label: "已遗忘" },
-  { id: "sealed", label: "遗忘区" },
+  { id: "folded", label: "遗忘区" },
+  { id: "forgotten", label: "已忘记" },
 ];
 
 function kindLabel(kind: unknown): string {
@@ -193,17 +208,21 @@ function IntelDetailDialog({
   currentTaskId,
   accessCountOverride,
   onAccessed,
+  onRowChange,
   onClose,
 }: {
   row: IntelRow;
   currentTaskId?: string | null;
   accessCountOverride?: number;
   onAccessed?: (row: IntelRow) => void;
+  onRowChange?: (row: IntelRow, action: "upsert" | "delete") => void;
   onClose: () => void;
 }) {
   const [full, setFull] = useState<IntelRow>(row);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(Boolean(row.body));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     const id = String(row.id || "").trim();
@@ -356,7 +375,119 @@ function IntelDetailDialog({
           <p className="break-all font-mono text-sm leading-relaxed text-ink-secondary">
             {[recordId || "—", sourceLabel(full.source || row.source), stamp].filter(Boolean).join(" · ")}
           </p>
+          {status === "forgotten" ? (
+            <p className="mt-2 text-sm text-ink-secondary">
+              已忘记
+              {full.forgotten_by === "agent" ? "（Agent）" : full.forgotten_by === "user" ? "（用户）" : ""}
+              {full.forget_reason ? ` — ${full.forget_reason}` : ""}
+            </p>
+          ) : null}
         </section>
+
+        {recordId ? (
+          <section className="mt-5 space-y-2">
+            {status !== "forgotten" ? (
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase text-ink-secondary">遗忘原因</span>
+                <input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder={status === "folded" ? "可选" : "手动遗忘时填写"}
+                  className="w-full rounded-md border border-hairline px-2 py-1.5 text-sm"
+                />
+              </label>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {status === "folded" ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
+                  onClick={() => {
+                    setBusy(true);
+                    authFetch<{ intel?: IntelRow }>(`/api/intel/${encodeURIComponent(recordId)}/restore`, {
+                      method: "POST",
+                    })
+                      .then((data) => {
+                        if (data.intel) {
+                          setFull(data.intel);
+                          onRowChange?.(data.intel, "upsert");
+                        }
+                      })
+                      .catch((err) => setError(err instanceof Error ? err.message : "激活失败"))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  激活
+                </button>
+              ) : null}
+              {status !== "forgotten" ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
+                  onClick={() => {
+                    setBusy(true);
+                    authFetch<{ intel?: IntelRow }>(`/api/intel/${encodeURIComponent(recordId)}/forget`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ reason }),
+                    })
+                      .then((data) => {
+                        if (data.intel) {
+                          setFull(data.intel);
+                          onRowChange?.(data.intel, "upsert");
+                        }
+                      })
+                      .catch((err) => setError(err instanceof Error ? err.message : "遗忘失败"))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  忘记
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
+                    onClick={() => {
+                      setBusy(true);
+                      authFetch<{ intel?: IntelRow }>(`/api/intel/${encodeURIComponent(recordId)}/restore`, {
+                        method: "POST",
+                      })
+                        .then((data) => {
+                          if (data.intel) {
+                            setFull(data.intel);
+                            onRowChange?.(data.intel, "upsert");
+                          }
+                        })
+                        .catch((err) => setError(err instanceof Error ? err.message : "恢复失败"))
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    恢复
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="rounded-md border border-severity-critical/40 px-3 py-1.5 text-xs text-severity-critical hover:bg-severity-critical-subtle"
+                    onClick={() => {
+                      if (!window.confirm("彻底删除这条线索？")) return;
+                      setBusy(true);
+                      authFetch(`/api/intel/${encodeURIComponent(recordId)}`, { method: "DELETE" })
+                        .then(() => onRowChange?.({ ...full, id: recordId }, "delete"))
+                        .catch((err) => setError(err instanceof Error ? err.message : "删除失败"))
+                        .finally(() => setBusy(false));
+                    }}
+                  >
+                    删除
+                  </button>
+                </>
+              )}
+            </div>
+          </section>
+        ) : null}
       </div>
     </div>,
     document.body,

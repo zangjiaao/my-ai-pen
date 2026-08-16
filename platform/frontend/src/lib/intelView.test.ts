@@ -7,15 +7,20 @@ import {
   filterIntelRows,
   accessCount,
   hangLabel,
+  intelStatus,
   isIntelNew,
   mergeIntelSnapshot,
+  sortIntelRowsByAccess,
   statusFromForgetCount,
   upsertIntelRow,
 } from "./intelView.ts";
 
 assert.equal(statusFromForgetCount(0), "active");
 assert.equal(statusFromForgetCount(1), "forgotten");
-assert.equal(statusFromForgetCount(2), "sealed");
+assert.equal(statusFromForgetCount(2), "forgotten");
+assert.equal(intelStatus({ idle_case_count: 3 }), "folded");
+assert.equal(intelStatus({ idle_case_count: 2 }), "active");
+assert.equal(intelStatus({ forget_count: 1, idle_case_count: 9 }), "forgotten");
 
 assert.equal(isIntelNew({ created_task_id: "t1" }, "t1"), true);
 assert.equal(isIntelNew({ created_task_id: "t1" }, "t2"), false);
@@ -45,10 +50,36 @@ const living = filterIntelRows(
   "active",
 );
 assert.deepEqual(living.map((r) => r.id), ["1"]);
-assert.deepEqual(filterIntelRows(living.concat([{ id: "3", status: "sealed" }]), "sealed").map((r) => r.id), ["3"]);
+assert.deepEqual(
+  filterIntelRows(
+    [
+      { id: "2", forget_count: 1 },
+      { id: "3", forget_count: 2, status: "sealed" },
+    ],
+    "forgotten",
+  ).map((r) => r.id),
+  ["2", "3"],
+);
 
 const upserted = upsertIntelRow([{ id: "1", summary: "old" }], { id: "1", summary: "new", forget_count: 1 });
 assert.equal(upserted[0].summary, "new");
 assert.equal(upserted.length, 1);
+
+const ranked = sortIntelRowsByAccess([
+  { id: "a", access_count: 1, updated_at: "2026-01-02" },
+  { id: "b", access_count: 5, updated_at: "2026-01-01" },
+  { id: "c", access_count: 5, updated_at: "2026-01-03" },
+]);
+assert.deepEqual(ranked.map((r) => r.id), ["c", "b", "a"]);
+assert.deepEqual(
+  sortIntelRowsByAccess(
+    [
+      { id: "a", access_count: 1 },
+      { id: "b", access_count: 1 },
+    ],
+    { a: 9 },
+  ).map((r) => r.id),
+  ["a", "b"],
+);
 
 console.log("intelView.test.ts: all ok");

@@ -1,8 +1,9 @@
 """Owner-ledger Intel (线索 / 情报) — Spec owner-intel.md / map #459.
 
 Agent supplies summary + body + hang + kind. Harness stamps id / time / source /
-created_task_id / forget_count / access_count / New. Status is derived from forget_count.
+created_task_id / forget audit / access_count / New / unused-fold.
 access_count increments on get(id) only (operator open / Agent get), not list or inject.
+Unused across FOLD_IDLE_CASES Cases → folded (遗忘区). Hard forget is agent|user.
 """
 from __future__ import annotations
 
@@ -30,6 +31,9 @@ SECRET_KINDS = frozenset({"secret", "token", "flag"})
 MAX_SUMMARY = 400
 MAX_BODY = 8000
 MAX_INTEL_INJECT = 20
+MAX_FORGET_REASON = 400
+# After this many scoped Cases without get/upsert, harness folds the row off 线索.
+FOLD_IDLE_CASES = 3
 
 Audience = Literal["agent", "user"]
 
@@ -54,17 +58,45 @@ def default_sensitivity(kind: str) -> str:
 
 
 def status_from_forget_count(count: int) -> str:
-    n = int(count or 0)
-    if n <= 0:
-        return "active"
-    if n == 1:
+    """Hard-forget only. Folded unused is `lifecycle_status`, not this."""
+    return "forgotten" if int(count or 0) >= 1 else "active"
+
+
+def lifecycle_status(
+    *,
+    forget_count: object = 0,
+    idle_case_count: object = 0,
+    forgotten_by: object = None,
+) -> str:
+    if int(forget_count or 0) >= 1 or str(forgotten_by or "").strip():
         return "forgotten"
-    return "sealed"
+    if int(idle_case_count or 0) >= FOLD_IDLE_CASES:
+        return "folded"
+    return "active"
 
 
 def apply_forget(forget_count: int) -> dict[str, Any]:
-    nxt = int(forget_count or 0) + 1
-    return {"forget_count": nxt, "status": status_from_forget_count(nxt)}
+    n = int(forget_count or 0)
+    nxt = 1 if n <= 0 else n
+    return {"forget_count": nxt, "status": "forgotten"}
+
+
+def next_idle_case_count(
+    *,
+    conversation_id: str,
+    last_used_conversation_id: str | None,
+    last_idle_conversation_id: str | None,
+    idle_case_count: int,
+) -> tuple[int, str | None]:
+    """One increment per Case. Used this Case resets idle. Same Case not double-counted."""
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        return int(idle_case_count or 0), last_idle_conversation_id
+    if str(last_used_conversation_id or "").strip() == cid:
+        return 0, last_idle_conversation_id
+    if str(last_idle_conversation_id or "").strip() == cid:
+        return int(idle_case_count or 0), last_idle_conversation_id
+    return int(idle_case_count or 0) + 1, cid
 
 
 def next_access_count(access_count: object) -> int:
@@ -76,11 +108,15 @@ def next_access_count(access_count: object) -> int:
 
 
 def agent_may_list(row: dict[str, Any]) -> bool:
-    return status_from_forget_count(int(row.get("forget_count") or 0)) == "active"
+    return lifecycle_status(
+        forget_count=row.get("forget_count"),
+        idle_case_count=row.get("idle_case_count"),
+        forgotten_by=row.get("forgotten_by"),
+    ) != "forgotten"
 
 
 def agent_may_get(row: dict[str, Any]) -> bool:
-    return status_from_forget_count(int(row.get("forget_count") or 0)) != "sealed"
+    return agent_may_list(row)
 
 
 def agent_may_update(row: dict[str, Any]) -> bool:
@@ -170,6 +206,11 @@ _AGENT_AUDIT_KEYS = frozenset(
         "status",
         "sensitivity",
         "created_task_id",
+        "idle_case_count",
+        "last_idle_conversation_id",
+        "last_used_conversation_id",
+        "forgotten_by",
+        "forget_reason",
     }
 )
 
@@ -202,17 +243,37 @@ def format_intel_inject_line(row: dict[str, Any]) -> str:
 
 def intel_summary_lines(rows: Iterable[dict[str, Any]], *, limit: int = MAX_INTEL_INJECT) -> list[str]:
     out: list[str] = []
+    folded: list[str] = []
     for row in rows:
-        if not agent_may_list(row):
+        life = lifecycle_status(
+            forget_count=row.get("forget_count"),
+            idle_case_count=row.get("idle_case_count"),
+            forgotten_by=row.get("forgotten_by"),
+        )
+        if life == "forgotten":
+            continue
+        if life == "folded":
+            rid = str(row.get("id") or "").strip()
+            if rid:
+                folded.append(rid)
             continue
         out.append(format_intel_inject_line(row))
         if len(out) >= max(1, int(limit)):
             break
+    if folded:
+        shown = folded[:12]
+        more = len(folded) - len(shown)
+        tail = f" +{more} more" if more > 0 else ""
+        out.append(
+            f"Folded unused ({len(folded)}): get/upsert id to activate — {', '.join(shown)}{tail}."
+        )
     return out
 
 
 def intel_to_dict(row: AssetIntel, *, include_body: bool = True) -> dict[str, Any]:
     forget = int(row.forget_count or 0)
+    idle = int(getattr(row, "idle_case_count", 0) or 0)
+    forgotten_by = getattr(row, "forgotten_by", None)
     data: dict[str, Any] = {
         "id": str(row.id),
         "asset_id": str(row.asset_id),
@@ -223,7 +284,14 @@ def intel_to_dict(row: AssetIntel, *, include_body: bool = True) -> dict[str, An
         "created_task_id": row.created_task_id,
         "forget_count": forget,
         "access_count": int(row.access_count or 0),
-        "status": status_from_forget_count(forget),
+        "idle_case_count": idle,
+        "forgotten_by": forgotten_by,
+        "forget_reason": getattr(row, "forget_reason", None),
+        "status": lifecycle_status(
+            forget_count=forget,
+            idle_case_count=idle,
+            forgotten_by=forgotten_by,
+        ),
         "sensitivity": row.sensitivity,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -251,6 +319,13 @@ async def _require_host(
     return asset
 
 
+def _mark_used(row: AssetIntel, conversation_id: str | None) -> None:
+    cid = str(conversation_id or "").strip()
+    row.idle_case_count = 0
+    if cid:
+        row.last_used_conversation_id = cid[:64]
+
+
 async def record_intel(
     db: AsyncSession,
     *,
@@ -258,6 +333,7 @@ async def record_intel(
     payload: dict[str, Any],
     source: str,
     created_task_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Create (no id) or update (id). Agent-supplied fields only; harness stamps audit."""
     body = strip_agent_audit_fields(payload if isinstance(payload, dict) else {})
@@ -290,7 +366,11 @@ async def record_intel(
         row = (await db.execute(select(AssetIntel).where(AssetIntel.id == iid))).scalar_one_or_none()
         if not row or (user_id and row.user_id and row.user_id != user_id):
             raise IntelError("intel not found", status_code=404)
-        if status_from_forget_count(int(row.forget_count or 0)) == "sealed":
+        if lifecycle_status(
+            forget_count=row.forget_count,
+            idle_case_count=getattr(row, "idle_case_count", 0),
+            forgotten_by=getattr(row, "forgotten_by", None),
+        ) == "forgotten":
             raise IntelError("forgotten", status_code=404)
         row.asset_id = uuid.UUID(hang["asset_id"])
         row.port = hang["port"]
@@ -299,6 +379,7 @@ async def record_intel(
         row.body = note
         row.sensitivity = default_sensitivity(kind)
         row.updated_at = now
+        _mark_used(row, conversation_id)
         await db.commit()
         await db.refresh(row)
         return project_new(intel_to_dict(row), current_task_id=created_task_id)
@@ -315,6 +396,8 @@ async def record_intel(
         created_task_id=str(created_task_id or "").strip() or None,
         forget_count=0,
         access_count=0,
+        idle_case_count=0,
+        last_used_conversation_id=(str(conversation_id).strip()[:64] if conversation_id else None),
         sensitivity=default_sensitivity(kind),
         created_at=now,
         updated_at=now,
@@ -373,14 +456,16 @@ async def list_intel(
 
     want = str(status or "").strip().lower()
     if audience == "agent":
-        # v1 Agent list is living only.
+        # Agent sees living + unused-folded; not hard-forgotten.
         filters.append(AssetIntel.forget_count <= 0)
     elif want in {"active", "living", ""}:
         filters.append(AssetIntel.forget_count <= 0)
-    elif want in {"forgotten", "soft"}:
-        filters.append(AssetIntel.forget_count == 1)
-    elif want in {"sealed", "archive"}:
-        filters.append(AssetIntel.forget_count >= 2)
+        filters.append(AssetIntel.idle_case_count < FOLD_IDLE_CASES)
+    elif want in {"folded"}:
+        filters.append(AssetIntel.forget_count <= 0)
+        filters.append(AssetIntel.idle_case_count >= FOLD_IDLE_CASES)
+    elif want in {"forgotten", "soft", "sealed", "archive"}:
+        filters.append(AssetIntel.forget_count >= 1)
     # want == "all" → no forget filter (user UI)
 
     count_stmt = select(func.count()).select_from(AssetIntel)
@@ -411,6 +496,7 @@ async def get_intel(
     user_id: uuid.UUID | None,
     audience: Audience = "agent",
     current_task_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     try:
         iid = uuid.UUID(str(intel_id))
@@ -422,11 +508,9 @@ async def get_intel(
     data = project_new(intel_to_dict(row), current_task_id=current_task_id)
     if audience == "agent" and not agent_may_get(data):
         raise IntelError("forgotten", status_code=404)
-    await db.execute(
-        update(AssetIntel)
-        .where(AssetIntel.id == row.id)
-        .values(access_count=AssetIntel.access_count + 1)
-    )
+    row.access_count = int(row.access_count or 0) + 1
+    if audience == "agent":
+        _mark_used(row, conversation_id)
     await db.commit()
     await db.refresh(row)
     return project_new(intel_to_dict(row), current_task_id=current_task_id)
@@ -438,6 +522,8 @@ async def forget_intel(
     *,
     user_id: uuid.UUID | None,
     current_task_id: str | None = None,
+    forgotten_by: str = "agent",
+    reason: str | None = None,
 ) -> dict[str, Any]:
     try:
         iid = uuid.UUID(str(intel_id))
@@ -446,14 +532,122 @@ async def forget_intel(
     row = (await db.execute(select(AssetIntel).where(AssetIntel.id == iid))).scalar_one_or_none()
     if not row or (user_id and row.user_id and row.user_id != user_id):
         raise IntelError("intel not found", status_code=404)
-    if status_from_forget_count(int(row.forget_count or 0)) == "sealed":
-        raise IntelError("forgotten", status_code=404)
+    who = str(forgotten_by or "agent").strip().lower()
+    if who not in {"agent", "user"}:
+        who = "agent"
+    note = str(reason or "").strip()
+    if who == "agent" and len(note) < 2:
+        raise IntelError("reason required to forget", status_code=400)
+    if len(note) > MAX_FORGET_REASON:
+        raise IntelError(f"reason too long (max {MAX_FORGET_REASON})", status_code=400)
+    if lifecycle_status(
+        forget_count=row.forget_count,
+        idle_case_count=getattr(row, "idle_case_count", 0),
+        forgotten_by=getattr(row, "forgotten_by", None),
+    ) == "forgotten":
+        return project_new(intel_to_dict(row), current_task_id=current_task_id)
     nxt = apply_forget(int(row.forget_count or 0))
     row.forget_count = int(nxt["forget_count"])
+    row.forgotten_by = who
+    row.forget_reason = note or None
     row.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(row)
     return project_new(intel_to_dict(row), current_task_id=current_task_id)
+
+
+async def restore_intel(
+    db: AsyncSession,
+    intel_id: str,
+    *,
+    user_id: uuid.UUID | None,
+    current_task_id: str | None = None,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    try:
+        iid = uuid.UUID(str(intel_id))
+    except ValueError as e:
+        raise IntelError("invalid id", status_code=400) from e
+    row = (await db.execute(select(AssetIntel).where(AssetIntel.id == iid))).scalar_one_or_none()
+    if not row or (user_id and row.user_id and row.user_id != user_id):
+        raise IntelError("intel not found", status_code=404)
+    row.forget_count = 0
+    row.forgotten_by = None
+    row.forget_reason = None
+    row.updated_at = datetime.now(timezone.utc)
+    _mark_used(row, conversation_id)
+    await db.commit()
+    await db.refresh(row)
+    return project_new(intel_to_dict(row), current_task_id=current_task_id)
+
+
+async def delete_intel(
+    db: AsyncSession,
+    intel_id: str,
+    *,
+    user_id: uuid.UUID | None,
+) -> None:
+    try:
+        iid = uuid.UUID(str(intel_id))
+    except ValueError as e:
+        raise IntelError("invalid id", status_code=400) from e
+    row = (await db.execute(select(AssetIntel).where(AssetIntel.id == iid))).scalar_one_or_none()
+    if not row or (user_id and row.user_id and row.user_id != user_id):
+        raise IntelError("intel not found", status_code=404)
+    await db.delete(row)
+    await db.commit()
+
+
+async def tick_idle_for_scope(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID | None,
+    conversation_id: str,
+    port_scope: dict[str, set[str] | None] | None,
+    asset_ids: list[str] | None = None,
+) -> int:
+    """Harness: one unused-Case increment per scoped living/folded row."""
+    cid = str(conversation_id or "").strip()
+    if not cid:
+        return 0
+    filters: list[Any] = [AssetIntel.forget_count <= 0]
+    if user_id:
+        filters.append(AssetIntel.user_id == user_id)
+    if port_scope:
+        filters.append(case_scope_sql_clause(port_scope))
+    elif asset_ids:
+        aids: list[uuid.UUID] = []
+        for raw in asset_ids:
+            try:
+                aids.append(uuid.UUID(str(raw)))
+            except ValueError:
+                continue
+        if not aids:
+            return 0
+        filters.append(AssetIntel.asset_id.in_(aids))
+    else:
+        return 0
+    stmt = select(AssetIntel)
+    for f in filters:
+        stmt = stmt.where(f)
+    rows = list((await db.execute(stmt)).scalars().all())
+    changed = 0
+    for row in rows:
+        nxt, last = next_idle_case_count(
+            conversation_id=cid,
+            last_used_conversation_id=getattr(row, "last_used_conversation_id", None),
+            last_idle_conversation_id=getattr(row, "last_idle_conversation_id", None),
+            idle_case_count=int(getattr(row, "idle_case_count", 0) or 0),
+        )
+        if nxt != int(getattr(row, "idle_case_count", 0) or 0) or last != getattr(
+            row, "last_idle_conversation_id", None
+        ):
+            row.idle_case_count = nxt
+            row.last_idle_conversation_id = last
+            changed += 1
+    if changed:
+        await db.commit()
+    return changed
 
 
 async def living_intel_for_assets(
@@ -464,7 +658,16 @@ async def living_intel_for_assets(
     current_task_id: str | None = None,
     limit: int = MAX_INTEL_INJECT,
     port_scope: dict[str, set[str] | None] | None = None,
+    conversation_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    if conversation_id:
+        await tick_idle_for_scope(
+            db,
+            user_id=user_id,
+            conversation_id=str(conversation_id),
+            port_scope=port_scope,
+            asset_ids=None if port_scope else asset_ids,
+        )
     items, _ = await list_intel(
         db,
         user_id=user_id,
@@ -472,7 +675,7 @@ async def living_intel_for_assets(
         port_scope=port_scope,
         audience="agent",
         current_task_id=current_task_id,
-        limit=limit,
+        limit=max(limit, 80),
         include_body=False,
     )
     return items

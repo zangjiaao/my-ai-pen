@@ -12,9 +12,12 @@ from app.services.owner_intel import (
     agent_may_get,
     agent_may_list,
     agent_may_update,
+    FOLD_IDLE_CASES,
     apply_forget,
     default_sensitivity,
+    lifecycle_status,
     next_access_count,
+    next_idle_case_count,
     format_intel_inject_line,
     intel_matches_case_scope,
     intel_summary_lines,
@@ -62,34 +65,59 @@ def test_sensitivity_defaults_from_kind():
     assert default_sensitivity("config") == "plain"
 
 
-def test_lifecycle_two_step_forget():
+def test_lifecycle_fold_and_hard_forget():
     assert status_from_forget_count(0) == "active"
     assert status_from_forget_count(1) == "forgotten"
-    assert status_from_forget_count(2) == "sealed"
-    assert status_from_forget_count(9) == "sealed"
-
+    assert lifecycle_status(forget_count=0, idle_case_count=0) == "active"
+    assert lifecycle_status(forget_count=0, idle_case_count=FOLD_IDLE_CASES) == "folded"
+    assert lifecycle_status(forget_count=0, idle_case_count=FOLD_IDLE_CASES - 1) == "active"
+    assert lifecycle_status(forget_count=1, idle_case_count=9) == "forgotten"
     first = apply_forget(0)
     assert first == {"forget_count": 1, "status": "forgotten"}
-    second = apply_forget(1)
-    assert second == {"forget_count": 2, "status": "sealed"}
+    again = apply_forget(1)
+    assert again == {"forget_count": 1, "status": "forgotten"}
+
+
+def test_idle_case_count_one_increment_per_case():
+    idle, last = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id=None,
+        last_idle_conversation_id=None,
+        idle_case_count=0,
+    )
+    assert idle == 1 and last == "c1"
+    idle2, last2 = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id=None,
+        last_idle_conversation_id="c1",
+        idle_case_count=1,
+    )
+    assert idle2 == 1 and last2 == "c1"
+    reset, _ = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id="c1",
+        last_idle_conversation_id="c0",
+        idle_case_count=2,
+    )
+    assert reset == 0
 
 
 def test_agent_surface_by_lifecycle():
-    living = {"forget_count": 0, "status": "active"}
-    soft = {"forget_count": 1, "status": "forgotten"}
-    sealed = {"forget_count": 2, "status": "sealed"}
+    living = {"forget_count": 0, "idle_case_count": 0}
+    folded = {"forget_count": 0, "idle_case_count": FOLD_IDLE_CASES}
+    forgotten = {"forget_count": 1, "forgotten_by": "agent"}
 
     assert agent_may_list(living) is True
-    assert agent_may_list(soft) is False
-    assert agent_may_list(sealed) is False
+    assert agent_may_list(folded) is True
+    assert agent_may_list(forgotten) is False
 
     assert agent_may_get(living) is True
-    assert agent_may_get(soft) is True
-    assert agent_may_get(sealed) is False
+    assert agent_may_get(folded) is True
+    assert agent_may_get(forgotten) is False
 
     assert agent_may_update(living) is True
-    assert agent_may_update(soft) is True
-    assert agent_may_update(sealed) is False
+    assert agent_may_update(folded) is True
+    assert agent_may_update(forgotten) is False
 
 
 def test_intel_matches_case_scope_host_level_and_named_ports():
@@ -188,7 +216,8 @@ def test_inject_living_only_cap_and_secret_pointer():
         "body": "PHPSESSID=abc",
     }
     soft = {**living, "id": "i-soft", "forget_count": 1, "status": "forgotten"}
-    sealed = {**living, "id": "i-seal", "forget_count": 2, "status": "sealed"}
+    sealed = {**living, "id": "i-seal", "forget_count": 2, "status": "forgotten"}
+    folded = {**living, "id": "i-fold", "forget_count": 0, "idle_case_count": FOLD_IDLE_CASES, "status": "folded"}
 
     live_line = format_intel_inject_line(living)
     assert "i-live" in live_line
@@ -200,8 +229,11 @@ def test_inject_living_only_cap_and_secret_pointer():
     assert "PHPSESSID=abc" not in secret_line
     assert "session cookie" in secret_line
 
-    lines = intel_summary_lines([living, secret, soft, sealed] + [{**living, "id": f"x{n}"} for n in range(30)])
+    lines = intel_summary_lines(
+        [living, secret, soft, sealed, folded] + [{**living, "id": f"x{n}"} for n in range(30)]
+    )
     assert all("i-soft" not in ln and "i-seal" not in ln for ln in lines)
-    assert len(lines) <= MAX_INTEL_INJECT
+    assert any("i-fold" in ln and "Folded unused" in ln for ln in lines)
+    assert len(lines) <= MAX_INTEL_INJECT + 1
     assert any("i-live" in ln for ln in lines)
     assert any("i-sec" in ln for ln in lines)

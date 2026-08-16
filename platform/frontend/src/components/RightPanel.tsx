@@ -141,7 +141,9 @@ interface Props {
   /** Living notebook clues for Case Scope ∩ Host/Service. */
   intel?: IntelRow[];
   intelForgotten?: IntelRow[];
+  intelFolded?: IntelRow[];
   intelSealed?: IntelRow[];
+  onIntelRowChange?: (row: IntelRow, action: "upsert" | "delete") => void;
   currentTaskId?: string | null;
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
@@ -214,7 +216,9 @@ export default function RightPanel({
   findings = [],
   intel = [],
   intelForgotten = [],
+  intelFolded = [],
   intelSealed = [],
+  onIntelRowChange,
   currentTaskId = null,
   assets = [],
   taskContext,
@@ -621,10 +625,11 @@ export default function RightPanel({
             <section data-testid="intel-clues-section" className="space-y-2 border-t border-hairline-soft pt-4">
               <p className="text-xs font-medium text-ink-muted">线索</p>
               <IntelList
-                rows={[...intel, ...intelForgotten, ...intelSealed]}
+                rows={[...intel, ...intelFolded, ...intelForgotten, ...intelSealed]}
                 currentTaskId={currentTaskId}
                 emptyCopy="还没有线索。Agent 笔记本会把值得记住的东西记在这里。"
                 showHang
+                onRowChange={onIntelRowChange}
               />
             </section>
           </div>

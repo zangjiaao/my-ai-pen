@@ -45,9 +45,11 @@ Prompt framing (pack / Runtime): this is your notebook. Write what you need to k
 | `created_at` / `updated_at` | Clock on create / any mutate (including forget). |
 | `source` | `agent` \| `user` from who invoked the tool — not a tool argument. |
 | `created_task_id` | Task package id at create (for **New**). |
-| `forget_count` | Incremented on each `forget`. 0 living; 1 soft-forgotten; ≥2 遗忘区. |
-| `access_count` | Incremented on **get(id)** (operator open / Agent `fact(get)`). List and compact inject do **not** increment. Operator signal for how often the note was actually read. |
-| `status` | Derived: `active` / `forgotten` / `sealed`. |
+| `forget_count` | 0 not hard-forgotten; ≥1 **已忘记**. |
+| `idle_case_count` | Harness: unused scoped Cases since last get/upsert. ≥`FOLD_IDLE_CASES` (3) → **遗忘区**. |
+| `forgotten_by` / `forget_reason` | Hard forget only. `agent` must pass `reason`; `user` optional. |
+| `access_count` | Incremented on **get(id)** (operator open / Agent `fact(get)`). List and compact inject do **not** increment. |
+| `status` | Derived: `active` / `folded` / `forgotten`. |
 | `sensitivity` | Default from kind. |
 | **New** | Projection, not a stored Agent flag: `created_task_id` = current Task (or first seen this Case burst). Same spirit as Finding **New**. |
 
@@ -75,19 +77,17 @@ Later kinds: **Spec amendment**, not an open string. Agent must not invent kinds
 
 ## 2. Lifecycle (notebook ≈ working memory)
 
-Harness-stamped `forget_count` (Agent does not pass it).
+Harness owns unused fold. Agent does not maintain a two-step chore.
 
-| State | After | Agent | Operator |
-|-------|--------|-------|----------|
-| **Living** `active` | create / successful update of a living row | list, get, update, forget | 线索 section + 情报 tab |
-| **Soft-forgotten** | **first** `forget` | **Not** in default list / inject / compact. `get(id)` and `record(id)` (update = correct the memory) still allowed. `forget` again → sealed. | Visible in 已遗忘 (not the living 线索 list) |
-| **遗忘区 (sealed)** | **second** `forget` on that id (`forget_count ≥ 2`) | **Never** list, get, update, or inject. Tool calls on that id fail closed (`forgotten`). Fresh `record` with **no** id still creates a **new** living memory. | **遗忘区** — can open and read; not fed to the Agent |
+| State | After | Agent | Operator right panel |
+|-------|--------|-------|----------------------|
+| **在用** `active` | create / upsert or get this Case | list, get, upsert, forget | **线索** |
+| **遗忘区** `folded` | harness: **3** scoped Cases without get/upsert | list, get, upsert (get/upsert **activates**). Inject is a thin id index, not full lines. | **遗忘区** — not on 线索 |
+| **已忘记** `forgotten` | Agent `forget(id, reason)` or user 忘记 | Not in list / inject / get / upsert | **已忘记** — restore or delete; shows who + reason |
 
-Metaphor: new memories form (`record`); a biased memory is dropped or updated (`forget` once, or `record` on the same id); a memory discarded **again** leaves working mind and stays only in a human-inspectable 遗忘区.
+**Used this Case** = Agent `get` or `upsert` on that id (or create). Same Case is not counted twice. Creating Case does not fold.
 
-- Lesson that should survive (“admin:admin is invalid”) = **new** `record` (new id), not reviving a sealed row.  
-- Operator **purge** of a secret body remains UI/harness, not Agent forget.  
-- v1 Agent surface stays **record + forget** only — no status enum in tool args.
+**Correct a clue:** `fact(upsert)` **on the same id**. `forget` is a hard drop and requires `reason`.
 
 ---
 
@@ -148,9 +148,9 @@ Agent surface is **`fact`** (same tool as this-task process keys). Host/Service 
 | `fact` op | Role |
 |-----------|------|
 | `upsert` | This-task `fact_key` plus living Intel when hang is known (`asset_id`, or the single on-ledger Scope Host). `kind` + summary + body. Harness stamps Intel id/audit. |
-| `list` | Living Intel + this-task fact index. Never returns sealed. |
-| `get` | Intel `id` (living or soft-forgotten) or local `fact_key`. Sealed: not found. Each successful Intel get increments `access_count`. |
-| `forget` | Intel `id`. First = soft; second = 遗忘区. |
+| `list` | Living Intel + this-task fact index. Never returns forgotten. |
+| `get` | Living Intel `id` or local `fact_key`. Forgotten: not found. Each successful Intel get increments `access_count`. |
+| `forget` | Intel `id` + **`reason`** (Agent required). Hard drop. `forgotten_by=agent`. |
 
 Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `platform_enrich_asset`. Do **not** let Agent set timestamps, `source`, or `new`.
 
@@ -158,8 +158,8 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## 8. UI
 
-- **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **遗忘区** filter for sealed (and optionally soft-forgotten). Group tab stays empty/honest; **no Group writes in v1**.  
-- **Case right panel:** **not** a new tab. **线索** section in the Findings pane = living only (`id` + summary + New + access eye-count), **Scope-filtered**: Host-level (empty port) plus Service rows whose port is named on structured task target/scope. Sibling Service ports on the same Host (e.g. Scope `:3000` vs notebook `:8080`) are omitted. A **遗忘区** entry (same pane or a disclosure under 线索 — **not** a new right-panel tab) lists sealed rows for the operator only, same hang filter. Host / Service **情报** tabs stay unfiltered (the asset being viewed). Live `intel_upsert` must not be wiped by a racing `/state` snapshot (merge live-only ids). **New** follows `created_task_id` = current Task even if a later snapshot stamped `is_new: false`.  
+- **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **已遗忘** filter for archived. Group tab stays empty/honest; **no Group writes in v1**.  
+- **Case right panel:** **线索** = `active`; **遗忘区** = unused fold; **已忘记** = hard forget (who + reason; restore / delete). Sort by `access_count` descending. Scope filter unchanged.  
 
 - Access count is an **eye + number** on the row and on the Finding-style detail dialog. Not a second tab.
 - Cards in chat must **not** invent a second list (same law as Findings projection).
@@ -168,7 +168,7 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## 9. Inject
 
-- Cold `task_assign` / compact checkpoint: `intel_summary` = up to **20** **living** lines (id + summary + hang). Soft-forgotten and 遗忘区 **excluded**.  
+- Cold `task_assign` / compact checkpoint: `intel_summary` = up to **20** **living** lines (id + summary + hang). Forgotten **excluded**.  
 - Hang filter (inject and Case 线索 share it): **Host-level** (no port) **+ Scope Service ports** from structured `target` / `scope.allow` (explicit `:port` or `port` field — no invented 80/443). If Scope names a Host with **no** port, that Host is whole-Host (all Service intel). `fact(list)` / asset 情报 tabs are **not** this filter — Agent can still open a sibling-port id.  
 
 - Render **before** prior-finding dumps (`scope_intel` / this-Case findings board). Login kinds (`credential_status` / `secret` / `token` / `account`) first. Summary is enough to act — recorded valid creds are the login path (do not recover via defaults / hash dump / booked RCE). Body via `fact(get)`, not `platform_get_intel` (that tool is not on the Expert pack).  
@@ -200,4 +200,6 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 | 2026-08-15 | `fact(op=surface)` removed. Attack surface is the `surface` tool; harness may copy deposits into `facts/`. |
 | 2026-08-15 | Case inject / 线索: Host-level + matching Scope Service ports; sibling ports on the same Host excluded. |
 | 2026-08-15 | Inject: living notebook before prior dumps; login kinds first; summary is enough to act; body via `fact(get)`. |
+| 2026-08-16 | Right-panel 线索 / 已遗忘 lists sort by `access_count` descending. |
+| 2026-08-16 | Unused fold (3 Cases, harness) vs hard forget (agent reason / user). Panel: 线索 / 遗忘区 / 已忘记. |
 | 2026-08-15 | Intel ≠ Evidence: Evidence supports Findings only; Intel is in-test operational notes. No restating booked proof into the notebook. |

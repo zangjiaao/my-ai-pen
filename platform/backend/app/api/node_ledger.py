@@ -541,6 +541,7 @@ async def record_intel_node(
             payload=payload,
             source="agent",
             created_task_id=_task_id_from_header(x_task_id),
+            conversation_id=str(cid or "").strip() or None,
         )
     except intel.IntelError as e:
         raise HTTPException(e.status_code, e.message) from e
@@ -559,7 +560,7 @@ async def list_intel_node(
     x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
     x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
 ):
-    """List living intel only (Agent v1). Sealed / soft-forgotten omitted."""
+    """List living intel only (Agent v1). Forgotten omitted."""
     _ = node
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
@@ -608,6 +609,7 @@ async def get_intel_node(
             user_id=user_id,
             audience="agent",
             current_task_id=str(x_task_id or "").strip() or None,
+            conversation_id=str(cid or "").strip() or None,
         )
     except intel.IntelError as e:
         raise HTTPException(e.status_code, e.message) from e
@@ -617,6 +619,7 @@ async def get_intel_node(
 @router.post("/intel/{intel_id}/forget")
 async def forget_intel_node(
     intel_id: str,
+    body: dict | None = None,
     conversation_id: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     node: Node = Depends(get_node_from_token),
@@ -627,6 +630,7 @@ async def forget_intel_node(
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
     from app.services import owner_intel as intel
+    payload = body if isinstance(body, dict) else {}
 
     try:
         item = await intel.forget_intel(
@@ -634,6 +638,8 @@ async def forget_intel_node(
             intel_id,
             user_id=user_id,
             current_task_id=str(x_task_id or "").strip() or None,
+            forgotten_by="agent",
+            reason=str(payload.get("reason") or payload.get("forget_reason") or ""),
         )
     except intel.IntelError as e:
         raise HTTPException(e.status_code, e.message) from e

@@ -31,7 +31,7 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       "Ops: list | get | upsert | forget.",
       "upsert: this-task fact_key plus Host/Service 线索 when hang is known (asset_id, or the single Scope Host). kind=credential_status|secret|token|flag|path_hint|account|config.",
       "Auth, creds, dead-end lessons that the next Session must not forget → upsert (that is the 情报 tab / Findings 线索). Do not invent a Host to hang a clue.",
-      "list: living Host notebook + this-task fact index (no bodies). get: intel id or fact_key for full body. forget: intel id (first=soft, second=遗忘区).",
+      "Correct a living clue with upsert on that id (one call). Unused clues may fold off the 线索 panel after 3 Cases without get/upsert — list still sees them; get/upsert activates. forget(id, reason) is a hard drop (已忘记); reason required.",
       "Attack surface: use the surface tool. Separate from finding(confirm).",
     ].join(" "),
     parameters: Type.Object({
@@ -44,6 +44,7 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       asset_id: Type.Optional(Type.String({ description: "Host asset id to hang the notebook row" })),
       port: Type.Optional(Type.String({ description: "Service port; omit to hang on the Host" })),
       id: Type.Optional(Type.String({ description: "Intel id for get/update/forget" })),
+      reason: Type.Optional(Type.String({ description: "Required when forget: why this clue is discarded" })),
     }),
     async execute(_id: string, params: any) {
       const store = runtime.processFacts;
@@ -90,11 +91,15 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
 
       if (op === "forget") {
         const intelId = String(params.id || params.fact_key || "").trim();
+        const reason = String(params.reason || "").trim();
         if (!intelId) return textResult("error: id required for forget", { isError: true });
+        if (reason.length < 2) {
+          return textResult("error: reason required for forget", { isError: true });
+        }
         if (!hasPlatformApi(runtime)) {
           return textResult("error: platform API not configured — cannot forget Host notebook", { isError: true });
         }
-        const res = await forgetIntelRow(runtime, intelId);
+        const res = await forgetIntelRow(runtime, intelId, reason);
         return jsonResult(res.data, { isError: !res.ok });
       }
 

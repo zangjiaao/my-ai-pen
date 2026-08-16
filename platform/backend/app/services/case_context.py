@@ -1327,8 +1327,12 @@ async def _load_living_intel_summary(
         asset_ids=list(port_scope.keys()),
         port_scope=port_scope,
         current_task_id=task_id,
+        conversation_id=str(cid),
         limit=20,
     )
+    if not rows:
+        return None
+    rows = [r for r in rows if str(r.get("status") or "") == "active"]
     if not rows:
         return None
     out: list[dict[str, Any]] = []

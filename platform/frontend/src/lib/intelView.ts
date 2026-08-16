@@ -1,6 +1,8 @@
 /** Owner-ledger Intel projection helpers — Spec owner-intel.md. */
 
-export type IntelStatus = "active" | "forgotten" | "sealed";
+export type IntelStatus = "active" | "folded" | "forgotten" | "sealed";
+
+export const FOLD_IDLE_CASES = 3;
 
 export type IntelRow = {
   id?: string;
@@ -12,6 +14,9 @@ export type IntelRow = {
   status?: string;
   forget_count?: number;
   access_count?: number;
+  idle_case_count?: number;
+  forgotten_by?: string | null;
+  forget_reason?: string | null;
   is_new?: boolean;
   created_task_id?: string | null;
   source?: string;
@@ -22,13 +27,18 @@ export type IntelRow = {
 export function statusFromForgetCount(count: unknown): IntelStatus {
   const n = Number(count || 0);
   if (!Number.isFinite(n) || n <= 0) return "active";
-  if (n === 1) return "forgotten";
-  return "sealed";
+  return "forgotten";
 }
 
 export function intelStatus(row: IntelRow): IntelStatus {
   const raw = String(row.status || "").trim().toLowerCase();
-  if (raw === "active" || raw === "forgotten" || raw === "sealed") return raw;
+  if (raw === "forgotten" || raw === "sealed" || Number(row.forget_count || 0) >= 1 || String(row.forgotten_by || "").trim()) {
+    return "forgotten";
+  }
+  if (raw === "folded" || Number(row.idle_case_count || 0) >= FOLD_IDLE_CASES) {
+    return "folded";
+  }
+  if (raw === "active") return "active";
   return statusFromForgetCount(row.forget_count);
 }
 
@@ -58,6 +68,31 @@ export function filterIntelRows(rows: IntelRow[] | undefined | null, view: Intel
   const list = Array.isArray(rows) ? rows : [];
   if (view === "all") return list;
   return list.filter((row) => intelStatus(row) === view);
+}
+
+/** Most-viewed first. `accessById` overrides row stamps after a local get. */
+export function sortIntelRowsByAccess(
+  rows: IntelRow[] | undefined | null,
+  accessById?: Record<string, number>,
+): IntelRow[] {
+  const list = Array.isArray(rows) ? [...rows] : [];
+  return list.sort((a, b) => {
+    const aid = String(a.id || "");
+    const bid = String(b.id || "");
+    const ac =
+      accessById && Object.prototype.hasOwnProperty.call(accessById, aid)
+        ? accessCount({ access_count: accessById[aid] })
+        : accessCount(a);
+    const bc =
+      accessById && Object.prototype.hasOwnProperty.call(accessById, bid)
+        ? accessCount({ access_count: accessById[bid] })
+        : accessCount(b);
+    if (bc !== ac) return bc - ac;
+    const at = String(a.updated_at || a.created_at || "");
+    const bt = String(b.updated_at || b.created_at || "");
+    if (at !== bt) return bt.localeCompare(at);
+    return bid.localeCompare(aid);
+  });
 }
 
 export function upsertIntelRow(prev: IntelRow[], incoming: IntelRow): IntelRow[] {

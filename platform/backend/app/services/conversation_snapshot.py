@@ -384,6 +384,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         surface_ledger_doc = {"version": 1, "updated_at": None, "surfaces": []}
     intel_items: list[dict] | None = None
     intel_forgotten_items: list[dict] | None = None
+    intel_folded_items: list[dict] | None = None
     intel_sealed_items: list[dict] | None = None
     try:
         from app.services.case_context import _scope_intel_port_map
@@ -396,44 +397,57 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         if isinstance(task_context, dict):
             task_id = str(task_context.get("task_id") or task_context.get("id") or "").strip() or None
         if port_scope:
-            intel_items, _ = await list_intel(
-                db,
-                user_id=user_id,
-                port_scope=port_scope,
-                status="active",
-                audience="user",
-                current_task_id=task_id,
-                limit=100,
-                include_body=False,
-            )
-            intel_forgotten_items, _ = await list_intel(
-                db,
-                user_id=user_id,
-                port_scope=port_scope,
-                status="forgotten",
-                audience="user",
-                current_task_id=task_id,
-                limit=100,
-                include_body=False,
-            )
-            intel_sealed_items, _ = await list_intel(
-                db,
-                user_id=user_id,
-                port_scope=port_scope,
-                status="sealed",
-                audience="user",
-                current_task_id=task_id,
-                limit=100,
-                include_body=False,
-            )
+            async def _intel(status: str) -> list[dict]:
+                items, _ = await list_intel(
+                    db,
+                    user_id=user_id,
+                    port_scope=port_scope,
+                    status=status,
+                    audience="user",
+                    current_task_id=task_id,
+                    limit=100,
+                    include_body=False,
+                )
+                return items
+
+            try:
+                intel_items = await _intel("active")
+            except Exception:
+                # Fold columns missing / query fail — still show living notebook.
+                intel_items, _ = await list_intel(
+                    db,
+                    user_id=user_id,
+                    port_scope=port_scope,
+                    status="all",
+                    audience="user",
+                    current_task_id=task_id,
+                    limit=100,
+                    include_body=False,
+                )
+                intel_items = [
+                    r
+                    for r in intel_items
+                    if int(r.get("forget_count") or 0) <= 0
+                ]
+            try:
+                intel_forgotten_items = await _intel("forgotten")
+            except Exception:
+                intel_forgotten_items = []
+            try:
+                intel_folded_items = await _intel("folded")
+            except Exception:
+                intel_folded_items = []
+            intel_sealed_items = []
         else:
             intel_items = []
             intel_forgotten_items = []
+            intel_folded_items = []
             intel_sealed_items = []
     except Exception:
         # Fail open for the panel: omit keys so FE keeps live intel_upsert rows.
         intel_items = None
         intel_forgotten_items = None
+        intel_folded_items = None
         intel_sealed_items = None
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
@@ -502,6 +516,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             {
                 "intel": intel_items,
                 "intel_forgotten": intel_forgotten_items,
+                "intel_folded": intel_folded_items,
                 "intel_sealed": intel_sealed_items,
             }
             if intel_items is not None

@@ -100,7 +100,7 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
-import { mergeIntelSnapshot, upsertIntelRow, type IntelRow } from "../lib/intelView";
+import { intelStatus, mergeIntelSnapshot, upsertIntelRow, type IntelRow } from "../lib/intelView";
 import {
   buildConfirmOptionsText,
   expandSelectedOptions,
@@ -251,6 +251,7 @@ type ConversationSnapshot = {
   findings?: Array<Record<string, unknown>>;
   intel?: Array<Record<string, unknown>>;
   intel_forgotten?: Array<Record<string, unknown>>;
+  intel_folded?: Array<Record<string, unknown>>;
   intel_sealed?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
@@ -337,6 +338,7 @@ export default function ConversationPage() {
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [intel, setIntel] = useState<Array<Record<string, unknown>>>([]);
   const [intelForgotten, setIntelForgotten] = useState<Array<Record<string, unknown>>>([]);
+  const [intelFolded, setIntelFolded] = useState<Array<Record<string, unknown>>>([]);
   const [intelSealed, setIntelSealed] = useState<Array<Record<string, unknown>>>([]);
   /** Bumps on live intel_upsert so an in-flight /state refresh cannot wipe the new row. */
   const intelEpochRef = useRef(0);
@@ -824,6 +826,11 @@ export default function ConversationPage() {
         : Array.isArray(fallback?.intel_forgotten)
           ? fallback.intel_forgotten
           : undefined;
+      const folded = Array.isArray(snapshot.intel_folded)
+        ? snapshot.intel_folded
+        : Array.isArray(fallback?.intel_folded)
+          ? fallback.intel_folded
+          : undefined;
       const sealed = Array.isArray(snapshot.intel_sealed)
         ? snapshot.intel_sealed
         : Array.isArray(fallback?.intel_sealed)
@@ -839,6 +846,11 @@ export default function ConversationPage() {
           mergeLive
             ? mergeIntelSnapshot(prev as IntelRow[], forgotten as IntelRow[])
             : forgotten,
+        );
+      }
+      if (folded !== undefined) {
+        setIntelFolded((prev) =>
+          mergeLive ? mergeIntelSnapshot(prev as IntelRow[], folded as IntelRow[]) : folded,
         );
       }
       if (sealed !== undefined) {
@@ -1081,13 +1093,11 @@ export default function ConversationPage() {
       const id = String(raw.id || "").trim();
       if (!id) return;
       intelEpochRef.current += 1;
-      const status = String(raw.status || "").trim().toLowerCase();
-      const forget = Number(raw.forget_count || 0);
-      const sealed = status === "sealed" || forget >= 2;
-      const soft = status === "forgotten" || forget === 1;
-      setIntel((prev) => (sealed || soft ? prev.filter((r) => String(r.id) !== id) : upsertIntelRow(prev as IntelRow[], raw)));
-      setIntelForgotten((prev) => (soft ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
-      setIntelSealed((prev) => (sealed ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
+      const life = intelStatus(raw);
+      setIntel((prev) => (life === "active" ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
+      setIntelFolded((prev) => (life === "folded" ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
+      setIntelForgotten((prev) => (life === "forgotten" ? upsertIntelRow(prev as IntelRow[], raw) : prev.filter((r) => String(r.id) !== id)));
+      setIntelSealed((prev) => prev.filter((r) => String(r.id) !== id));
     },
     vuln_found: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -3150,7 +3160,22 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               findings={findings}
               intel={intel as IntelRow[]}
               intelForgotten={intelForgotten as IntelRow[]}
+              intelFolded={intelFolded as IntelRow[]}
               intelSealed={intelSealed as IntelRow[]}
+              onIntelRowChange={(row, action) => {
+                const id = String(row.id || "").trim();
+                if (!id) return;
+                if (action === "delete") {
+                  setIntel((prev) => prev.filter((r) => String(r.id) !== id));
+                  setIntelFolded((prev) => prev.filter((r) => String(r.id) !== id));
+                  setIntelForgotten((prev) => prev.filter((r) => String(r.id) !== id));
+                  return;
+                }
+                const life = intelStatus(row);
+                setIntel((prev) => (life === "active" ? upsertIntelRow(prev as IntelRow[], row) : prev.filter((r) => String(r.id) !== id)));
+                setIntelFolded((prev) => (life === "folded" ? upsertIntelRow(prev as IntelRow[], row) : prev.filter((r) => String(r.id) !== id)));
+                setIntelForgotten((prev) => (life === "forgotten" ? upsertIntelRow(prev as IntelRow[], row) : prev.filter((r) => String(r.id) !== id)));
+              }}
               currentTaskId={
                 String(
                   (taskContext as { task_id?: string; id?: string } | undefined)?.task_id ||

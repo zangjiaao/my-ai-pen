@@ -69,3 +69,58 @@ async def get_intel(
     except intel.IntelError as e:
         raise HTTPException(e.status_code, e.message) from e
     return {"ok": True, "intel": item}
+
+
+@router.post("/{intel_id}/forget")
+async def forget_intel_user(
+    intel_id: str,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    payload = body if isinstance(body, dict) else {}
+    try:
+        item = await intel.forget_intel(
+            db,
+            intel_id,
+            user_id=_user_id(current_user),
+            forgotten_by="user",
+            reason=str(payload.get("reason") or payload.get("forget_reason") or ""),
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True, "intel": item}
+
+
+@router.post("/{intel_id}/restore")
+async def restore_intel_user(
+    intel_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        item = await intel.restore_intel(
+            db,
+            intel_id,
+            user_id=_user_id(current_user),
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True, "intel": item}
+
+
+@router.delete("/{intel_id}")
+async def delete_intel_user(
+    intel_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        await intel.delete_intel(
+            db,
+            intel_id,
+            user_id=_user_id(current_user),
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True}

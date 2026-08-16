@@ -70,12 +70,13 @@ export async function getIntelRow(
 export async function forgetIntelRow(
   runtime: ToolRuntime,
   intelId: string,
+  reason?: string,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await platformLedgerFetch(
     runtime,
     "POST",
     `/api/node/ledger/intel/${encodeURIComponent(intelId)}/forget${convQuery(runtime)}`,
-    {},
+    { reason: String(reason || "").trim() },
   );
   if (res.ok && res.data && typeof res.data === "object") {
     await emitIntelUpsert(runtime, (res.data as { intel?: unknown }).intel);
@@ -146,7 +147,7 @@ export function createPlatformListIntelTool(runtime: ToolRuntime): AgentTool<any
     name: "platform_list_intel",
     label: "Platform list intel",
     description:
-      "List **living** notebook rows (id + summary + hang). Soft-forgotten and 遗忘区 are omitted. " +
+      "List **living** notebook rows (id + summary + hang). Forgotten rows are omitted. " +
       "Optional asset_id / port filters. Full body via platform_get_intel(id).",
     parameters: Type.Object({
       asset_id: Type.Optional(Type.String()),
@@ -175,8 +176,7 @@ export function createPlatformGetIntelTool(runtime: ToolRuntime): AgentTool<any>
     name: "platform_get_intel",
     label: "Platform get intel",
     description:
-      "Read one notebook row by id (full body). Living and soft-forgotten succeed. " +
-      "遗忘区 (second forget) is not found.",
+      "Read one living notebook row by id (full body). Forgotten ids are not found.",
     parameters: Type.Object({
       id: Type.String(),
     }),
@@ -198,19 +198,21 @@ export function createPlatformForgetIntelTool(runtime: ToolRuntime): AgentTool<a
     name: "platform_forget_intel",
     label: "Platform forget intel",
     description:
-      "Forget a notebook row by id. First forget = leave working memory (update still allowed). " +
-      "Second forget = 遗忘区 (operator-only; later Agent calls on that id fail).",
+      "Hard-forget a notebook row (已忘记). reason required. Prefer upsert on the same id to correct.",
     parameters: Type.Object({
       id: Type.String(),
+      reason: Type.String(),
     }),
     async execute(_id: string, params: any) {
       const intelId = String(params.id || params.intel_id || "").trim();
+      const reason = String(params.reason || "").trim();
       if (!intelId) return textResult("error: id required", { isError: true });
+      if (reason.length < 2) return textResult("error: reason required", { isError: true });
       const res = await platformLedgerFetch(
         runtime,
         "POST",
         `/api/node/ledger/intel/${encodeURIComponent(intelId)}/forget${convQuery(runtime)}`,
-        {},
+        { reason },
       );
       if (res.ok && res.data && typeof res.data === "object") {
         await emitIntelUpsert(runtime, (res.data as { intel?: unknown }).intel);
