@@ -211,6 +211,19 @@ const dailyOpenChartConfig = {
   info: { label: SEV_LABEL.info, color: SEV_COLOR.info },
 } satisfies ChartConfig;
 
+const DASHBOARD_CONTENT_CLASS = "flex min-h-0 flex-1 flex-col gap-4";
+const DASHBOARD_KPI_GRID_CLASS =
+  "grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5";
+const DASHBOARD_KPI_CLASS =
+  "flex min-h-[9rem] flex-col rounded-lg border border-hairline bg-canvas p-6 text-left";
+const DASHBOARD_ROWS_CLASS =
+  "grid min-h-0 flex-1 grid-rows-[minmax(0,6fr)_minmax(0,4fr)] gap-4";
+const DASHBOARD_PRIMARY_GRID_CLASS =
+  "grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] lg:items-stretch";
+const DASHBOARD_SECONDARY_GRID_CLASS = "grid min-h-0 gap-4 lg:grid-cols-3";
+const DASHBOARD_CARD_CLASS =
+  "flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6";
+
 function formatWhen(iso?: string | null): string {
   if (!iso) return "—";
   try {
@@ -273,6 +286,193 @@ function buildDailySeries(
     const total = SEVERITIES.reduce((sum, s) => sum + b[s], 0);
     return { date, label: formatDayLabel(date), ...b, total };
   });
+}
+
+function DashboardSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="正在加载状态看板"
+      data-testid="dashboard-loading-skeleton"
+      className={`${DASHBOARD_CONTENT_CLASS} animate-pulse`}
+    >
+      <div className={DASHBOARD_KPI_GRID_CLASS}>
+        {[36, 28, 32, 30, 26].map((valueWidth, index) => (
+          <div key={index} aria-hidden="true" className={DASHBOARD_KPI_CLASS}>
+            <div className="flex h-4 items-center gap-1.5">
+              <div className="h-3.5 w-3.5 shrink-0 rounded bg-canvas-inset" />
+              <div className="h-2.5 w-16 rounded-full bg-canvas-inset" />
+            </div>
+            <div
+              className="mt-2 h-8 rounded-md bg-canvas-inset"
+              style={{ width: `${valueWidth}px` }}
+            />
+            <div className="mt-auto flex items-center pt-3">
+              <div className="h-2.5 w-24 rounded-full bg-canvas-inset" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className={DASHBOARD_ROWS_CLASS}>
+        <div className={DASHBOARD_PRIMARY_GRID_CLASS}>
+          <section aria-hidden="true" className={DASHBOARD_CARD_CLASS}>
+            <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
+              <DashboardSkeletonHeading subtitle />
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-20 rounded-md bg-canvas-inset" />
+                <div className="h-7 w-28 rounded-md bg-canvas-inset" />
+              </div>
+            </div>
+            <div className="relative min-h-[10rem] flex-1 overflow-hidden pt-4">
+              {[18, 38, 58, 78].map((top) => (
+                <div
+                  key={top}
+                  className="absolute left-8 right-0 h-px bg-hairline-soft"
+                  style={{ top: `${top}%` }}
+                />
+              ))}
+              <div className="absolute inset-x-8 bottom-6 top-4 flex items-end justify-between gap-2">
+                {[38, 62, 46, 78, 54, 70, 42, 86, 58, 74, 48, 66].map((height, index) => (
+                  <div
+                    key={index}
+                    className="min-w-2 flex-1 rounded-t bg-canvas-inset"
+                    style={{ height: `${height}%` }}
+                  />
+                ))}
+              </div>
+              <div className="absolute bottom-0 left-8 right-0 flex justify-between">
+                {[20, 28, 24, 30, 22].map((width, index) => (
+                  <div
+                    key={index}
+                    className="h-2 rounded-full bg-canvas-inset"
+                    style={{ width: `${width}px` }}
+                  />
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section aria-hidden="true" className={DASHBOARD_CARD_CLASS}>
+            <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
+              <DashboardSkeletonHeading subtitle />
+              <div className="h-7 w-12 rounded-md border border-hairline bg-canvas-inset" />
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="grid h-7 grid-cols-[4.5rem_minmax(0,1fr)_9.5rem] items-center border-b border-hairline gap-2">
+                <div className="h-2.5 w-8 rounded-full bg-canvas-inset" />
+                <div className="h-2.5 w-12 rounded-full bg-canvas-inset" />
+                <div className="h-2.5 w-14 rounded-full bg-canvas-inset" />
+              </div>
+              {[76, 58, 84, 66].map((titleWidth, index) => (
+                <div
+                  key={index}
+                  className="grid h-9 grid-cols-[4.5rem_minmax(0,1fr)_9.5rem] items-center gap-2 border-b border-hairline-soft last:border-b-0"
+                >
+                  <div className="h-5 w-12 rounded bg-canvas-inset" />
+                  <div
+                    className="h-3 rounded-full bg-canvas-inset"
+                    style={{ width: `${titleWidth}%` }}
+                  />
+                  <div className="h-2.5 w-24 rounded-full bg-canvas-inset" />
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <div className={DASHBOARD_SECONDARY_GRID_CLASS}>
+          <DashboardListCardSkeleton kind="traffic" />
+          <DashboardListCardSkeleton kind="experts" />
+          <DashboardListCardSkeleton kind="schedules" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardSkeletonHeading({ subtitle = false }: { subtitle?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex h-5 items-center gap-1.5">
+        <div className="h-3.5 w-3.5 shrink-0 rounded bg-canvas-inset" />
+        <div className="h-3 w-24 rounded-full bg-canvas-inset" />
+      </div>
+      {subtitle ? <div className="mt-0.5 h-2.5 w-28 rounded-full bg-canvas-inset" /> : null}
+    </div>
+  );
+}
+
+function DashboardListCardSkeleton({
+  kind,
+}: {
+  kind: "traffic" | "experts" | "schedules";
+}) {
+  return (
+    <section aria-hidden="true" className={DASHBOARD_CARD_CLASS}>
+      <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
+        <DashboardSkeletonHeading subtitle />
+        <div className="h-7 w-16 rounded-md border border-hairline bg-canvas-inset" />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {kind === "traffic" ? (
+          <>
+            <div className="grid h-7 grid-cols-6 items-center gap-2 border-b border-hairline-soft">
+              {[12, 28, 38, 26, 24, 30].map((width, index) => (
+                <div
+                  key={index}
+                  className="h-2 rounded-full bg-canvas-inset"
+                  style={{ width: `${width}px` }}
+                />
+              ))}
+            </div>
+            {[82, 68, 76, 58].map((width, index) => (
+              <div key={index} className="flex h-7 items-center gap-3 border-b border-hairline-soft">
+                <div className="h-2 w-5 rounded-full bg-canvas-inset" />
+                <div className="h-2 w-8 rounded-full bg-canvas-inset" />
+                <div
+                  className="h-2 rounded-full bg-canvas-inset"
+                  style={{ width: `${width}px` }}
+                />
+                <div className="ml-auto h-2 w-10 rounded-full bg-canvas-inset" />
+              </div>
+            ))}
+          </>
+        ) : kind === "experts" ? (
+          <div className="flex flex-col">
+            {[72, 88, 64].map((width) => (
+              <div key={width} className="flex h-8 items-center gap-2 rounded-md px-1 py-1.5">
+                <div className="h-2 w-2 shrink-0 rounded-full bg-canvas-inset" />
+                <div
+                  className="h-3 rounded-full bg-canvas-inset"
+                  style={{ width: `${width}px` }}
+                />
+                <div className="h-2.5 w-24 rounded-full bg-canvas-inset" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {[76, 62].map((width) => (
+              <div
+                key={width}
+                className="flex min-h-[3.25rem] items-start justify-between gap-3 rounded-md border border-hairline bg-canvas-inset px-3 py-2.5"
+              >
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div
+                    className="h-3 rounded-full bg-surface-default"
+                    style={{ width: `${width}%` }}
+                  />
+                  <div className="h-2.5 w-28 rounded-full bg-surface-default" />
+                </div>
+                <div className="h-5 w-10 rounded-full bg-surface-default" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 export default function DashboardPage() {
@@ -356,7 +556,7 @@ export default function DashboardPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title="状态看板" />
         <main className="flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
-          {loading && <p className="text-sm text-ink-muted">加载中…</p>}
+          {loading && <DashboardSkeleton />}
           {error && (
             <div className="mb-4 max-w-xl rounded-md bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
               {error}
@@ -364,9 +564,9 @@ export default function DashboardPage() {
           )}
 
           {summary && !loading && (
-            <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className={DASHBOARD_CONTENT_CLASS}>
               {/* 1. KPI strip — title / value / trend */}
-              <div className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <div className={DASHBOARD_KPI_GRID_CLASS}>
                 <Kpi
                   icon={ShieldAlert}
                   label="待处理漏洞"
@@ -403,10 +603,10 @@ export default function DashboardPage() {
                 />
               </div>
 
-              <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,6fr)_minmax(0,4fr)] gap-4">
+              <div className={DASHBOARD_ROWS_CLASS}>
               {/* 2. 每日未修复 (6fr) | 新增漏洞 (4fr) */}
-              <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,4fr)] lg:items-stretch">
-                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
+              <div className={DASHBOARD_PRIMARY_GRID_CLASS}>
+                <section className={DASHBOARD_CARD_CLASS}>
                   <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <CardTitle icon={BarChart3}>每日未修复漏洞</CardTitle>
@@ -500,7 +700,7 @@ export default function DashboardPage() {
                   )}
                 </section>
 
-                <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
+                <section className={DASHBOARD_CARD_CLASS}>
                   <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
                     <div className="min-w-0">
                       <CardTitle icon={ClipboardList}>新增漏洞</CardTitle>
@@ -561,7 +761,7 @@ export default function DashboardPage() {
               </div>
 
               {/* 3. 事实流量 | 节点/专家 | 计划任务 */}
-              <div className="grid min-h-0 gap-4 lg:grid-cols-3">
+              <div className={DASHBOARD_SECONDARY_GRID_CLASS}>
                 <Card
                   icon={Activity}
                   title="事实流量"
@@ -722,7 +922,7 @@ function Card(props: {
   headerRight?: React.ReactNode;
 }) {
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-6">
+    <section className={DASHBOARD_CARD_CLASS}>
       <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <CardTitle icon={props.icon}>{props.title}</CardTitle>
@@ -984,7 +1184,7 @@ function Kpi(props: {
     <button
       type="button"
       onClick={props.onClick}
-      className="flex min-h-[9rem] flex-col rounded-lg border border-hairline bg-canvas p-6 text-left transition-colors hover:bg-canvas-inset"
+      className={`${DASHBOARD_KPI_CLASS} transition-colors hover:bg-canvas-inset`}
     >
       <p className="flex items-center gap-1.5 text-[11px] font-medium text-ink-muted">
         <Icon size={13} strokeWidth={1.75} className="shrink-0" />
