@@ -1005,14 +1005,17 @@ export default function ConversationPage() {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state, undefined, { intelEpochAtStart });
       setStateSnapshotLoaded(true);
-      // Spec #278 D3 / #474 L6: heartbeat must NOT restore composer (partner / Graph / Goal).
-      // Only once-on-open restore, user menu edits, partner_switch, work_mode_settled.
+      // Spec #278 D3 / #474 L6: heartbeat must NOT overwrite composer after once-on-open.
+      // Open /state failure leaves restore pending — first successful snapshot is the open restore.
       // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
+      if (composerRestoreCaseIdRef.current !== id) {
+        applyComposerRestoreFromSnapshot(id, state);
+      }
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
     }
-  }, [applyConversationState]);
+  }, [applyComposerRestoreFromSnapshot, applyConversationState]);
 
   const setConversationMessageData = useCallback((conversationId: string | null, updater: (data: MessagesInfiniteData) => MessagesInfiniteData) => {
     if (!conversationId) return;
@@ -2116,7 +2119,8 @@ export default function ConversationPage() {
       if (caseRouteLoadedRef.current !== id) return;
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
-      applyComposerRestoreFromSnapshot(id, fallbackState);
+      // Empty archaeology has no task_context / sessions — do not #299-and-mark
+      // restored. First successful /state (heartbeat or WS refresh) is the open restore.
     }
   }, [
     applyComposerRestoreFromSnapshot,

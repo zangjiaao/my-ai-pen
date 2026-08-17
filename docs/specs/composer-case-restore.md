@@ -100,7 +100,7 @@ Prefer **one primary pure seam**. Do not add a second persist store.
 | Seam | Behavior |
 |---|---|
 | **S1 Composer restore resolver (primary, pure)** | `(snapshot, mentionTargets) → { partner, engagementTemplate, goalMode }`. Partner from `task_context.expert_id` matched to a schedulable mention; Graph from that expert’s Session (`sessions[expert_id]` or already-projected AgentRow `work_mode` / `graph_id` on the snapshot); Goal from `task_context.goal_mode` iff pentest partner. Missing/offline expert → #299 default + 不指定 + Goal off. Session Free + Case sticky Graph → 不指定. |
-| **S2 Case-open apply (thin adapter)** | Conversation page calls S1 **once** when Case id + snapshot + mention catalog are ready. Switching Case or opening blank home resets then reapplies (or #299). `refreshConversationState` / heartbeat does **not** call S1. |
+| **S2 Case-open apply (thin adapter)** | Conversation page calls S1 **once** when Case id + snapshot + mention catalog are ready. Switching Case or opening blank home resets then reapplies (or #299). Heartbeat / `refreshConversationState` must **not overwrite** after that once-on-open. A non-404 open `/state` failure must **not** restore from empty message archaeology (no `task_context` / `sessions`) or mark the Case restored; the first successful `/state` is the open restore. |
 | **S3 Snapshot fields (only if S1 cannot see Session mode)** | Prefer existing `/state` fields (`task_context`, `strix_agents` / participants already lifting Session `work_mode`). Add a thin `sessions` / composer-restore projection **only** if those fields are absent for idle Cases. Do not invent a new SOT. |
 | **S4 Blank-home draft (optional)** | Isolated `sessionStorage` key for `/` with no Case. Discard on first Case id. Never read when `/:caseId` is open. |
 
@@ -145,7 +145,7 @@ Primary unit seam: **S1**. Highest integration: open Case after remount → chip
 4. **Graph map** uses the same product ids as today’s settlement handler (`app_assessment`, `redteam_deep`, `hypothesis_cycle`, plus existing aliases). Unknown graph id → 不指定 rather than invent a chip.  
 5. **Apply timing:** after Case snapshot is applied **and** mention targets have loaded; gate with the Case id so a late catalog fetch cannot apply Case A onto Case B.  
 6. **Case switch / blank home:** reset composer (partner/Graph/Goal) before restore or default so A cannot bleed. Today’s conversation reset does **not** clear composer — that leak is in scope.  
-7. **Heartbeat:** keep the existing “do not overwrite `engagementTemplate` from Case sticky / refresh” comment as a testable contract; partner and Goal follow the same rule.  
+7. **Heartbeat:** do not overwrite composer after once-on-open (partner / Graph / Goal). If Case-open `/state` failed, restore is still pending — the first successful snapshot completes it. Empty `snapshotFromMessages` archaeology is not a restore source.  
 8. **S3:** only if idle snapshot AgentRows omit Session mode. Prefer lifting from `context.sessions` in the existing participants/AgentRow projection over a one-off FE parser of raw context.  
 9. **S4** is optional in the first PR. If skipped, blank-home remount stays #299 (documented). If shipped, key must not be the same as last-active Case id cache.  
 10. **Docs:** this file + `docs/README.md` index; thin pointers on #277 / #278 / #284. Same change as the implement PR when behavior lands; this record may ship first as docs-only.
@@ -162,7 +162,7 @@ Primary unit seam: **S1**. Highest integration: open Case after remount → chip
   - non-pentest partner → Goal off and no Graph template  
   - `goal_mode: true` + pentest partner → Goal on  
   - `goal_mode: false` + pentest partner → Goal off  
-- **Adapter tests (S2):** restore is not invoked from heartbeat refresh; Case switch applies the new Case; blank home does not keep the previous Case partner.  
+- **Adapter tests (S2):** heartbeat must not overwrite after once-on-open (may complete a still-pending open restore); non-404 `/state` failure must not restore from empty archaeology; Case switch applies the new Case; blank home does not keep the previous Case partner.  
 - **Prior art:** `participant_session` envelope tests (A1 / sticky must not force Graph); frontend `experts.wire.test.ts` (non-pentest never sends template); ConversationPage composer isolation test (draft text stays out of page state).
 
 ---
@@ -192,3 +192,4 @@ This Spec does not make Case sticky template authoritative. It only makes the **
 |------|--------|
 | 2026-08-17 | First publish — #474. Scheme 1 Case-bound restore; Session mode not Case sticky; #299 blank default. |
 | 2026-08-17 | Implemented S1/S2/S3. S4 blank-home draft not shipped (blank remount stays #299). |
+| 2026-08-17 | Open `/state` failure must not restore from empty archaeology; first successful snapshot completes pending restore. |

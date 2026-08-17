@@ -26,14 +26,26 @@ assert.match(
   "Case open / blank home must reset composer chips before restore",
 );
 
+assert.equal(
+  /applyComposerRestoreFromSnapshot\(id, fallbackState\)/.test(pageSrc),
+  false,
+  "non-404 /state failure must not restore from empty archaeology",
+);
+
 const refreshFn = pageSrc.slice(
   pageSrc.indexOf("const refreshConversationState"),
   pageSrc.indexOf("const setConversationMessageData"),
 );
+assert.match(
+  refreshFn,
+  /if \(composerRestoreCaseIdRef\.current !== id\) \{\s*applyComposerRestoreFromSnapshot\(id, state\);/,
+  "heartbeat may complete a still-pending once-on-open restore",
+);
 assert.equal(
-  /restoreComposerFromCaseSnapshot|applyComposerRestoreFromSnapshot/.test(refreshFn),
-  false,
-  "heartbeat refreshConversationState must not restore composer (#474 L6 / #278 D3)",
+  refreshFn.includes("applyComposerRestoreFromSnapshot(id, state)") &&
+    refreshFn.includes("composerRestoreCaseIdRef.current !== id"),
+  true,
+  "heartbeat restore stays gated on pending once-on-open (#474 L6 / #278 D3)",
 );
 
 assert.match(
