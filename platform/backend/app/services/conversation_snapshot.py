@@ -472,6 +472,14 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     except Exception:
         work_burst_proj = {}
 
+    # Spec #474 S3: Session-private work_mode / graph_id for composer restore.
+    try:
+        from app.services.participant_session import sessions_projection_for_snapshot
+
+        sessions_proj = sessions_projection_for_snapshot(context)
+    except Exception:
+        sessions_proj = {}
+
     return {
         "conversation": conversation_summary(conversation),
         "working": working,
@@ -526,6 +534,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             else None
         ),
         "task_context": task_context,
+        "sessions": sessions_proj,
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
         "plan_tree": plan_tree,
