@@ -74,12 +74,8 @@ assert.ok(
   "default seat can rename session title",
 );
 assert.ok(
-  toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_record_intel"),
-  "default seat can record notebook intel",
-);
-assert.ok(
-  toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_forget_intel"),
-  "default seat can forget notebook intel",
+  toolNamesForPack(DEFAULT_SEAT_PACK).includes("fact"),
+  "default seat notebook is fact (Intel hang)",
 );
 assert.equal(isDefaultConversationTitle("新会话"), true);
 assert.equal(isDefaultConversationTitle("New session"), true);
