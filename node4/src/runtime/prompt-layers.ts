@@ -17,16 +17,20 @@ import {
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
+import { engagementPortFromTask, hasNamedEngagement } from "./attack-surface.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
   renderPromptTemplate,
+  sanitizeLanguageTemplateValue,
   sanitizePromptLabel,
 } from "./prompt-template.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
 import { isHypothesisWorkModeOn } from "./hypothesis-store.js";
 import { formatSubagentReturnContractPrompt } from "./subagent-result.js";
 import { formatSessionTitleHint } from "./session-title.js";
+import { eagerTodoInjection } from "./todo-harness.js";
+import { eagerBookingInjection } from "./booking-harness.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -67,6 +71,12 @@ export type BuildSystemPromptOptions = {
   workModeInjection?: string;
   /** When Graph mode resolves RoE, override allow_postex. */
   allowPostexOverride?: boolean;
+  /** Cold Free: todo reminder lives in Runtime, not the user turn. */
+  eagerTodo?: boolean;
+  /** Cold Free finding-pack: booking reminder in Runtime. */
+  eagerBooking?: boolean;
+  /** No execution burst — Runtime chat-only line instead of a fat user turn. */
+  chatOnly?: boolean;
 };
 
 /**
@@ -112,12 +122,33 @@ export function joinNonEmptyPromptParts(
   return parts.filter((l): l is string => typeof l === "string" && l !== "").join("\n");
 }
 
+/** Visible layer fences in the assembled system prompt (Base has none — Standing stays first). */
+export const LAYER_HEADING = {
+  profession: "## Profession",
+  runtime: "## Runtime",
+  // Agent-visible name is "This turn" — not product Task/package (Session-first, #455).
+  task: "## This turn",
+} as const;
+
+function prefixLayerHeading(heading: string, body: string): string {
+  const t = typeof body === "string" ? body.trim() : "";
+  if (!t) return "";
+  if (t.startsWith(heading)) return t;
+  return `${heading}\n${t}`;
+}
+
+
 /**
  * Single public assembler seam: fixed order Base → Profession → Runtime → Task.
  * Empty layers omit; order never rearranges.
  */
 export function assembleSystemPrompt(layers: PromptLayers): string {
-  return [layers.base, layers.profession, layers.runtime, layers.task]
+  return [
+    layers.base,
+    prefixLayerHeading(LAYER_HEADING.profession, layers.profession),
+    prefixLayerHeading(LAYER_HEADING.runtime, layers.runtime),
+    prefixLayerHeading(LAYER_HEADING.task, layers.task),
+  ]
     .map((s) => (typeof s === "string" ? s.trim() : ""))
     .filter((s) => s.length > 0)
     .join("\n\n");
@@ -130,8 +161,26 @@ export function promptTemplateVarsFromBase(input: BaseLayerInput): PromptTemplat
     expert_name: sanitizePromptLabel(input.expertName, fallback),
     expert_id: sanitizePromptLabel(input.expertId, ""),
     pack_id: sanitizePromptLabel(input.packId, "runtime"),
-    pack_label: sanitizePromptLabel(input.packLabel || input.packId, "Assistant"),
+    pack_label: sanitizeLanguageTemplateValue(input.packLabel || input.packId, "Assistant"),
   };
+}
+
+function isLedgerPackId(packId: string): boolean {
+  const p = String(packId || "").toLowerCase().trim();
+  return p === "default" || p === "consult" || p === "workspace";
+}
+
+function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
+  const named = hasNamedEngagement(task);
+  if (isLedgerPackId(packId)) {
+    return named
+      ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
+      : "This seat does not execute engagements. Ledger Q&A and handoff only.";
+  }
+  if (named) {
+    return "This turn is chat-only (no execution burst). Do not start recon, booking, or todo engagement maps.";
+  }
+  return "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.";
 }
 
 /** Convenience: build vars from full task + pack (Free / Stage captains). */
@@ -307,7 +356,7 @@ export function buildPromptLayers(
     }
   }
   if (pack.toolNames.includes("subagent")) {
-    // Graph/free <work-mode> already owns captain/dispatch detail — one line here only.
+    // Graph/free Work mode block already owns captain/dispatch detail — one line here only.
     runtimeParts.push(
       "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
     );
@@ -334,6 +383,15 @@ export function buildPromptLayers(
       `Recipes (non-answer templates): ${recipePath} — copy into task scripts/ or follow session examples.`,
     );
   }
+  if (options?.chatOnly) {
+    runtimeParts.push(chatOnlyRuntimeLine(pack.id, task));
+  }
+  if (options?.eagerTodo) {
+    runtimeParts.push(eagerTodoInjection({ forced: true }));
+  }
+  if (options?.eagerBooking) {
+    runtimeParts.push(eagerBookingInjection());
+  }
   runtimeParts.push("Stay in authorized scope.", formatRoeInjection(roe));
   const runtime = joinNonEmptyPromptParts(runtimeParts);
 
@@ -341,7 +399,9 @@ export function buildPromptLayers(
   const taskParts: string[] = [];
   const titleHint = formatSessionTitleHint(task);
   if (titleHint) taskParts.push(titleHint);
-  const caseBlock = formatCaseContextInjection(task.caseContext);
+  const caseBlock = formatCaseContextInjection(task.caseContext, {
+    engagementPort: engagementPortFromTask(task) || undefined,
+  });
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
   if (factBlock) taskParts.push(factBlock);
@@ -351,6 +411,12 @@ export function buildPromptLayers(
   );
   if (task.accounts !== undefined) {
     taskParts.push(`Accounts: ${JSON.stringify(task.accounts)}`);
+  }
+  const handoffNote = String(task.handoffSummary || "").trim();
+  if (handoffNote) {
+    taskParts.push(
+      ["### Handoff", "Authorized card body (not the operator utterance).", handoffNote].join("\n"),
+    );
   }
   taskParts.push(`Instruction: ${task.instruction}`);
   if (options?.goals) {

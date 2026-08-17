@@ -23,6 +23,8 @@ import {
   textResult,
 } from "./common.js";
 import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import { parseHostPort } from "../runtime/attack-surface.js";
+export { parseHostPort } from "../runtime/attack-surface.js";
 import { resolveBookSeverity } from "../runtime/finding-severity.js";
 
 export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
@@ -530,12 +532,16 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
             `error: proof too short (≥${MIN_PROOF_LEN} chars) — paste the proving observation from tool output, or pass candidate_index / matching location from last subagent ready_to_book`,
           );
         }
-        let grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations);
+        let grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations, {
+          location,
+        });
         if (!grounded.ok) {
           // Auto-swap to candidate verbatim if agent paraphrased
           const fb = fallbackProofFromInjectedCandidates(runtime, { title, location });
           if (fb && fb.proof !== proofText) {
-            const g2 = proofGroundedInRecentWork(fb.proof, runtime.lifecycle.recentObservations);
+            const g2 = proofGroundedInRecentWork(fb.proof, runtime.lifecycle.recentObservations, {
+              location,
+            });
             if (g2.ok) {
               proofText = fb.proof;
               if (!pocDemonstratesIssue(poc).ok && fb.poc) poc = fb.poc;
@@ -756,30 +762,6 @@ export function resolveAffectedHostPort(
     }
   }
   return { host: "", source: "none" };
-}
-
-export function parseHostPort(raw: string): { host: string; port?: string } {
-  const s = String(raw || "").trim();
-  if (!s) return { host: "" };
-  try {
-    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : s.startsWith("//") ? `http:${s}` : "";
-    if (withScheme || s.includes("://")) {
-      const u = new URL(withScheme || s);
-      const host = (u.hostname || "").toLowerCase();
-      const port = u.port || undefined;
-      if (host) return { host, port };
-    }
-  } catch {
-    // fall through
-  }
-  // host:port bare
-  const m = s.match(
-    /^(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|localhost|host\.docker\.internal|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?/i,
-  );
-  if (m) {
-    return { host: m[1]!.toLowerCase(), port: m[2] };
-  }
-  return { host: "" };
 }
 
 async function finalizeFinding(

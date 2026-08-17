@@ -402,16 +402,16 @@ Do **not** score surface by class hit-rate against a lab walkthrough.
 
 | Source | Path |
 |--------|------|
-| Mature graph | `/mnt/d/Coding/my-ai-pen/experts/pentest/graphs/hard/app_assessment.json` |
-| Thin graph | `/mnt/d/Coding/my-ai-pen/experts/pentest/graphs/hard/app_assessment_thin.json` |
-| Process quality | `/mnt/d/Coding/my-ai-pen/experts/pentest/work.md` |
-| Web recon skill | `/mnt/d/Coding/my-ai-pen/experts/pentest/skills/pentest-web-recon/SKILL.md` |
-| Task graph continuity | `/mnt/d/Coding/my-ai-pen/docs/specs/task-graph.md` |
-| Stage prompts / executor | `/mnt/d/Coding/my-ai-pen/node4/src/runtime/hard-graph-stage-executor.ts` |
-| Gate / handoff | `/mnt/d/Coding/my-ai-pen/node4/src/runtime/hard-graph-runner.ts` |
-| Host settlement | `/mnt/d/Coding/my-ai-pen/node4/src/runtime/host-stage-settlement.ts` |
-| Discovery yield | `/mnt/d/Coding/my-ai-pen/node4/src/runtime/hard-graph-feedback.ts` |
-| Surface ledger | `/mnt/d/Coding/my-ai-pen/node4/src/stores/surface-ledger.ts` |
-| Fact surface deposit | `/mnt/d/Coding/my-ai-pen/node4/src/tools/fact.ts` |
-| Graph definition types | `/mnt/d/Coding/my-ai-pen/node4/src/runtime/hard-graph-definition.ts` |
-| Lab evidence (DVWA) | `/mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/scorecard.md` |
+| Mature graph | `experts/pentest/graphs/hard/app_assessment.json` |
+| Thin graph | `experts/pentest/graphs/hard/app_assessment_thin.json` |
+| Process quality | `experts/pentest/work.md` |
+| Web recon skill | `experts/pentest/skills/pentest-web-recon/SKILL.md` |
+| Task graph continuity | `docs/specs/task-graph.md` |
+| Stage prompts / executor | `node4/src/runtime/hard-graph-stage-executor.ts` |
+| Gate / handoff | `node4/src/runtime/hard-graph-runner.ts` |
+| Host settlement | `node4/src/runtime/host-stage-settlement.ts` |
+| Discovery yield | `node4/src/runtime/hard-graph-feedback.ts` |
+| Surface ledger | `node4/src/stores/surface-ledger.ts` |
+| Fact surface deposit | `node4/src/tools/fact.ts` |
+| Graph definition types | `node4/src/runtime/hard-graph-definition.ts` |
+| Lab evidence (DVWA) | `benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/scorecard.md` |

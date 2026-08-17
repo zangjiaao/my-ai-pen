@@ -592,6 +592,54 @@ export function looksLikeHttpShellCommand(command: string): boolean {
 }
 
 /** Extract absolute http(s) URLs from a shell command (deduped, order preserved). */
+function pushUrl(found: string[], seen: Set<string>, raw: string): void {
+  let u = String(raw || "").replace(/[),.;]+$/, "").replace(/['"]+$/, "");
+  if (!u || seen.has(u)) return;
+  seen.add(u);
+  found.push(u);
+}
+
+/**
+ * Conservative $VAR + for-path expansion. Only when VAR=http(s)://… is assigned
+ * in the same command and paths are quoted literals — no free-text invent.
+ */
+export function expandShellVarUrls(command: string): string[] {
+  const c = String(command || "");
+  const vars = new Map<string, string>();
+  const assignRe = /(?:^|[\s;])([A-Za-z_][A-Za-z0-9_]*)=(https?:\/\/[^\s"'\\]+)/g;
+  let am: RegExpExecArray | null;
+  while ((am = assignRe.exec(c)) !== null) {
+    const name = am[1]!;
+    const base = am[2]!.replace(/[),.;]+$/, "").replace(/\/+$/, "");
+    if (base) vars.set(name, base);
+  }
+  if (!vars.size) return [];
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const pathList: string[] = [];
+  const forRe = /for\s+\w+\s+in\s+((?:"\/[^"]*"\s*)+)/g;
+  let fm: RegExpExecArray | null;
+  while ((fm = forRe.exec(c)) !== null) {
+    const quoted = fm[1]!.matchAll(/"(\/[^"]*)"/g);
+    for (const q of quoted) pathList.push(q[1]!);
+  }
+  if (pathList.length) {
+    for (const base of vars.values()) {
+      for (const p of pathList) {
+        pushUrl(found, seen, `${base}${p.startsWith("/") ? p : `/${p}`}`);
+      }
+    }
+  }
+  for (const [name, base] of vars) {
+    const lit = new RegExp(`\\$\\{?${name}\\}?(/[^\\s"'$\\\\]+)`, "g");
+    let lm: RegExpExecArray | null;
+    while ((lm = lit.exec(c)) !== null) {
+      pushUrl(found, seen, `${base}${lm[1]}`);
+    }
+  }
+  return found;
+}
+
 export function extractUrlsFromShellCommand(command: string): string[] {
   const c = String(command || "");
   const found: string[] = [];
@@ -605,6 +653,11 @@ export function extractUrlsFromShellCommand(command: string): string[] {
     if (!u || seen.has(u)) continue;
     seen.add(u);
     found.push(u);
+  }
+  for (const extra of expandShellVarUrls(c)) {
+    if (seen.has(extra)) continue;
+    seen.add(extra);
+    found.push(extra);
   }
   return found;
 }

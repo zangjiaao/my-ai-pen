@@ -9,6 +9,7 @@ import {
   parseFocusFields,
   parseFocusFindingIds,
   parseFocusNote,
+  parseHandoffSummary,
   parseOptionalWireBoolean,
   parseStringIdList,
 } from "./task-envelope-fields.js";
@@ -54,6 +55,11 @@ assert.equal(parseAllowPostex({ allow_postex: "true" }), true);
 assert.equal(parseAllowPostex({ allowPostex: "false" }), false);
 assert.equal(parseAllowPostex({}), undefined);
 assert.equal(parseAllowPostex({ text: "allow postex please" }), undefined);
+
+assert.equal(parseHandoffSummary({ handoff_summary: "  short scope  " }), "short scope");
+assert.equal(parseHandoffSummary({ handoffSummary: "card body" }), "card body");
+assert.equal(parseHandoffSummary({ proposed_action: "not this field" }), undefined);
+assert.equal(parseHandoffSummary({ initial_instruction: "utterance" }), undefined);
 
 assert.equal(parseAllowDestructive({ allow_destructive: true }), true);
 assert.equal(parseAllowDestructive({ allowDestructive: false }), false);

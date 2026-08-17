@@ -40,8 +40,8 @@ const baseTask: TaskEnvelope = {
   });
   assert.equal(
     ordered,
-    "BASE_MARK\n\nPROF_MARK\n\nRUN_MARK\n\nTASK_MARK",
-    "assemble joins four layers with blank lines",
+    "BASE_MARK\n\n## Profession\nPROF_MARK\n\n## Runtime\nRUN_MARK\n\n## This turn\nTASK_MARK",
+    "assemble joins four layers with blank lines and later-layer headings",
   );
   ok(
     ordered.indexOf("BASE_MARK") < ordered.indexOf("PROF_MARK") &&
@@ -56,7 +56,7 @@ const baseTask: TaskEnvelope = {
     runtime: "  ",
     task: "TASK_ONLY",
   });
-  assert.equal(skipEmpty, "BASE_ONLY\n\nTASK_ONLY");
+  assert.equal(skipEmpty, "BASE_ONLY\n\n## This turn\nTASK_ONLY");
   ok(!skipEmpty.includes("PROF"), "empty profession omitted");
   ok(
     skipEmpty.indexOf("BASE_ONLY") < skipEmpty.indexOf("TASK_ONLY"),
@@ -78,6 +78,10 @@ const baseTask: TaskEnvelope = {
   const layers = buildPromptLayers(baseTask, PENTEST_ROLE_PACK);
   ok(layers.base.startsWith(STANDING_HEADING), "Base starts with Standing heading");
   ok(layers.base.includes("Role pack:"), "Base has Role pack meta");
+  ok(
+    layers.base.includes("Application security assessment"),
+    "pack label keeps spaces (not Applicationsecurityassessment)",
+  );
   ok(layers.base.includes("untrusted display label"), "Base has persona untrusted policy");
   ok(
     !layers.base.includes("Target:"),
@@ -90,7 +94,7 @@ const baseTask: TaskEnvelope = {
     "Profession does not re-emit Standing",
   );
   ok(
-    !layers.profession.includes("<work-mode>"),
+    !layers.profession.includes("### Work mode"),
     "Profession does not own Free work-mode tags",
   );
 
@@ -153,7 +157,7 @@ const baseTask: TaskEnvelope = {
   const standingIdx = prompt.indexOf(STANDING_HEADING);
   const rolePackIdx = prompt.indexOf("Role pack:");
   const toolsIdx = prompt.indexOf("Tools:");
-  const workModeIdx = prompt.indexOf("<work-mode>");
+  const workModeIdx = prompt.indexOf("### Work mode");
   const targetIdx = prompt.indexOf("Target:");
   const instructionIdx = prompt.indexOf("Instruction:");
 
@@ -162,7 +166,19 @@ const baseTask: TaskEnvelope = {
   ok(toolsIdx > rolePackIdx, "Tools after Base meta");
   ok(workModeIdx > toolsIdx, "work-mode after capability header (Runtime)");
   ok(targetIdx > workModeIdx, "Task target after Runtime work-mode");
+  ok(prompt.includes("### Rules of engagement"), "RoE is markdown under Runtime");
+  ok(
+    !prompt.includes("<work-mode>") &&
+      !prompt.includes("<rules-of-engagement>") &&
+      !prompt.includes("<available-graphs>") &&
+      !prompt.includes("<goal_context>"),
+    "assembled system has no leftover XML prompt shells",
+  );
   ok(instructionIdx > targetIdx, "Instruction after Target in Task");
+  const profH = prompt.indexOf("## Profession");
+  const runH = prompt.indexOf("## Runtime");
+  const taskH = prompt.indexOf("## This turn");
+  ok(profH > standingIdx && runH > profH && taskH > runH, "visible layer headings keep Base → Profession → Runtime → Task");
 
   // Profession (mission/work) sits between Base persona and Runtime tools
   const personaIdx = prompt.indexOf("untrusted display label");
@@ -211,7 +227,7 @@ const baseTask: TaskEnvelope = {
     "Default non-act: no finding(confirm) recon",
   );
   ok(
-    !prompt.includes("<work-mode>"),
+    !prompt.includes("### Work mode"),
     "Default has no Free/Graph work-mode block",
   );
   ok(
@@ -219,7 +235,7 @@ const baseTask: TaskEnvelope = {
     "Default never enters Expert Graph stage law",
   );
   ok(
-    !layers.runtime.includes("<work-mode>"),
+    !layers.runtime.includes("### Work mode"),
     "Default Runtime omits work-mode injection",
   );
   // Default booking is none — not finding booking doctrine
@@ -247,15 +263,14 @@ const baseTask: TaskEnvelope = {
 // --- Expert Free: workModeInjection free + skill ids ---
 {
   const freeInjection = [
-    "<work-mode>",
+    "### Work mode",
     "mode: free",
     "Prefer Free continuity; do not invent Soft scenario Graph.",
-    "</work-mode>",
   ].join("\n");
   const prompt = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, {
     workModeInjection: freeInjection,
   });
-  ok(prompt.includes("<work-mode>"), "Expert Free injects work-mode block");
+  ok(prompt.includes("### Work mode"), "Expert Free injects work-mode block");
   ok(prompt.includes("mode: free"), "Expert Free work-mode is free");
   ok(
     prompt.includes("Skills available") &&
@@ -263,11 +278,11 @@ const baseTask: TaskEnvelope = {
     "Expert Free skill ids appear",
   );
   ok(
-    prompt.indexOf("## Standing node policies") < prompt.indexOf("<work-mode>"),
+    prompt.indexOf("## Standing node policies") < prompt.indexOf("### Work mode"),
     "Standing before Free work-mode",
   );
   ok(
-    prompt.indexOf("<work-mode>") < prompt.indexOf("Target:"),
+    prompt.indexOf("### Work mode") < prompt.indexOf("Target:"),
     "Free work-mode before Task envelope",
   );
   // No Soft product mode markers
@@ -496,6 +511,90 @@ const baseTask: TaskEnvelope = {
     /never hard-blocks settlement/i.test(workBody) ||
       /Open NEW untested never hard-blocks/i.test(workBody),
     "T3 work.md: open NEW untested does not hard-block settlement",
+  );
+}
+
+{
+  const withHandoff: TaskEnvelope = {
+    ...baseTask,
+    instruction: "对目标：http://host.docker.internal:3000 再次进行渗透测试",
+    handoffSummary: "**任务**: 去对 196 条台账做索引避免撞车",
+  };
+  const prompt = buildSystemPrompt(withHandoff, PENTEST_ROLE_PACK);
+  ok(prompt.includes("### Handoff"), "authorized card body is This-turn ### Handoff");
+  ok(
+    prompt.includes("Authorized card body (not the operator utterance)"),
+    "Handoff block is labeled not-utterance",
+  );
+  ok(prompt.includes("196 条台账"), "Handoff keeps the authorized card body");
+  ok(
+    prompt.includes("对目标：http://host.docker.internal:3000 再次进行渗透测试"),
+    "operator utterance stays on the instruction line",
+  );
+}
+
+{
+  const plain = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK);
+  ok(
+    !/todo\(init\)/i.test(plain),
+    "eager todo is not in system unless the session asks for it",
+  );
+  const withReminders = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, {
+    eagerTodo: true,
+    eagerBooking: true,
+  });
+  ok(/todo\(init\)/i.test(withReminders), "eager todo reminder lives in Runtime when opted in");
+  ok(withReminders.includes("### This-run todo"), "eager todo uses Runtime markdown heading");
+  const chat = buildSystemPrompt(
+    { ...baseTask, target: {}, scope: {} },
+    PENTEST_ROLE_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    /no authorized engagement target/i.test(chat),
+    "chat-only Runtime forbids recon without a target",
+  );
+
+  const ledgerHostOnly = buildSystemPrompt(
+    {
+      ...baseTask,
+      target: { type: "url", value: "http://example.test" },
+      scope: { allow: ["example.test"] },
+    },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerHostOnly.includes("Target/Scope in This turn are for handoff"),
+    "ledger chat-only with host-only target names Target/Scope for handoff",
+  );
+  ok(
+    !ledgerHostOnly.includes("Ledger Q&A and handoff only."),
+    "host-only target is not the empty-engagement ledger line",
+  );
+
+  const ledgerDefaultPort = buildSystemPrompt(
+    {
+      ...baseTask,
+      target: { type: "url", value: "https://example.test:443" },
+      scope: { allow: ["https://example.test:443"] },
+    },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerDefaultPort.includes("Target/Scope in This turn are for handoff"),
+    "ledger chat-only with :443 still treats the engagement as named",
+  );
+
+  const ledgerEmpty = buildSystemPrompt(
+    { ...baseTask, target: {}, scope: {} },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerEmpty.includes("Ledger Q&A and handoff only."),
+    "ledger chat-only without target stays Q&A/handoff",
   );
 }
 

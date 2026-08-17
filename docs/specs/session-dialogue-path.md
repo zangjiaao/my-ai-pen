@@ -41,7 +41,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 
 | # | Lock |
 |---|------|
-| **L1** | Same-Session continue turn text = **operator utterance only** (or ChoiceCard confirm display text). |
+| **L1** | Same-Session continue turn text = **operator utterance only** (or ChoiceCard confirm display text). Harness continue is not a user turn. |
 | **L2** | Platform must **not** concatenate sticky prior `instruction` + `User continuation: …` into `text` / `initial_instruction`. |
 | **L3** | Sticky **target / scope / RoE / expert / engagement / goal** remain structured fields on the envelope (not prose paste into the turn body). |
 | **L4** | New `task_id` on continue is **allowed** for accounting; minting a package id must not imply dialogue restart. |
@@ -50,7 +50,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 | **L7** | Free Tasks / Todo integrity (#313) unchanged: no silent init wipe on continue. |
 | **L8** | Graph package boundary retained: Free continue ≠ incomplete Graph resume semantics; mode continuity stays #277 / #282. |
 | **L9** | No platform free-text keyword table inventing engagement / mode / Task book content (AGENTS.md). Sticky restore uses structured snapshot fields only. |
-| **L10** | Handoff / first open-engagement may still use a full structured cold envelope; this Spec targets **continue on an existing Session**, not first open. |
+| **L10** | Handoff / first open-engagement may still use a full structured cold **system** envelope (This turn Case / Target / Scope + optional `### Handoff` card body). **User turn stays the operator utterance.** `proposed_action` is never `initial_instruction`. |
 
 ---
 
@@ -108,9 +108,11 @@ What they see instead often feels like a restart: a new Task package id, a long 
 
 ### Node
 
-- `runParkedWorkingContinue`: keep single `session.prompt(task.instruction \|\| "继续")`.  
+- `runParkedWorkingContinue`: keep single `session.prompt(task.instruction \|\| "继续")` (operator channel).  
 - Cold Free / Graph first prompt paths retain case_context + target/scope blocks (Spec #386 layers).  
-- Park-miss reseed uses cold path honesty (Todo seed / handoff rules unchanged).
+- Park-miss reseed uses cold path honesty (Todo seed / handoff rules unchanged).  
+- Lab outer continue / goal / budget injects use `session.prompt(..., { channel: "harness" })` — product `role=harness`, markdown `## Runtime` / `### Continue`. Never a fake operator user turn. Occupancy persist-pass and checkpoint are the same channel. Mid-run todo/booking/surface nudges append to the tool result.  
+- **Case speech:** unread visible talk from other Sessions (and operator lines this Session has not heard) arrives as harness `### Case speech` on the same prompt as the operator utterance (`prefixHarness`). Cursor lives on the parked runtime. Cold / park-miss starts empty (recent window once). Park-hit is delta only. System does not re-inject `### Thread`.
 
 ### Phases
 

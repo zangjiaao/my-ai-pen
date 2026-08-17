@@ -22,7 +22,7 @@ import {
   type ParsedLocationOk,
 } from "../stores/surface-identity.js";
 import type { SurfaceRow, SurfaceUpsertResult } from "../stores/surface-sqlite.js";
-import { scopeHostsFromTask } from "./attack-surface.js";
+import { scopeHostsFromTask, scopeOriginsFromTask } from "./attack-surface.js";
 import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
@@ -109,6 +109,11 @@ export type TrafficSettleScopeContext = {
    * (same set as scopeHostsFromTask). Empty/missing = no origin filter.
    */
   allowedHosts?: ReadonlySet<string> | readonly string[] | null;
+  /**
+   * host:port when TARGET / scope.allow named an explicit port.
+   * When non-empty, settle requires this origin (same host other ports are out).
+   */
+  allowedOrigins?: ReadonlySet<string> | readonly string[] | null;
 };
 
 /**
@@ -177,6 +182,29 @@ export function isOriginInEngagementScope(
   return false;
 }
 
+/** Host+port gate when the engagement named an explicit port; else host-only. */
+export function isUrlInEngagementScope(
+  host: string,
+  port: number | string | null | undefined,
+  scope?: TrafficSettleScopeContext | null,
+): boolean {
+  if (!scope) return true;
+  const rawOrigins = scope.allowedOrigins;
+  if (rawOrigins != null) {
+    const origins =
+      rawOrigins instanceof Set
+        ? rawOrigins
+        : new Set([...rawOrigins].map((x) => String(x || "").trim().toLowerCase()).filter(Boolean));
+    if (origins.size > 0) {
+      const h = normalizeScopeHost(host);
+      const p = String(port ?? "").trim();
+      if (!h || !p) return false;
+      return origins.has(`${h}:${p}`);
+    }
+  }
+  return isOriginInEngagementScope(host, scope);
+}
+
 /**
  * Raw URL path (before URL class collapse) contains path traversal.
  * Detects `..` segments and common encodings.
@@ -215,7 +243,10 @@ export function trafficSettleScopeFromTask(task: {
   target?: Record<string, unknown>;
   scope?: Record<string, unknown>;
 }): TrafficSettleScopeContext {
-  return { allowedHosts: scopeHostsFromTask(task) };
+  return {
+    allowedHosts: scopeHostsFromTask(task),
+    allowedOrigins: scopeOriginsFromTask(task),
+  };
 }
 
 /** HTTP(S) only for v2 settle (D6). */
@@ -295,7 +326,7 @@ export function planTrafficSurfaceSettle(
   if (isCollapsedOsProbePath(parsed.path_key, url)) {
     return { settle: false, reason: "collapsed_os_probe" };
   }
-  if (!isOriginInEngagementScope(parsed.host, scope)) {
+  if (!isUrlInEngagementScope(parsed.host, parsed.port, scope)) {
     return { settle: false, reason: "out_of_scope" };
   }
 

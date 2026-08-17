@@ -189,7 +189,7 @@ export function formatGraphL1CatalogInjection(
 ): string {
   const mode = options?.mode === "graph" ? "graph" : "free";
   const lines: string[] = [
-    "<available-graphs>",
+    "### Available graphs",
     "Product Expert Graphs (L1 catalog — like skills: overview only, not full stages):",
   ];
   if (!entries.length) {
@@ -213,7 +213,6 @@ export function formatGraphL1CatalogInjection(
   } else if (mode === "free") {
     lines.push("Current harness: Free (no Expert Graph stages). Stay Free for small talk / ledger Q&A.");
   }
-  lines.push("</available-graphs>");
   return lines.join("\n");
 }
 

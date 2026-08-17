@@ -17,6 +17,7 @@
  */
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
+import { HARNESS_CONTINUE_NOTICE } from "./harness-channel.js";
 import { incompleteTodoStopReminder, midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
 import {
   incompleteNewUntestedSurfaceStopReminder,
@@ -319,23 +320,23 @@ export function resolveHarnessTerminalStatus(options: {
 
 export function emptyStopContinuePrompt(attempt: number, max: number): string {
   return [
-    `<system-injection>`,
+    "### Continue",
+    HARNESS_CONTINUE_NOTICE,
     `You stopped without tool calls. Resume with high-density shell (multi-step curl|python in ONE call; multiple independent shell calls in the same turn).`,
     `Do NOT spam single-request http for multi-step chains — use shell.`,
     `If you already proved issues, book them with finding(confirm)+evidence_ids (batch ok).`,
     `There is no finish tool. When truly stuck after dense shell work, stop with no tools.`,
     `Empty-stop retry ${attempt}/${max}.`,
-    `</system-injection>`,
   ].join("\n");
 }
 
 export function bookingGapContinuePrompt(): string {
   return [
-    `<system-injection>`,
+    "### Continue",
+    HARNESS_CONTINUE_NOTICE,
     `You produced tool evidence but have not booked product findings yet.`,
     `Call finding(action=confirm) with evidence_ids for each proven flag / challenge unlock / vuln now (batch multiple confirms ok).`,
     `Then continue dense shell if open work remains, or stop if stuck — do not pad idle time. No finish tool.`,
-    `</system-injection>`,
   ].join("\n");
 }
 
@@ -345,7 +346,8 @@ export function bookingGapContinuePrompt(): string {
  */
 export function prematureStopContinuePrompt(attempt: number, max: number): string {
   return [
-    `<system-injection>`,
+    "### Continue",
+    HARNESS_CONTINUE_NOTICE,
     `Breadth recovery push ${attempt}/${max} (rare outer continue — prefer keeping tool-calling in-loop).`,
     `Do another high-density SHELL burst (not a stream of single http calls): multi-step pipelines, cookie jars, python parse, parallel independent shell calls in the same turn.`,
     `CRITICAL: Completing the todo map is NOT the same as finishing discovery. Re-read YOUR recon notes/facts — if modules, params, or flows were listed but not yet probed with act tools, test them now.`,
@@ -355,18 +357,16 @@ export function prematureStopContinuePrompt(attempt: number, max: number): strin
     `Do not stop solely because remaining work "might need SPA" — try API/static JS first; drive headless browser via shell only if available.`,
     `Only mark a todo category done when you acted on it or recorded an explicit deadend note. Book proven issues with finding(confirm)+proof (quote real tool output).`,
     `If truly stuck after dense work on remaining recon surfaces, stop with no tools. There is no finish tool.`,
-    `</system-injection>`,
   ].join("\n");
 }
 
 /** When todos are empty on a premature continue — still push untested recon surfaces. */
 export function discoveryBreadthReminder(): string {
   return [
-    `<system-reminder>`,
+    "### This-run todo",
     `Todo map shows no open items — that does not mean every recon surface was tested.`,
     `From your own notes/facts/session history: list untested modules or param families and probe them in this turn, or stop only if none remain.`,
     `Do not invent modules that never appeared in recon.`,
-    `</system-reminder>`,
   ].join("\n");
 }
 
@@ -410,7 +410,7 @@ export function composeContinuePrompt(options: {
           : emptyStopContinuePrompt(options.attempt, options.max);
   const parts = [body];
   if (options.goalSummary) {
-    parts.push(`<system-reminder>\n${options.goalSummary}\n</system-reminder>`);
+    parts.push(String(options.goalSummary).trim());
   }
   if (options.todoErrors?.length) {
     parts.push(todoErrorReminder(options.todoErrors));

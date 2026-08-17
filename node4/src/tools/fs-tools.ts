@@ -6,11 +6,46 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
+/** Session sandbox root: expertDir (`/workspace`), not the pi-instance taskDir. */
+export function sessionWorkspaceRoot(runtime: Pick<ToolRuntime, "sessionDir" | "taskDir">): string {
+  const raw = String(runtime.sessionDir || runtime.taskDir || "").trim();
+  return resolve(raw || ".");
+}
+
+export function toSandboxPath(rel: string): string {
+  const clean = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  return `/workspace/${clean}`;
+}
+
+/** Strip /workspace/ or a known host root so agents can pass either style. */
+export function normalizeWorkspaceRel(
+  rawPath: string,
+  roots: { sessionDir?: string; taskDir?: string } = {},
+): string {
+  let p = String(rawPath || "").trim().replace(/\\/g, "/");
+  if (p.startsWith("/workspace/")) p = p.slice("/workspace/".length);
+  else if (p === "/workspace") p = "";
+  for (const root of [roots.sessionDir, roots.taskDir]) {
+    if (!root) continue;
+    const absRoot = resolve(root).replace(/\\/g, "/");
+    const absP = p.startsWith("/") ? p : "";
+    if (absP && (absP === absRoot || absP.startsWith(absRoot + "/"))) {
+      p = relative(absRoot, absP).replace(/\\/g, "/");
+      break;
+    }
+  }
+  p = p.replace(/^\/+/, "");
+  if (!p || p === ".") throw new Error("path required");
+  if (p.split("/").includes("..")) throw new Error("path escape blocked");
+  return p;
+}
+
 function safeUnderTask(taskDir: string, rawPath: string): string {
   const base = resolve(taskDir);
-  const target = resolve(taskDir, rawPath.replace(/^\//, ""));
-  const rel = relative(base, target);
-  if (rel.startsWith("..") || rel === "..") throw new Error("path escape blocked");
+  const rel = normalizeWorkspaceRel(rawPath, { taskDir });
+  const target = resolve(taskDir, rel);
+  const check = relative(base, target);
+  if (check.startsWith("..") || check === "..") throw new Error("path escape blocked");
   return target;
 }
 
@@ -49,14 +84,18 @@ export function createWriteTool(runtime: ToolRuntime): AgentTool<any> {
     name: "write",
     label: "Write",
     description:
-      "Create or overwrite a file under the task workspace (exploit scripts, notes, source dumps). To share as Case proof, quote path+preview in finding(confirm) proof after writing.",
+      "Create or overwrite a file under the Session workspace (sandbox /workspace — scripts/, notes/). Prefer path like scripts/probe.py. Shell cwd is /workspace. To share as Case proof, quote path+preview in finding(confirm) proof after writing.",
     parameters: Type.Object({
       path: Type.String(),
       content: Type.String(),
     }),
     async execute(_id: string, params: any) {
-      const rel = String(params.path || "").replace(/^\//, "");
-      const file = safeUnderTask(runtime.taskDir, rel);
+      const root = sessionWorkspaceRoot(runtime);
+      const rel = normalizeWorkspaceRel(String(params.path || ""), {
+        sessionDir: runtime.sessionDir,
+        taskDir: runtime.taskDir,
+      });
+      const file = safeUnderTask(root, rel);
       const content = String(params.content ?? "");
       await mkdir(dirname(file), { recursive: true });
       await writeFile(file, content, "utf8");
@@ -79,7 +118,12 @@ export function createWriteTool(runtime: ToolRuntime): AgentTool<any> {
         },
         { role: material || content.length >= 40 ? "proof" : "trace" },
       );
-      return jsonResult({ ok: true, path: file, relative_path: rel, bytes: st.size });
+      return jsonResult({
+        ok: true,
+        path: toSandboxPath(rel),
+        relative_path: rel,
+        bytes: st.size,
+      });
     },
   };
 }
@@ -88,14 +132,20 @@ export function createReadTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "read",
     label: "Read",
-    description: "Read a file under the task workspace (optional offset/limit lines).",
+    description: "Read a file under the Session workspace (sandbox /workspace). Optional offset/limit lines.",
     parameters: Type.Object({
       path: Type.String(),
       offset: Type.Optional(Type.Number()),
       limit: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: any) {
-      const file = safeUnderTask(runtime.taskDir, String(params.path || ""));
+      const file = safeUnderTask(
+        sessionWorkspaceRoot(runtime),
+        normalizeWorkspaceRel(String(params.path || ""), {
+          sessionDir: runtime.sessionDir,
+          taskDir: runtime.taskDir,
+        }),
+      );
       let text = await readFile(file, "utf8");
       const lines = text.split(/\n/);
       const offset = Math.max(0, Number(params.offset || 0));
@@ -111,14 +161,20 @@ export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "edit",
     label: "Edit",
-    description: "Replace an exact old_string with new_string in a task workspace file (OMP-like surgical edit).",
+    description: "Replace an exact old_string with new_string in a Session workspace file (sandbox /workspace).",
     parameters: Type.Object({
       path: Type.String(),
       old_string: Type.String(),
       new_string: Type.String(),
     }),
     async execute(_id: string, params: any) {
-      const file = safeUnderTask(runtime.taskDir, String(params.path || ""));
+      const file = safeUnderTask(
+        sessionWorkspaceRoot(runtime),
+        normalizeWorkspaceRel(String(params.path || ""), {
+          sessionDir: runtime.sessionDir,
+          taskDir: runtime.taskDir,
+        }),
+      );
       const oldStr = String(params.old_string ?? "");
       const newStr = String(params.new_string ?? "");
       if (!oldStr) return textResult("error: old_string required");
@@ -128,7 +184,16 @@ export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
       if (count > 1) return textResult(`error: old_string matched ${count} times; make it unique`);
       await writeFile(file, text.replace(oldStr, newStr), "utf8");
       const st = await stat(file);
-      return jsonResult({ ok: true, path: file, bytes: st.size });
+      return jsonResult({
+        ok: true,
+        path: toSandboxPath(
+          normalizeWorkspaceRel(String(params.path || ""), {
+            sessionDir: runtime.sessionDir,
+            taskDir: runtime.taskDir,
+          }),
+        ),
+        bytes: st.size,
+      });
     },
   };
 }

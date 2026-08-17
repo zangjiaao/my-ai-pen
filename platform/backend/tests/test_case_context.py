@@ -5,11 +5,13 @@ from app.services.case_context import (
     build_evidence_snippets,
     build_findings_summary,
     build_scope_intel_card,
+    build_speech_from_messages,
     build_thread_from_messages,
     case_intel_port_scope,
     collapse_prior_index,
     excerpt_from_properties,
     evidence_role,
+    extract_artifact_hints,
     extract_hosts_from_task,
     extract_scope_ports_from_task,
     path_or_url_from_properties,
@@ -61,6 +63,66 @@ def test_thread_keeps_user_and_agent_text_skips_noise_status():
     assert "RCE confirmed" in texts
     assert "Command injection" in texts
     assert "checkpoint tick" not in texts
+
+
+def test_speech_is_visible_talk_with_ids_skips_findings_and_status():
+    messages = [
+        {
+            "id": "m1",
+            "role": "user",
+            "msg_type": "text",
+            "content": {"text": "Please assess http://lab/app"},
+            "created_at": "2026-01-01T00:00:00",
+        },
+        {
+            "id": "m2",
+            "role": "agent",
+            "msg_type": "status",
+            "content": {"text": "checkpoint tick", "status": "running"},
+            "created_at": "2026-01-01T00:00:01",
+        },
+        {
+            "id": "m3",
+            "role": "agent",
+            "msg_type": "text",
+            "content": {
+                "text": "RCE confirmed; source dumped.",
+                "expert_name": "app-sec",
+                "expert_id": "exp-1",
+            },
+            "created_at": "2026-01-01T00:01:00",
+        },
+        {
+            "id": "m4",
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {
+                "title": "Command injection RCE",
+                "severity": "critical",
+                "location": "/upload",
+                "status": "confirmed",
+            },
+            "created_at": "2026-01-01T00:01:05",
+        },
+        {
+            "id": "m5",
+            "role": "agent",
+            "msg_type": "thinking",
+            "content": {"text": "I should try upload next"},
+            "created_at": "2026-01-01T00:01:06",
+        },
+    ]
+    speech = build_speech_from_messages(messages)
+    ids = [s["id"] for s in speech]
+    kinds = [s["kind"] for s in speech]
+    assert ids == ["m1", "m3"]
+    assert "tool" not in kinds
+    assert "status" not in kinds
+    assert speech[1]["expert_id"] == "exp-1"
+    texts = " ".join(s["text"] for s in speech)
+    assert "checkpoint tick" not in texts
+    assert "Command injection" not in texts
+    assert "I should try upload" not in texts
 
 
 def test_findings_summary_includes_evidence_ids_and_proof():
@@ -164,10 +226,11 @@ def test_evidence_snippets_prefer_linked_proof():
 def test_payload_has_version_and_evidence_snippets():
     messages = [
         {
+            "id": "u1",
             "role": "user",
             "msg_type": "text",
             "content": {
-                "text": "Source is at /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump and HANDOFF_FROM_PENTEST.md"
+                "text": "Source is at notes/source_dump and HANDOFF_FROM_PENTEST.md"
             },
             "created_at": "t0",
         }
@@ -205,12 +268,74 @@ def test_payload_has_version_and_evidence_snippets():
     assert payload["version"] == 2
     assert payload["conversation_id"] == "conv-1"
     assert payload["thread"]
+    assert payload["speech"]
+    assert payload["speech"][0]["id"] == "u1"
     assert payload["findings_summary"][0]["title"] == "RCE"
     assert payload["findings_summary"][0]["evidence_ids"] == ["ev_src"]
     assert payload["evidence_snippets"]
     assert payload["evidence_snippets"][0]["id"] == "ev_src"
     assert "source_dump" in (payload["evidence_snippets"][0].get("path_or_url") or "")
     assert any("source_dump" in h or "HANDOFF" in h for h in payload["artifact_hints"])
+    assert any("/" in h or h.endswith(".md") for h in payload["artifact_hints"] if "source_dump" in h or "HANDOFF" in h)
+
+
+def test_artifact_hints_are_path_shaped_not_prose_words():
+    """Needles stay, but only path-like tokens are hints (not status/prose 'Handoff')."""
+    thread = [
+        {"text": "Handoff authorized — starting destination expert."},
+        {"text": "kind=handoff handoff_pack_id=pentest Cross-pack handoff"},
+        {
+            "text": (
+                "Read notes/source_dump/app.py and HANDOFF_FROM_PENTEST.md "
+                "plus /workspace/scripts/x.py and /opt/app/notes/foo.md"
+            )
+        },
+    ]
+    hints = extract_artifact_hints(thread, [])
+    assert "Handoff" not in hints
+    assert not any(h.lower() == "handoff" for h in hints)
+    assert not any("handoff_pack_id" in h.lower() for h in hints)
+    assert not any(h.lower() == "kind=handoff" for h in hints)
+    assert any("notes/source_dump" in h for h in hints)
+    assert any("HANDOFF_FROM_PENTEST.md" in h for h in hints)
+    assert any("/workspace/scripts/x.py" in h for h in hints)
+    assert any("/opt/app/notes/foo.md" in h for h in hints)
+
+
+def test_artifact_hints_ignore_host_drive_needles():
+    """Lab mount/drive letters are not product needles."""
+    thread = [
+        {"text": "see /mnt/d/Coding/foo/bar.txt and D:\\Coding\\secret.log on this box"},
+    ]
+    hints = extract_artifact_hints(thread, [])
+    assert hints == []
+    assert not any("/mnt/" in h or "D:\\" in h or "D:/" in h for h in hints)
+
+
+def test_this_turn_task_overlays_empty_sticky_context():
+    from app.services.case_context import conv_context_with_this_turn_task
+
+    overlay = conv_context_with_this_turn_task(
+        {},
+        {
+            "target": {"type": "url", "value": "http://host.docker.internal:8080"},
+            "scope": {"allow": ["http://host.docker.internal:8080"]},
+        },
+    )
+    hosts = extract_hosts_from_task(overlay.get("task"))
+    assert "host.docker.internal" in hosts
+
+
+def test_this_turn_target_wins_over_sticky_task():
+    from app.services.case_context import conv_context_with_this_turn_task
+
+    overlay = conv_context_with_this_turn_task(
+        {"task": {"target": {"type": "url", "value": "http://old.example"}}},
+        {"target": {"type": "url", "value": "http://host.docker.internal:8080"}},
+    )
+    hosts = extract_hosts_from_task(overlay.get("task"))
+    assert "host.docker.internal" in hosts
+    assert "old.example" not in hosts
 
 
 def test_extract_hosts_from_task_target_and_scope():

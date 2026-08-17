@@ -67,6 +67,18 @@ assert.equal(
   ),
   2,
 );
+assert.equal(
+  findKeepTailStart(
+    [
+      { role: "user", content: "operator", timestamp: 1 },
+      { role: "assistant", content: "ok", timestamp: 2 },
+      { role: "harness", content: "### Continue\nresume", timestamp: 3 },
+    ],
+    null,
+  ),
+  0,
+  "keep-tail ignores harness continue — last user is the operator",
+);
 
 const toolBody = "SENSITIVE_TOOL_BODY_SHOULD_DROP";
 const history: AgentMessage[] = [
@@ -93,6 +105,8 @@ assert.ok(blob.includes("WAF"), "living intel rehydrated");
 
 const withPass = withPersistPass(history);
 assert.ok(JSON.stringify(withPass).includes(PERSIST_PASS_MARKER));
+assert.equal(withPass[withPass.length - 1]?.role, "harness", "persist pass is harness, not operator");
+assert.equal(shrunk[0]?.role, "harness", "checkpoint is harness, not operator");
 
 const err = occupancyLlmTurnError("provider context_length exceeded");
 assert.ok(isLlmTurnError(err));
@@ -124,7 +138,8 @@ async function testTransformCycle() {
 
   const after = await transform(persist);
   const afterBlob = JSON.stringify(after);
-  assert.ok(!afterBlob.includes(PERSIST_PASS_MARKER) || after[0].role === "user", "then shrink");
+  assert.equal(after[0]?.role, "harness", "shrink checkpoint is harness, not operator");
+  assert.ok(!afterBlob.includes(PERSIST_PASS_MARKER), "persist-pass does not survive shrink");
   assert.ok(afterBlob.includes(CHECKPOINT_POINTER), "shrink emits checkpoint");
   assert.ok(!afterBlob.includes("\"content\":\"old\""), "old user turn dropped after persist");
 }

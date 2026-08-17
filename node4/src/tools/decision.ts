@@ -54,21 +54,23 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
     description:
       "Show ONE choice/authorization card and wait for user feedback (button OR free-text reply). " +
       "Click and type are the same path — the tool unblocks with the user's response. " +
-      "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + full scope in proposed_action. " +
+      "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
+      "Do not write method, RoE, playbook, or ledger-dump instructions in proposed_action — those live in Profession/Runtime. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
       "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
       "Never silent-switch Free↔Graph — always card or user composer Workflow. " +
       "Spec #312 next_steps: at stoppable settle / empty-continue with open Case Workset, emit kind=next_steps + options[2–5] " +
       "(each id,title,body required; optional workset_item_ids binds). Multi-select; do not only say 等待指示 or prose A/B/C/D. " +
       "Do not chain multiple cards; put defaults on the card. " +
-      "After authorize on handoff, the platform starts the destination expert; keep any follow-up text very short. " +
+      "After authorize on handoff, the platform starts the destination expert; do not reply. " +
       "After authorize on enter/switch Graph, platform settles Session work_mode and may re-dispatch Graph. " +
       "If the tool result decision is authorize/confirm_options (including free-text reply), do not re-show the card.",
     parameters: Type.Object({
       question: Type.String({ description: "Card title — short authorization question or next_steps preamble" }),
       proposed_action: Type.Optional(
         Type.String({
-          description: "Markdown body: target, scope, accounts, method, constraints (one card = complete plan)",
+          description:
+            "Short authorized scope for the user card: target + restatement of what the user asked. Not method, RoE, playbook, or ledger-dump instructions.",
         }),
       ),
       risk_level: Type.Optional(
@@ -329,11 +331,21 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
             ? "User authorized exit Graph → Free (Graph parked). Platform settled Session work_mode=free. Reply briefly; do not re-show the card."
             : "User authorized Graph mode change. Platform settled Session work_mode. Reply briefly; do not re-show the card.";
 
+      const selectedIds = Array.isArray(approvalResult.selected_option_ids)
+        ? approvalResult.selected_option_ids.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const selectedOpts = (nextStepsOptions || []).filter((o) => selectedIds.includes(String(o.id || "")));
+      const selectedBits = selectedOpts
+        .map((o) => `${o.id}: ${String(o.title || "").trim()}`)
+        .filter((s) => s.length > 2)
+        .join("; ");
       const nextStepsMsg =
         decision === "confirm_options"
-          ? "User confirmed next_steps packages. Proceed with the selected work packages; do not re-show the same card; do not invent a free-text A/B/C/D menu."
+          ? selectedBits
+            ? `User confirmed next_steps. Selected: ${selectedBits}. Honor those option bodies; do not start unselected work; do not re-show the same card.`
+            : "User confirmed next_steps. Honor the selected option bodies; do not start unselected work; do not re-show the same card."
           : decision === "authorize" && kind === "next_steps"
-            ? "User replied on the next_steps card. Proceed from their free-text intent; do not re-show the same card."
+            ? "User replied on the next_steps card. Honor their reply; do not re-show the same card."
             : decision === "answered"
               ? "User continued in free text; this card was dismissed without selecting options. Do not re-show it; do not apply handoff or Graph mode from this wait."
               : null;
@@ -349,7 +361,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
           nextStepsMsg ||
           (decision === "authorize"
             ? kind === "handoff" || handoffPack
-              ? "User authorized handoff. Platform is starting the destination expert now. Reply in at most one short sentence; do not claim you ran the scan; do not emit another decision card."
+              ? "User authorized handoff. Platform is starting the destination expert now. Do not reply; do not claim you ran the scan; do not emit another decision card."
               : isGraphMode
                 ? graphAuthorizeMsg
                 : "User authorized. Proceed within your tool policy; do not emit another decision card for the same plan."

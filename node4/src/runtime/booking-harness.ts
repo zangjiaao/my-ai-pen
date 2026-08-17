@@ -38,33 +38,30 @@ export function midRunBookingNudge(snapshot: BookingSnapshot): string {
 
   if (backlog.kind === "zero_bookings") {
     return [
-      "<system-reminder>",
+      "### This-run booking",
       `Booking gap: ${snapshot.evidenceCount} probe observation(s) but 0 findings booked.`,
       "Product truth is finding(confirm) with location, description, poc, and proof.",
       "proof = proving fragment copied from your tool output (response body / reflection / stdout).",
       "Case evidence is created automatically from that proof — do not hunt evidence_ids.",
       "Chat prose alone is not a conclusion.",
-      "</system-reminder>",
     ].join("\n");
   }
 
   return [
-    "<system-reminder>",
+    "### This-run booking",
     `Booking lag: probes≈${snapshot.evidenceCount}, findings=${snapshot.bookedFindingCount}.`,
     "If a probe proved an issue, book with finding(confirm): location + poc + proof (quote the real observation).",
-    "</system-reminder>",
   ].join("\n");
 }
 
 export function eagerBookingInjection(): string {
   return [
-    "<system-reminder>",
+    "### This-run booking",
     "Book only issues you can *prove* with finding(confirm).",
     "Required: title, location, description, poc (how + observed result), proof (proving fragment from tool output).",
     "Finding = user-trustable conclusion. Evidence is created from your proof at booking time — one strong proof is enough.",
     "Do not pass evidence_ids; quote real stdout/response text into proof after probing.",
     "Chat/todo text is never product truth. When done, stop without tools.",
-    "</system-reminder>",
   ].join("\n");
 }
 

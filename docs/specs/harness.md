@@ -45,7 +45,7 @@ Interactive **TUI remains deferred**.
    **Booking trust model (simple):** Finding = user-trustable conclusion. **Evidence is created at booking** from agent `proof` (fragment grounded in recent tool output). Act tools do not flood Case with logs. One strong proof is enough; agent does not hunt opaque `evidence_ids`.
 9. **No target answer keys**.
 10. **Post-run inspectability** — task workspace readable after dispose.
-11. **Lean system prompt (serve the LLM)** — single-source rules: runtime `<work-mode>` / RoE for mode truth; pack `work.md` for act discipline; platform-citizen for ledger/handoff. Do not triple-stack Graph soft, priors, or subagent acceptance into every layer. Prefer progressive skill/refs load over encyclopedia system prompts.
+11. **Lean system prompt (serve the LLM)** — single-source rules: runtime Work mode / RoE markdown for mode truth; pack `work.md` for act discipline; platform-citizen for ledger/handoff. Do not triple-stack Graph soft, priors, or subagent acceptance into every layer. Prefer progressive skill/refs load over encyclopedia system prompts. Outer continue / occupancy checkpoint are the **Harness** channel (`role=harness`, markdown `## Runtime`) — not a user turn and not XML `<system-injection>`.
 
 ---
 

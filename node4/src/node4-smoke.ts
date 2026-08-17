@@ -728,7 +728,7 @@ async function main() {
     "active context steers honest complete",
   );
   const contPrompt = buildGoalContinuationPrompt(goals.getMode()!, { openTodoCount: 0 });
-  assert(contPrompt.includes("completion audit") && contPrompt.includes("goal-continuation"), "continuation has OMP audit");
+  assert(contPrompt.includes("completion audit") && contPrompt.includes("goal_continuation"), "continuation has OMP audit");
   assert(contPrompt.includes("todo_context") || contPrompt.includes("Todo map"), "continuation notes empty todo map");
   // Goal continuation policy (lab): active + unlimited maxGoalContinues → continue after tools
   const goalCont = shouldContinueAfterNaturalStop({
@@ -919,7 +919,10 @@ async function main() {
   assert(pure.phases[0]!.tasks[0]!.status === "in_progress", "todo auto start");
   assert(formatTodoSummary(pure.phases).includes("Remaining items"), "todo summary");
   // OMP-aligned todo policy (eager + mid-run reconcile + incomplete stop)
-  assert(eagerTodoInjection({ forced: true }).includes("MUST call todo"), "eager forces init");
+  assert(
+    eagerTodoInjection({ forced: true }).includes("todo(init)"),
+    "eager forces init",
+  );
   assert(eagerTodoInjection({ forced: true }).includes("coarse") || eagerTodoInjection({ forced: true }).includes("categor"), "eager coarse map");
   assert(eagerTodoInjection({ forced: true }).includes("SAME turn") || eagerTodoInjection({ forced: true }).includes("same turn"), "eager same-turn act");
   // Role-specific phase lists belong in expert packs — not harness.

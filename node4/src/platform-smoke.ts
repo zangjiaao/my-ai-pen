@@ -25,6 +25,7 @@ import {
   parseAllowDestructive,
   parseAllowPostex,
   parseFocusFields,
+  parseHandoffSummary,
 } from "./runtime/task-envelope-fields.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 
@@ -93,6 +94,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     graphExecution,
     focusFindingIds: focus.focusFindingIds,
     focusNote: focus.focusNote,
+    handoffSummary: parseHandoffSummary(message),
     allowPostex,
     allowDestructive,
     accounts: message.accounts !== undefined ? message.accounts : undefined,

@@ -86,12 +86,11 @@ export function incompleteNewUntestedSurfaceStopReminder(
           .join("\n")
       : "";
   return [
-    "<system-reminder>",
+    "### Surface",
     `You stopped with ${newUntestedCount} Surface item(s) still **NEW untested** (not yet TESTED this Case — need purpose=test traffic / case_tested)${list ? `:\n${list}` : "."}`,
     "Duty: NEW → TESTED via real test-purpose traffic (shell/http/session; Runtime sets case_tested), or mark deadend/skipped_roe. Platform vuln priors alone ≠ this-Case TESTED / ≠ coverage complete.",
     "Use surface(summary|list) as the coverage queue. Open NEW untested never blocks booking or settlement — still disclose remaining NEW untested on pause/next_steps.",
     `(Reminder ${attempt}/${maxAttempts})`,
-    "</system-reminder>",
   ].join("\n");
 }
 
@@ -100,11 +99,10 @@ export function midRunNewUntestedSurfaceNudge(newUntestedCount: number): string 
   if (newUntestedCount < 1) return "";
   const plural = newUntestedCount === 1 ? "is" : "are";
   return [
-    "<system-reminder>",
+    "### Surface",
     `Gentle reminder: ${newUntestedCount} Surface item${newUntestedCount === 1 ? "" : "s"} ${plural} still **NEW untested** (not yet TESTED this Case — need test-purpose traffic).`,
     "Call surface(summary|list) and drive NEW → TESTED with real requests (or deadend) — platform priors are re-verify context, not a skip list.",
     "Do not claim recon/coverage complete while NEW untested remain without an honest pause that discloses the queue.",
-    "</system-reminder>",
   ].join("\n");
 }
 

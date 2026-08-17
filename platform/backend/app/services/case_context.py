@@ -22,6 +22,14 @@ _THREAD_INCLUDE_TYPES = frozenset({
     "user_steer",
     "user_input",
 })
+# Visible group speech only — thinking / tools / status / finding cards stay out.
+_SPEECH_INCLUDE_TYPES = frozenset({
+    "text",
+    "decision",
+    "confirm_card",
+    "user_steer",
+    "user_input",
+})
 # Status lines that are useful once (settlement), not every checkpoint.
 _STATUS_KEEP_SUBSTRINGS = (
     "completed",
@@ -158,6 +166,17 @@ def _speaker_from_message(role: str, content: dict, msg_type: str) -> str:
     return role or "agent"
 
 
+def _line_identity(msg: dict, content: dict) -> dict[str, str]:
+    mid = str(msg.get("id") or "").strip()
+    eid = str(content.get("expert_id") or content.get("expertId") or "").strip()
+    out: dict[str, str] = {}
+    if mid:
+        out["id"] = mid[:80]
+    if eid:
+        out["expert_id"] = eid[:80]
+    return out
+
+
 def _line_from_message(msg: dict) -> dict[str, str] | None:
     """Turn a stored message summary into one thread line, or None to skip."""
     role = str(msg.get("role") or "")
@@ -165,6 +184,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
     content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
     if not isinstance(content, dict):
         content = {}
+    ident = _line_identity(msg, content)
 
     if msg_type in _THREAD_INCLUDE_TYPES or role == "user":
         text = ""
@@ -187,6 +207,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
         if not text:
             return None
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": msg_type or "text",
             "text": _clip(text),
@@ -207,6 +228,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
         if not text:
             return None
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": "status",
             "text": _clip(text, 400),
@@ -220,6 +242,7 @@ def _line_from_message(msg: dict) -> dict[str, str] | None:
             return None
         tool = content.get("tool_name") or "tool"
         return {
+            **ident,
             "speaker": _speaker_from_message(role, content, msg_type),
             "kind": "tool",
             "text": _clip(f"[{tool}] {summary}", 240),
@@ -246,6 +269,46 @@ def build_thread_from_messages(
     if limit > 0 and len(lines) > limit:
         lines = lines[-limit:]
     # Enforce total char budget from the end (keep latest)
+    kept: list[dict[str, str]] = []
+    used = 0
+    for line in reversed(lines):
+        n = len(line.get("text") or "") + len(line.get("speaker") or "") + 8
+        if used + n > total_chars and kept:
+            break
+        kept.append(line)
+        used += n
+    kept.reverse()
+    return kept
+
+
+def build_speech_from_messages(
+    messages: list[dict],
+    *,
+    limit: int = DEFAULT_THREAD_LIMIT,
+    total_chars: int = DEFAULT_TOTAL_CHARS,
+) -> list[dict[str, str]]:
+    """Append-only Case group speech (visible talk only), oldest→newest."""
+    lines: list[dict[str, str]] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        line = _line_from_message(msg)
+        if not line:
+            continue
+        kind = str(line.get("kind") or "")
+        role = str(msg.get("role") or "")
+        if kind not in _SPEECH_INCLUDE_TYPES and role != "user":
+            continue
+        if kind in {"vuln_found", "vuln_card", "status", "tool"}:
+            continue
+        if not str(line.get("text") or "").strip():
+            continue
+        if not str(line.get("id") or "").strip():
+            # Cursor needs a stable id; skip unidentifiable rows.
+            continue
+        lines.append(line)
+    if limit > 0 and len(lines) > limit:
+        lines = lines[-limit:]
     kept: list[dict[str, str]] = []
     used = 0
     for line in reversed(lines):
@@ -311,21 +374,65 @@ def build_findings_summary(
     return out
 
 
+# Product Case/Session artifact identity — not host mount/drive letters.
+_ARTIFACT_PATH_NEEDLES = (
+    "HANDOFF",
+    "source_dump",
+    "workspace/",
+    "evidence/",
+    "findings/",
+    ".md",
+    "notes/",
+)
+_ARTIFACT_PATH_EXTS = (
+    ".md",
+    ".py",
+    ".js",
+    ".ts",
+    ".json",
+    ".txt",
+    ".log",
+    ".html",
+    ".java",
+    ".php",
+    ".c",
+    ".go",
+)
+
+
+def _looks_like_artifact_path(token: str) -> bool:
+    """True when the token is path- or filename-shaped — not a prose word."""
+    t = str(token or "").strip("`'\"()[].,;:")
+    if len(t) < 5 or len(t) >= 260:
+        return False
+    if "/" in t or "\\" in t:
+        return True
+    lower = t.lower()
+    return any(lower.endswith(ext) for ext in _ARTIFACT_PATH_EXTS)
+
+
 def extract_artifact_hints(thread: list[dict[str, str]], findings: list[dict]) -> list[str]:
-    """Light path/id hints from thread text (no full file bodies)."""
+    """Light path/id hints from thread text (no full file bodies).
+
+    Needles are Case/Session relative identity (notes/, workspace/, source_dump,
+    filename HANDOFF, .md, …) — not host mounts (/mnt/, D:\\). A token is kept
+    only when it is path-shaped; a bare word like status “Handoff” is not an artifact.
+    """
     hints: list[str] = []
     seen: set[str] = set()
-    needles = ("HANDOFF", "source_dump", "workspace/", "evidence/", "findings/", ".md", "/mnt/", "D:\\", "notes/")
     for line in thread:
         text = line.get("text") or ""
-        if not any(n.lower() in text.lower() for n in needles):
+        if not any(n.lower() in text.lower() for n in _ARTIFACT_PATH_NEEDLES):
             continue
         for token in text.replace(",", " ").split():
-            if any(n.lower() in token.lower() for n in needles) and len(token) > 4:
-                t = token.strip("`'\"()[]")
-                if t not in seen and len(t) < 260:
-                    seen.add(t)
-                    hints.append(t)
+            t = token.strip("`'\"()[].,;:")
+            if not _looks_like_artifact_path(t):
+                continue
+            if not any(n.lower() in t.lower() for n in _ARTIFACT_PATH_NEEDLES):
+                continue
+            if t not in seen:
+                seen.add(t)
+                hints.append(t)
             if len(hints) >= 12:
                 return hints
     for f in findings:
@@ -753,6 +860,7 @@ def build_case_context_payload(
     never full PoC dumps.
     """
     thread = build_thread_from_messages(messages, limit=thread_limit)
+    speech = build_speech_from_messages(messages, limit=thread_limit)
     findings_list = findings or []
     findings_summary = build_findings_summary(findings_list, limit=findings_limit)
     # Also fold vuln lines already in thread into board if findings empty
@@ -799,6 +907,7 @@ def build_case_context_payload(
         "version": 2,
         "conversation_id": conversation_id,
         "thread": thread,
+        "speech": speech,
         "findings_summary": findings_summary,
         "evidence_snippets": evidence_snippets,
         "artifact_hints": hints[:16],
@@ -1211,6 +1320,27 @@ def _task_from_conv_context(conv_context: dict | None) -> dict:
     return {}
 
 
+def conv_context_with_this_turn_task(
+    conv_context: dict | None,
+    task_override: dict | None,
+) -> dict:
+    """Sticky conversation.context plus this-turn structured target/scope.
+
+    This-turn envelope wins when present. No free-text invent.
+    """
+    ctx = dict(conv_context or {}) if isinstance(conv_context, dict) else {}
+    sticky = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    merged = dict(sticky) if isinstance(sticky, dict) else {}
+    if isinstance(task_override, dict):
+        if task_override.get("target"):
+            merged["target"] = task_override["target"]
+        if task_override.get("scope"):
+            merged["scope"] = task_override["scope"]
+    if merged:
+        ctx["task"] = merged
+    return ctx
+
+
 async def _scope_intel_port_map(
     db,
     *,
@@ -1269,8 +1399,14 @@ async def load_case_context_for_conversation(
     thread_limit: int = DEFAULT_THREAD_LIMIT,
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
+    task: dict | None = None,
 ) -> dict[str, Any]:
-    """Load messages + this-Case findings + thin scope_intel + evidence snippets."""
+    """Load messages + this-Case findings + thin scope_intel + evidence snippets.
+
+    ``task`` is this-turn structured target/scope from the dispatch envelope.
+    It overlays sticky conversation.context.task so first-turn inject sees
+    the host even before the Case row is updated.
+    """
     import uuid as uuid_mod
 
     from sqlalchemy import select
@@ -1306,6 +1442,9 @@ async def load_case_context_for_conversation(
     except Exception:
         conv = None
         conv_context = {}
+
+    if task is not None:
+        conv_context = conv_context_with_this_turn_task(conv_context, task)
 
     # findings_summary board: **this Case only** (avoid dumping cross-Case priors here).
     findings: list[dict] = []
