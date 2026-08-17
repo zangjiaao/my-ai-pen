@@ -110,7 +110,7 @@ Empty optional sub-parts omit; **layer order never rearranges**.
 | **Runtime · Free** | Pure OMP pointer; prefer Free continuity; permissioned enter-graph; product Graph L1 catalog (no stage dump); **run-varying RoE instance** (`formatRoeInjection`) | Stage success criteria; host settlement ceremony |
 | **Runtime · Graph stage** | graph id + stage id/success; stage tool messaging; host-owned settlement; packages / plan_node_id when subagent on surface; stage-local todo discipline; hypothesis only if stage flag on; **fail-closed destructive / no-invent law** (not full Free RoE block) | Free whole-engagement multi-phase todo maps; Soft scenario menus; full profession encyclopedia (use core/compact in Profession) |
 | **Runtime · capability** | Tools list; booking mode note; skill ids and/or skill L1 catalog; gated one-liners (subagent/fact/surface/progressive load); recipes pointer | Task target JSON; Standing policy |
-| **Task** | target / scope / accounts / instruction; Case context; process-fact index; goals; handoff / prior seed projections | Always-on methodology |
+| **Task** | target / scope / accounts / instruction; Case context; process-fact index; goals; handoff / prior seed projections; session title (auto-title when still「新会话」+ structured target) | Always-on methodology; do not duplicate this block onto the user turn |
 
 #### 3.3.1 Implementation home today (Spec-honest partial — [#395](https://github.com/zangjiaao/my-ai-pen/issues/395))
 
