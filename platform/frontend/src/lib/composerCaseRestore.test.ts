@@ -12,6 +12,7 @@ import {
   pickDefaultMentionTarget,
   restoreComposerFromCaseSnapshot,
   shouldShowCaseLoadingSkeleton,
+  shouldShowComposerLoadingSkeleton,
 } from "./composerCaseRestore";
 
 function target(partial: Partial<MentionTarget> & { name: string; expertId: string }): MentionTarget {
@@ -89,6 +90,68 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
       messagesLoading: false,
     }),
     false,
+  );
+}
+
+{
+  assert.equal(
+    shouldShowComposerLoadingSkeleton({
+      activeCaseId: null,
+      caseSurfaceLoading: false,
+      homeRestoreDone: false,
+      mentionCatalogLoaded: false,
+      hasSelectableMention: false,
+      hasSelectedMention: false,
+    }),
+    true,
+    "blank-home route resolution keeps the composer skeleton visible",
+  );
+  assert.equal(
+    shouldShowComposerLoadingSkeleton({
+      activeCaseId: null,
+      caseSurfaceLoading: false,
+      homeRestoreDone: true,
+      mentionCatalogLoaded: true,
+      hasSelectableMention: true,
+      hasSelectedMention: false,
+    }),
+    true,
+    "selectable catalog waits for the default partner pick",
+  );
+  assert.equal(
+    shouldShowComposerLoadingSkeleton({
+      activeCaseId: null,
+      caseSurfaceLoading: false,
+      homeRestoreDone: true,
+      mentionCatalogLoaded: true,
+      hasSelectableMention: true,
+      hasSelectedMention: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowComposerLoadingSkeleton({
+      activeCaseId: null,
+      caseSurfaceLoading: false,
+      homeRestoreDone: true,
+      mentionCatalogLoaded: true,
+      hasSelectableMention: false,
+      hasSelectedMention: false,
+    }),
+    false,
+    "an honestly empty/offline catalog renders the real composer",
+  );
+  assert.equal(
+    shouldShowComposerLoadingSkeleton({
+      activeCaseId: "case-b",
+      caseSurfaceLoading: true,
+      homeRestoreDone: true,
+      mentionCatalogLoaded: true,
+      hasSelectableMention: true,
+      hasSelectedMention: true,
+    }),
+    true,
+    "existing Case loading remains authoritative",
   );
 }
 

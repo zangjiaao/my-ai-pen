@@ -21,6 +21,7 @@ import {
   restoreComposerFromCaseSnapshot,
   shouldPollConversationSnapshot,
   shouldShowCaseLoadingSkeleton,
+  shouldShowComposerLoadingSkeleton,
   type ComposerRestoreSnapshot,
 } from "../lib/composerCaseRestore";
 import MessageRenderer, {
@@ -376,6 +377,7 @@ export default function ConversationPage() {
 
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [productExperts, setProductExperts] = useState<ProductExpert[]>([]);
+  const [productExpertsLoaded, setProductExpertsLoaded] = useState(false);
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
@@ -2237,6 +2239,8 @@ export default function ConversationPage() {
       setProductExperts(Array.isArray(rows) ? rows.filter((e) => e.enabled !== false) : []);
     } catch {
       setProductExperts([]);
+    } finally {
+      setProductExpertsLoaded(true);
     }
   }, []);
 
@@ -2287,6 +2291,16 @@ export default function ConversationPage() {
     }
     return out;
   }, [productExperts]);
+  const composerSurfaceLoading = shouldShowComposerLoadingSkeleton({
+    activeCaseId: activeId,
+    caseSurfaceLoading,
+    homeRestoreDone,
+    mentionCatalogLoaded: productExpertsLoaded,
+    hasSelectableMention: mentionTargets.some((target) => target.selectable !== false),
+    hasSelectedMention: mentionTargets.some(
+      (target) => target.key === selectedMention?.key && target.selectable !== false,
+    ),
+  });
 
   mentionTargetsRef.current = mentionTargets;
   productExpertsRef.current = productExperts;
@@ -3273,7 +3287,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
             {/* Draft state lives in ChatComposer — page-level input re-rendered the whole stream. */}
-            {caseSurfaceLoading ? (
+            {composerSurfaceLoading ? (
               <ChatComposerSkeleton />
             ) : (
               <ChatComposer

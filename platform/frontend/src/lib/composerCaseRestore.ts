@@ -70,6 +70,19 @@ export function shouldShowCaseLoadingSkeleton(input: {
   );
 }
 
+export function shouldShowComposerLoadingSkeleton(input: {
+  activeCaseId: string | null;
+  caseSurfaceLoading: boolean;
+  homeRestoreDone: boolean;
+  mentionCatalogLoaded: boolean;
+  hasSelectableMention: boolean;
+  hasSelectedMention: boolean;
+}): boolean {
+  if (input.activeCaseId) return input.caseSurfaceLoading;
+  if (!input.homeRestoreDone || !input.mentionCatalogLoaded) return true;
+  return input.hasSelectableMention && !input.hasSelectedMention;
+}
+
 /**
  * New-chat / fallback partner (Spec #299: only online / schedulable seats):
  * 1) expert.is_default from 专家管理 (if online)
