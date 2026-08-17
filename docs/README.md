@@ -19,6 +19,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — `node4/` |
 | [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
 | [`specs/participant-session.md`](specs/participant-session.md) | Case · Participant Session · work mode continuity (Spec [#277](https://github.com/zangjiaao/my-ai-pen/issues/277)) |
+| [`specs/organization-workspace-tenancy.md`](specs/organization-workspace-tenancy.md) | Organization × flat Workspace tenancy; Node assignments, Workspace-default Expert, scoped ledgers, and explicit cross-Workspace sharing (Spec [#479](https://github.com/zangjiaao/my-ai-pen/issues/479)) |
 | [`specs/session-owns-runtime.md`](specs/session-owns-runtime.md) | Session owns captain runtime; Task is dispatch package only (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354)) |
 | [`specs/context-window-management.md`](specs/context-window-management.md) | Agent Runtime occupancy shrink = **checkpoint** (Store rehydrate + current Todo slice); not chat-summary / not AgentHarness — map [#461](https://github.com/zangjiaao/my-ai-pen/issues/461) |
 | [`specs/session-dialogue-path.md`](specs/session-dialogue-path.md) | Session-first dialogue path — continue turn = operator utterance; Task out of conversational middle (Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455)) |

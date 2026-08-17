@@ -4,6 +4,32 @@ Ubiquitous language for the AI security workbench: one platform, one bound Node,
 
 ## Language
 
+### Tenancy
+
+**Organization**:
+One company-level tenant. Owns Users, Workspaces, Nodes, and organization policy. Does not recursively contain child Organizations.
+_Avoid_: branch tree; asset Group; using Organization as the direct visibility scope for every ledger row
+
+**Workspace**:
+One flat data and execution boundary inside an Organization (e.g. branch, red team, regulated business unit). Users may belong to several Workspaces and explicitly select the current one.
+_Avoid_: recursive sub-organization; project folder; Owner Ledger Group
+
+**Workspace Membership**:
+The explicit relation granting one User access to one Workspace.
+_Avoid_: trusting a client-supplied Workspace id; inferring access from row creation or Case participation
+
+**Node Assignment**:
+The explicit relation allowing one Organization-owned Node to execute Cases for one Workspace. One Node may serve several Workspaces; its Experts inherit the same availability.
+_Avoid_: treating an online Node connection as Workspace authorization; assigning Expert ownership independently from its Node
+
+**Home Workspace**:
+The single Workspace that owns a Case or ledger resource throughout its lifetime. User identity records the actor, not the sharing boundary.
+_Avoid_: changing ownership on share; `user_id IS NULL` as shared data
+
+**Explicit Share**:
+A revocable grant from a resource's Home Workspace to another Workspace or an explicit Organization publication scope. Asset, Finding, and Intel grants are independent.
+_Avoid_: implicit same-Organization visibility; row copies as sharing; Asset share automatically leaking Findings or Intel
+
 ### Product seats
 
 **Default**:
