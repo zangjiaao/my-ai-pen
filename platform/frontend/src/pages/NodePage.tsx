@@ -1,8 +1,10 @@
 import { ApiError, authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { Check, Copy, Eye, EyeOff, Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import PageToolbarSkeleton from "../components/PageToolbarSkeleton";
 import {
   EXTENSION_PACKS,
   effectiveOffers,
@@ -65,8 +67,59 @@ type NodeRecord = {
   offers?: string[] | null;
 };
 
+const NODE_GRID_CLASS = "grid grid-cols-1 gap-4 md:grid-cols-2";
+const NODE_CARD_CLASS =
+  "group flex flex-col rounded-lg border border-hairline bg-canvas p-4 text-left";
+
+function NodeGridSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="正在加载节点"
+      data-testid="nodes-loading-skeleton"
+      className={`${NODE_GRID_CLASS} animate-pulse`}
+    >
+      {[0, 1, 2, 3].map((index) => (
+        <div key={index} aria-hidden="true" className={`${NODE_CARD_CLASS} min-h-[10rem]`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex h-6 items-center gap-2">
+                <div className="h-4 w-28 rounded-full bg-canvas-inset" />
+                <div className="h-5 w-12 rounded-full bg-canvas-inset" />
+              </div>
+              <div className="mt-1 h-3 w-24 rounded-full bg-canvas-inset" />
+            </div>
+          </div>
+          <div className="mt-4 flex flex-1 items-end justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="h-3 w-40 rounded-full bg-canvas-inset" />
+              <div className="h-3 w-32 rounded-full bg-canvas-inset" />
+              <div className="flex gap-1.5">
+                <div className="h-5 w-20 rounded-full bg-canvas-inset" />
+                <div className="h-5 w-16 rounded-full bg-canvas-inset" />
+              </div>
+            </div>
+            <div className="flex h-8 items-end gap-0.5">
+              {[12, 20, 16, 24, 18, 26].map((height, barIndex) => (
+                <div
+                  key={barIndex}
+                  className="w-1.5 rounded-sm bg-canvas-inset"
+                  style={{ height: `${height}px` }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function NodePage() {
+  useRenderAudit("NodePage");
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("全部");
   const [showRegister, setShowRegister] = useState(false);
@@ -79,11 +132,17 @@ export default function NodePage() {
   const [detailTokenVisible, setDetailTokenVisible] = useState(false);
 
   const load = async () => {
-    const data = await authFetch<NodeRecord[]>("/api/nodes");
-    // Worker nodes only (backend also filters); hide any legacy platform agent rows.
-    const workers = data.filter((n) => n.type !== "platform" && n.id !== "00000000-0000-0000-0000-000000000001");
-    setNodes(workers);
-    setSelectedNode((current) => (current ? workers.find((n) => n.id === current.id) || null : null));
+    setLoading(true);
+    try {
+      const data = await authFetch<NodeRecord[]>("/api/nodes");
+      // Worker nodes only (backend also filters); hide any legacy platform agent rows.
+      const workers = data.filter((n) => n.type !== "platform" && n.id !== "00000000-0000-0000-0000-000000000001");
+      setNodes(workers);
+      setSelectedNode((current) => (current ? workers.find((n) => n.id === current.id) || null : null));
+    } finally {
+      setLoading(false);
+      setInitialLoading(false);
+    }
   };
   useEffect(() => {
     void load();
@@ -162,10 +221,18 @@ export default function NodePage() {
       <div className="flex flex-1 flex-col">
         <TopBar title="节点管理" />
         <div className="flex-1 overflow-y-auto p-6">
+          {initialLoading ? (
+            <PageToolbarSkeleton
+              controls={[192, 104]}
+              trailingWidth={96}
+              label="正在加载节点操作栏"
+              testId="nodes-toolbar-loading-skeleton"
+            />
+          ) : (
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleTypedInput("NodePage.search", setSearch, { allow: ["NodePage"] })}
               placeholder="搜索节点名称、IP…"
               className="min-w-[12rem] rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-ink outline-none focus:border-ink"
             />
@@ -192,15 +259,18 @@ export default function NodePage() {
               注册节点
             </button>
           </div>
+          )}
 
-          {filtered.length === 0 ? (
+          {loading && nodes.length === 0 ? (
+            <NodeGridSkeleton />
+          ) : filtered.length === 0 ? (
             <p className="text-sm text-ink-muted">
               {nodes.length === 0
                 ? "暂无注册节点。点击「注册节点」添加。"
                 : "没有匹配的节点，请调整搜索或筛选。"}
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className={NODE_GRID_CLASS}>
               {filtered.map((n) => {
                 const isPlatform = n.type === "platform";
                 const online = n.status === "online";
@@ -212,7 +282,7 @@ export default function NodePage() {
                     onClick={() => {
                       void openDetail(n);
                     }}
-                    className="group flex flex-col rounded-lg border border-hairline bg-canvas p-4 text-left transition-colors hover:bg-surface-default"
+                    className={`${NODE_CARD_CLASS} transition-colors hover:bg-surface-default`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">

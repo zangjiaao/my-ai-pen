@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import {
@@ -8,8 +8,28 @@ import {
 } from "../lib/caseRoutes";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
+import ChatComposer, {
+  ChatComposerSkeleton,
+  isPentestMentionTarget,
+  type ChatComposerHandle,
+  type MentionTarget,
+} from "../components/ChatComposer";
+import {
+  decideComposerSnapshotAction,
+  engagementTemplateFromGraphId,
+  pickDefaultMentionTarget,
+  restoreComposerFromCaseSnapshot,
+  shouldAcceptComposerChipOverride,
+  shouldPollConversationSnapshot,
+  shouldReleaseCaseLoadingSkeleton,
+  shouldShowCaseLoadingSkeleton,
+  shouldShowComposerLoadingSkeleton,
+  type ComposerRestoreSnapshot,
+  type ComposerSnapshotAction,
+} from "../lib/composerCaseRestore";
 import MessageRenderer, {
   AgentPendingCard,
+  ConversationMessagesSkeleton,
   agentDisplayName,
   shouldShowAgentSpeakerLabel,
 } from "../components/MessageRenderer";
@@ -83,13 +103,11 @@ import {
   type PendingChrome,
 } from "../lib/messageStreamIdentity";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
+import { PanelRight, PanelRightClose, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import {
-  ENGAGEMENT_TEMPLATES,
   composerEngagementWireFields,
-  ENGAGEMENT_UNSPECIFIED_LABEL,
   expertLabel,
   isExpertSchedulable,
   resolveExpertColor,
@@ -97,7 +115,7 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
-import { upsertIntelRow, type IntelRow } from "../lib/intelView";
+import { mergeIntelSnapshot, upsertIntelRow, type IntelRow } from "../lib/intelView";
 import {
   buildConfirmOptionsText,
   expandSelectedOptions,
@@ -105,10 +123,9 @@ import {
   type ChoiceDecision,
 } from "../lib/choiceCard";
 import {
-  composerLiveSeconds,
-  composerTimerVisible,
-  formatWorkSeconds,
   selectResultAnchorMessageIds,
+  workBurstForConversation,
+  type ScopedWorkBurst,
   type WorkBurstProjection,
 } from "../lib/workBurstTime";
 import {
@@ -116,6 +133,7 @@ import {
   STEER_DELIVERY_QUEUED,
 } from "../lib/steerDelivery";
 import { gateCaseWsHandlers } from "../lib/caseWsGate";
+import { useRenderAudit } from "../lib/renderAudit";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -162,25 +180,6 @@ type ProductExpert = {
   is_default?: boolean;
   description?: string | null;
   color?: string | null;
-};
-
-/** @mention picker entry: workspace assistant (default seat) or product expert. */
-type MentionTarget = {
-  kind: "expert" | "default" | "platform";
-  /** Stable key for React list. */
-  key: string;
-  /** Token after @ */
-  name: string;
-  label: string;
-  subtitle: string;
-  nodeId: string;
-  packId?: string;
-  expertId?: string;
-  /** Accent color for partner chip / list (#RRGGBB). */
-  color?: string;
-  status?: string;
-  /** Spec #299: offline-bound experts are listed but not selectable. */
-  selectable?: boolean;
 };
 
 type Progress = { current: number; total: number; percent: number };
@@ -239,8 +238,6 @@ type AgentNode = {
   /** Installed expert pack ids from node.config.offers (default effective: pentest). */
   offers?: string[] | null;
 };
-type MentionState = { start: number; query: string } | null;
-
 type MessageRecord = Record<string, unknown>;
 type MessagesInfiniteData = InfiniteData<MessageRecord[], unknown>;
 type ImportStatus = { level: "success" | "error" | "info"; text: string } | null;
@@ -258,6 +255,8 @@ type ConversationSnapshot = {
   working?: boolean;
   workers?: Array<Record<string, unknown>>;
   participants?: Array<Record<string, unknown>>;
+  /** Spec #474 S3: Session-private work_mode / graph_id per expert_id. */
+  sessions?: Record<string, unknown>;
   case_run?: CaseRunSummary;
   /** Spec #325 S2 work-burst time ledger (composer C1 + B1). */
   work_burst?: WorkBurstProjection;
@@ -296,6 +295,7 @@ type ConversationSnapshot = {
 
 
 export default function ConversationPage() {
+  useRenderAudit("ConversationPage");
   const { conversations, fetchAll, patchConversation } = useConversationStore();
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -315,13 +315,15 @@ export default function ConversationPage() {
   const caseRouteLoadedRef = useRef<string | null | undefined>(undefined);
   const [homeRestoreDone, setHomeRestoreDone] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
+  const [openingCaseId, setOpeningCaseId] = useState<string | null>(null);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const stateRefreshSeqRef = useRef(0);
+  const caseOpenSeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
-  const [input, setInput] = useState("");
+  const composerRef = useRef<ChatComposerHandle>(null);
   /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
   /** Expert Graph template only (S2/U1 #78) — null off-pentest; free is Default seat. */
@@ -332,12 +334,53 @@ export default function ConversationPage() {
   /** Selected conversation partner (expert or platform). */
   const [selectedMention, setSelectedMention] = useState<MentionTarget | null>(null);
   const selectedMentionRef = useRef<MentionTarget | null>(null);
-  const [partnerMenuOpen, setPartnerMenuOpen] = useState(false);
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
-  const partnerMenuRef = useRef<HTMLDivElement | null>(null);
-  const modeMenuRef = useRef<HTMLDivElement | null>(null);
+  const mentionTargetsRef = useRef<MentionTarget[]>([]);
+  const productExpertsRef = useRef<ProductExpert[]>([]);
+  /** Spec #474: last Case id whose composer chips were restored (`null` = blank home). */
+  const composerRestoreCaseIdRef = useRef<string | null | undefined>(undefined);
+  const pendingRestoreSnapshotRef = useRef<ComposerRestoreSnapshot | null>(null);
+
+  const resetComposerChips = useCallback(() => {
+    selectedMentionRef.current = null;
+    setSelectedMention(null);
+    setEngagementTemplate(null);
+    setGoalModeEnabled(false);
+    composerRestoreCaseIdRef.current = undefined;
+    pendingRestoreSnapshotRef.current = null;
+  }, []);
+
+  const applyComposerRestoreFromSnapshot = useCallback((
+    caseId: string | null,
+    snapshot: ComposerRestoreSnapshot | null,
+  ) => {
+    const targets = mentionTargetsRef.current;
+    const experts = productExpertsRef.current;
+    if (!caseId) {
+      pendingRestoreSnapshotRef.current = null;
+      composerRestoreCaseIdRef.current = null;
+      const pick = pickDefaultMentionTarget(targets, experts);
+      selectedMentionRef.current = pick;
+      setSelectedMention(pick);
+      setEngagementTemplate(null);
+      setGoalModeEnabled(false);
+      return;
+    }
+    if (!targets.length) {
+      pendingRestoreSnapshotRef.current = snapshot;
+      return;
+    }
+    const restored = restoreComposerFromCaseSnapshot(snapshot || {}, targets, experts);
+    selectedMentionRef.current = restored.partner;
+    setSelectedMention(restored.partner);
+    setEngagementTemplate(restored.engagementTemplate);
+    setGoalModeEnabled(restored.goalMode);
+    composerRestoreCaseIdRef.current = caseId;
+    pendingRestoreSnapshotRef.current = null;
+  }, []);
+
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [productExperts, setProductExperts] = useState<ProductExpert[]>([]);
+  const [productExpertsLoaded, setProductExpertsLoaded] = useState(false);
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
@@ -361,6 +404,8 @@ export default function ConversationPage() {
   const [intel, setIntel] = useState<Array<Record<string, unknown>>>([]);
   const [intelForgotten, setIntelForgotten] = useState<Array<Record<string, unknown>>>([]);
   const [intelSealed, setIntelSealed] = useState<Array<Record<string, unknown>>>([]);
+  /** Bumps on live intel_upsert so an in-flight /state refresh cannot wipe the new row. */
+  const intelEpochRef = useRef(0);
   /** Case-scoped snapshot assets (agent/session read-model; may be empty). */
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   /**
@@ -389,9 +434,8 @@ export default function ConversationPage() {
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
   /** Spec #325: work-burst time ledger projection (composer timer + B1). */
-  const [workBurst, setWorkBurst] = useState<WorkBurstProjection | null>(null);
-  const [composerTickMs, setComposerTickMs] = useState(() => Date.now());
-  const composerTickAnchorRef = useRef<{ seconds: number; atMs: number } | null>(null);
+  const [scopedWorkBurst, setScopedWorkBurst] = useState<ScopedWorkBurst>(null);
+  const workBurst = workBurstForConversation(scopedWorkBurst, activeId);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
   /**
@@ -452,6 +496,11 @@ export default function ConversationPage() {
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
+  const caseSurfaceLoading = shouldShowCaseLoadingSkeleton({
+    activeCaseId: activeId,
+    openingCaseId,
+    messagesLoading: messageQuery.isLoading,
+  });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
   const displayMessages = useMemo(() => {
@@ -492,12 +541,23 @@ export default function ConversationPage() {
    * Session work indicator: prefer platform/Node SOT (conversation.working or status=running),
    * then local optimistic launch. Do not show Send while any expert is mid work-burst.
    */
+  const packageStatus = String(activeConversation?.status || "").toLowerCase();
+  /** Live work-burst only. incomplete = parked (yellow wait) — not blue running. */
   const isActiveConversationRunning = Boolean(
-    running
-    || interrupting
-    || activeConversation?.working
-    || activeConversation?.status === "running"
-    || launchOptimisticRef.current,
+    interrupting
+    || launchOptimisticRef.current
+    || (
+      packageStatus !== "incomplete"
+      && packageStatus !== "completed"
+      && packageStatus !== "failed"
+      && packageStatus !== "canceled"
+      && packageStatus !== "cancelled"
+      && (
+        running
+        || Boolean(activeConversation?.working)
+        || packageStatus === "running"
+      )
+    ),
   );
   /** List-tail Working: same open/close as composer-work-timer (work-burst / Case working). */
   const showListTailWorking = listTailWorkingVisible({
@@ -510,28 +570,6 @@ export default function ConversationPage() {
     workBurst?.authorize_paused === true
       ? AUTHORIZE_PENDING_LABEL
       : (pendingChrome?.label || DEFAULT_PENDING_LABEL);
-
-  // Spec #325 C1: tick composer timer while accruing (pause on authorize).
-  const showComposerTimer = composerTimerVisible(workBurst, isActiveConversationRunning);
-  useEffect(() => {
-    if (!showComposerTimer || workBurst?.authorize_paused || workBurst?.accruing === false) {
-      return;
-    }
-    const id = window.setInterval(() => setComposerTickMs(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [showComposerTimer, workBurst?.authorize_paused, workBurst?.accruing, workBurst?.active_burst_id]);
-
-  const composerTimerText = useMemo(() => {
-    if (!showComposerTimer) return null;
-    const secs = composerLiveSeconds(workBurst, {
-      nowMs: composerTickMs,
-      tickAnchor: workBurst?.authorize_paused || workBurst?.accruing === false
-        ? null
-        : composerTickAnchorRef.current,
-    });
-    if (secs == null) return null;
-    return formatWorkSeconds(secs);
-  }, [showComposerTimer, workBurst, composerTickMs]);
 
   const resultAnchorSecondsByMessageId = useMemo(() => {
     // Withhold 耗时 until the open turn settles (text can keep streaming after
@@ -667,7 +705,8 @@ export default function ConversationPage() {
   const prevHasTaskSurfaceRef = useRef(false);
   const rightPanelConvRef = useRef<string | null>(null);
 
-  // Conversation switch → start collapsed; task surface will rising-edge expand after load.
+  // Conversation switch preserves the user's panel visibility. An open panel
+  // stays mounted at the same width and renders the Case loading skeleton.
   useEffect(() => {
     if (!activeId) {
       rightPanelConvRef.current = null;
@@ -678,9 +717,8 @@ export default function ConversationPage() {
       rightPanelConvRef.current = activeId;
       // Assume "had task" until cleared state settles, so stale surface cannot false-trigger expand.
       prevHasTaskSurfaceRef.current = true;
-      setRightPanelCollapsedPersist(true);
     }
-  }, [activeId, setRightPanelCollapsedPersist]);
+  }, [activeId]);
 
   // Auto-expand only on false → true (new task / snapshot with work products).
   useEffect(() => {
@@ -751,7 +789,11 @@ export default function ConversationPage() {
     return map;
   }, [messages]);
 
-  const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
+  const applyConversationState = useCallback((
+    snapshot: ConversationSnapshot,
+    fallback?: ConversationSnapshot,
+    opts?: { intelEpochAtStart?: number },
+  ) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
     setKanban(snapshot.kanban || fallback?.kanban);
@@ -834,25 +876,57 @@ export default function ConversationPage() {
     const nextWb = snapshot.work_burst && Object.keys(snapshot.work_burst).length
       ? snapshot.work_burst
       : fallback?.work_burst;
-    if (nextWb) {
-      setWorkBurst(nextWb);
-      const live = nextWb.live_work_seconds;
-      if (nextWb.active_burst_id && live != null && nextWb.accruing) {
-        composerTickAnchorRef.current = { seconds: Number(live) || 0, atMs: Date.now() };
-      } else {
-        composerTickAnchorRef.current = null;
-      }
+    const workBurstCaseId = String(
+      snapshot.conversation?.id || fallback?.conversation?.id || "",
+    ).trim();
+    if (nextWb && workBurstCaseId) {
+      setScopedWorkBurst({
+        conversationId: workBurstCaseId,
+        projection: nextWb,
+      });
     } else if (!snapshot.working && !(fallback?.working)) {
-      setWorkBurst(null);
-      composerTickAnchorRef.current = null;
+      setScopedWorkBurst((prev) =>
+        !workBurstCaseId || prev?.conversationId === workBurstCaseId ? null : prev,
+      );
     }
     // Spec #280: empty ledger arrays are correct — do not fall back to chat archaeology.
     setFindings(Array.isArray(snapshot.findings) ? snapshot.findings : (fallback?.findings || []));
-    setIntel(Array.isArray(snapshot.intel) ? snapshot.intel : (fallback?.intel || []));
-    setIntelForgotten(
-      Array.isArray(snapshot.intel_forgotten) ? snapshot.intel_forgotten : (fallback?.intel_forgotten || []),
-    );
-    setIntelSealed(Array.isArray(snapshot.intel_sealed) ? snapshot.intel_sealed : (fallback?.intel_sealed || []));
+    {
+      const mergeLive =
+        opts?.intelEpochAtStart != null && intelEpochRef.current !== opts.intelEpochAtStart;
+      const living = Array.isArray(snapshot.intel)
+        ? snapshot.intel
+        : Array.isArray(fallback?.intel)
+          ? fallback.intel
+          : undefined;
+      const forgotten = Array.isArray(snapshot.intel_forgotten)
+        ? snapshot.intel_forgotten
+        : Array.isArray(fallback?.intel_forgotten)
+          ? fallback.intel_forgotten
+          : undefined;
+      const sealed = Array.isArray(snapshot.intel_sealed)
+        ? snapshot.intel_sealed
+        : Array.isArray(fallback?.intel_sealed)
+          ? fallback.intel_sealed
+          : undefined;
+      if (living !== undefined) {
+        setIntel((prev) =>
+          mergeLive ? mergeIntelSnapshot(prev as IntelRow[], living as IntelRow[]) : living,
+        );
+      }
+      if (forgotten !== undefined) {
+        setIntelForgotten((prev) =>
+          mergeLive
+            ? mergeIntelSnapshot(prev as IntelRow[], forgotten as IntelRow[])
+            : forgotten,
+        );
+      }
+      if (sealed !== undefined) {
+        setIntelSealed((prev) =>
+          mergeLive ? mergeIntelSnapshot(prev as IntelRow[], sealed as IntelRow[]) : sealed,
+        );
+      }
+    }
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(Array.isArray(snapshot.evidence) ? snapshot.evidence : (fallback?.evidence || []));
@@ -953,19 +1027,31 @@ export default function ConversationPage() {
   const refreshConversationState = useCallback(async (id: string | null) => {
     if (!id) return;
     const requestSeq = ++stateRefreshSeqRef.current;
+    const intelEpochAtStart = intelEpochRef.current;
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
       if (requestSeq !== stateRefreshSeqRef.current) return;
-      applyConversationState(state);
+      const action = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: "success",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (action === "ignore") return;
+      applyConversationState(state, undefined, { intelEpochAtStart });
       setStateSnapshotLoaded(true);
-      // Spec #278 D3: do NOT overwrite composer engagementTemplate from Case sticky /
-      // heartbeat refresh — only work_mode_settled / user menu edits change it.
+      // A successful heartbeat may finish an initial restore that never completed.
+      // Once restored, later heartbeats remain state-only (#278 D3 / #474 L6).
+      if (action === "state_and_restore") {
+        applyComposerRestoreFromSnapshot(id, state);
+      }
+      setOpeningCaseId((current) => current === id ? null : current);
       // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
     }
-  }, [applyConversationState]);
+  }, [applyComposerRestoreFromSnapshot, applyConversationState]);
 
   const setConversationMessageData = useCallback((conversationId: string | null, updater: (data: MessagesInfiniteData) => MessagesInfiniteData) => {
     if (!conversationId) return;
@@ -1019,22 +1105,23 @@ export default function ConversationPage() {
     }
     // Spec #325: work_burst is the sole C1/B1 clock source (not Status elapsed).
     if (isRecord(msg.work_burst)) {
-      const wb = msg.work_burst as WorkBurstProjection;
-      setWorkBurst(wb);
-      const live = wb.live_work_seconds;
-      if (wb.active_burst_id && live != null && wb.accruing !== false && !wb.authorize_paused) {
-        composerTickAnchorRef.current = { seconds: Number(live) || 0, atMs: Date.now() };
-      } else if (!wb.active_burst_id) {
-        composerTickAnchorRef.current = null;
-      } else {
-        // Authorize pause: freeze tick at live value
-        composerTickAnchorRef.current = live != null
-          ? { seconds: Number(live) || 0, atMs: Date.now() }
-          : composerTickAnchorRef.current;
-      }
+      setScopedWorkBurst({
+        conversationId: convId,
+        projection: msg.work_burst as WorkBurstProjection,
+      });
     } else if (!working) {
-      setWorkBurst((prev) => (prev?.active_burst_id ? { ...prev, active_burst_id: null, accruing: false } : prev));
-      composerTickAnchorRef.current = null;
+      setScopedWorkBurst((prev) =>
+        prev?.conversationId === convId && prev.projection.active_burst_id
+          ? {
+              conversationId: convId,
+              projection: {
+                ...prev.projection,
+                active_burst_id: null,
+                accruing: false,
+              },
+            }
+          : prev,
+      );
     }
     const participants = Array.isArray(msg.participants) ? msg.participants : [];
     if (participants.length > 1 || (participants.length === 1 && !working)) {
@@ -1098,6 +1185,7 @@ export default function ConversationPage() {
       const raw = (m.intel && typeof m.intel === "object" ? m.intel : m) as IntelRow;
       const id = String(raw.id || "").trim();
       if (!id) return;
+      intelEpochRef.current += 1;
       const status = String(raw.status || "").trim().toLowerCase();
       const forget = Number(raw.forget_count || 0);
       const sealed = status === "sealed" || forget >= 2;
@@ -1811,11 +1899,7 @@ export default function ConversationPage() {
       const mode = String(m.work_mode || "").trim().toLowerCase();
       const gid = String(m.graph_id || m.engagement_template || "").trim().toLowerCase();
       if (mode === "graph") {
-        if (gid === "redteam_deep") setEngagementTemplate("redteam_deep");
-        else if (gid === "app_assessment") setEngagementTemplate("app_assessment");
-        else if (gid === "hypothesis_cycle") setEngagementTemplate("hypothesis_cycle");
-        else if (gid === "redteam" || gid === "deep") setEngagementTemplate("redteam_deep");
-        else if (gid === "assess" || gid === "assessment") setEngagementTemplate("app_assessment");
+        setEngagementTemplate(engagementTemplateFromGraphId(gid));
       } else if (mode === "free") {
         setEngagementTemplate(null);
       }
@@ -2001,6 +2085,7 @@ export default function ConversationPage() {
     setWorkerAuditTarget(null);
     // Spec #311: clear Case Workset on conversation switch / blank chat (no bleed).
     setWorkset(undefined);
+    setScopedWorkBurst(null);
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
@@ -2017,7 +2102,10 @@ export default function ConversationPage() {
   }, []);
 
   const loadConversation = useCallback(async (id: string | null) => {
+    const requestSeq = ++caseOpenSeqRef.current;
     stateRefreshSeqRef.current += 1;
+    setOpeningCaseId(id);
+    let snapshotAction: ComposerSnapshotAction | null = null;
     setLiveStreams(clearLiveStreams());
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "clear" }));
     if (!id) {
@@ -2026,6 +2114,8 @@ export default function ConversationPage() {
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
       setActiveId(null);
       resetConversationState();
+      resetComposerChips();
+      applyComposerRestoreFromSnapshot(null, null);
       return;
     }
     // Selecting a real session cancels any pending blank-chat intent.
@@ -2044,6 +2134,7 @@ export default function ConversationPage() {
     void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
     // Clear previous Case surface first so Status auto-expand does not use stale task data.
     resetConversationState();
+    resetComposerChips();
     setActiveId(id);
     setActiveConversationNodeId(conversations.find(c => c.id === id)?.node_id || null);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
@@ -2056,15 +2147,34 @@ export default function ConversationPage() {
 
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
+      snapshotAction = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: "success",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (snapshotAction === "ignore") return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
+      if (snapshotAction === "state_and_restore") {
+        applyComposerRestoreFromSnapshot(id, state);
+      }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
+      snapshotAction = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: error instanceof ApiError && error.status === 404 ? "not_found" : "failure",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (snapshotAction === "ignore") return;
+      if (snapshotAction === "clear_case") {
         caseRouteLoadedRef.current = null;
         localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
         setActiveId(null);
         resetConversationState();
+        resetComposerChips();
+        applyComposerRestoreFromSnapshot(null, null);
         void fetchAll();
         // Drop dead Case URL so operator lands on blank home, not a stuck `/:missing`.
         navigate(HOME_CHAT_PATH, { replace: true, state: { preferBlankChat: true } });
@@ -2077,8 +2187,29 @@ export default function ConversationPage() {
       }
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
+      // Empty archaeology has no task_context / sessions — do not #299-and-mark
+      // restored. First successful /state (heartbeat or WS refresh) is the open restore.
+    } finally {
+      if (shouldReleaseCaseLoadingSkeleton({
+        requestSeq,
+        latestSeq: caseOpenSeqRef.current,
+        snapshotAction,
+      })) {
+        setOpeningCaseId((current) => current === id ? null : current);
+      }
     }
-  }, [applyConversationState, conversations, fetchAll, loadOwnerLedgerAssets, navigate, queryClient, resetConversationState, send]);
+  }, [
+    applyComposerRestoreFromSnapshot,
+    applyConversationState,
+    conversations,
+    fetchAll,
+    loadOwnerLedgerAssets,
+    navigate,
+    queryClient,
+    resetComposerChips,
+    resetConversationState,
+    send,
+  ]);
   loadConversationRef.current = loadConversation;
 
   useEffect(() => {
@@ -2111,6 +2242,8 @@ export default function ConversationPage() {
       setProductExperts(Array.isArray(rows) ? rows.filter((e) => e.enabled !== false) : []);
     } catch {
       setProductExperts([]);
+    } finally {
+      setProductExpertsLoaded(true);
     }
   }, []);
 
@@ -2161,17 +2294,41 @@ export default function ConversationPage() {
     }
     return out;
   }, [productExperts]);
+  const composerSurfaceLoading = shouldShowComposerLoadingSkeleton({
+    activeCaseId: activeId,
+    caseSurfaceLoading,
+    homeRestoreDone,
+    mentionCatalogLoaded: productExpertsLoaded,
+    hasSelectableMention: mentionTargets.some((target) => target.selectable !== false),
+    hasSelectedMention: mentionTargets.some(
+      (target) => target.key === selectedMention?.key && target.selectable !== false,
+    ),
+  });
 
-  // Default partner: online is_default → online pack=default → first online (Spec #299).
-  // Re-pick when current Expert goes offline or is removed.
+  mentionTargetsRef.current = mentionTargets;
+  productExpertsRef.current = productExperts;
+
+  // Spec #474: flush Case restore once mention catalog arrives after snapshot.
   useEffect(() => {
+    if (!activeId) return;
+    if (composerRestoreCaseIdRef.current === activeId) return;
+    if (!pendingRestoreSnapshotRef.current) return;
+    if (!mentionTargets.length) return;
+    applyComposerRestoreFromSnapshot(activeId, pendingRestoreSnapshotRef.current);
+  }, [activeId, mentionTargets, productExperts, applyComposerRestoreFromSnapshot]);
+
+  // Default partner: #299 for blank home, or after restore left us empty / offline.
+  // Spec #474: do not #299 while a Case restore is still pending.
+  useEffect(() => {
+    if (activeId && composerRestoreCaseIdRef.current !== activeId) return;
     if (selectedMention) {
       const current = mentionTargets.find((t) => t.key === selectedMention.key);
-      // Drop if deleted or bound node went offline (not selectable).
       if (!current || current.selectable === false) {
-        const fallback = pickDefaultMentionTarget(mentionTargets, productExperts);
-        selectedMentionRef.current = fallback;
-        setSelectedMention(fallback);
+        const fallback = restoreComposerFromCaseSnapshot({}, mentionTargets, productExperts);
+        selectedMentionRef.current = fallback.partner;
+        setSelectedMention(fallback.partner);
+        setEngagementTemplate(fallback.engagementTemplate);
+        setGoalModeEnabled(fallback.goalMode);
       }
       return;
     }
@@ -2180,13 +2337,7 @@ export default function ConversationPage() {
     if (!pick) return;
     selectedMentionRef.current = pick;
     setSelectedMention(pick);
-  }, [mentionTargets, selectedMention, productExperts]);
-
-  const mentionState = useMemo(() => getMentionState(input), [input]);
-  const mentionOptions = useMemo(
-    () => filterMentionTargets(mentionTargets, mentionState?.query || ""),
-    [mentionTargets, mentionState],
-  );
+  }, [mentionTargets, selectedMention, productExperts, activeId]);
 
   // Case URL is the only SoT for the open session. localStorage is last-active
   // cache (redirect `/` → `/:id`). preferBlank forces blank home without redirect.
@@ -2288,7 +2439,11 @@ export default function ConversationPage() {
   }, [activeId, send]);
 
   useEffect(() => {
-    if (!activeId || !isActiveConversationRunning) return;
+    if (!shouldPollConversationSnapshot({
+      activeCaseId: activeId,
+      running: isActiveConversationRunning,
+      snapshotLoaded: stateSnapshotLoaded,
+    })) return;
     let inFlight = false;
     const refresh = async () => {
       if (inFlight) return;
@@ -2301,7 +2456,7 @@ export default function ConversationPage() {
     };
     const timer = window.setInterval(() => { void refresh(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [activeId, isActiveConversationRunning, refreshConversationState]);
+  }, [activeId, isActiveConversationRunning, refreshConversationState, stateSnapshotLoaded]);
 
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
@@ -2347,24 +2502,49 @@ export default function ConversationPage() {
     [activeId, addMessageToConversation, send],
   );
 
-  const chooseMention = useCallback((target: MentionTarget) => {
+  const markComposerRestoreHandled = useCallback(() => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
+    if (!activeId) return;
+    composerRestoreCaseIdRef.current = activeId;
+    pendingRestoreSnapshotRef.current = null;
+  }, [activeId]);
+
+  const handleSelectPartner = useCallback((target: MentionTarget) => {
     // Spec #299: offline-bound Expert is not a conversation partner.
     if (target.selectable === false) return;
-    // Select partner only — do not inject "@name" into the composer text.
-    const state = getMentionState(input);
-    if (state) {
-      setInput((current) => {
-        const before = current.slice(0, state.start).replace(/\s+$/, "");
-        const after = current.slice(state.start + state.query.length + 1).replace(/^\s+/, "");
-        return [before, after].filter(Boolean).join(" ");
-      });
-    }
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
+    markComposerRestoreHandled();
     selectedMentionRef.current = target;
     setSelectedMention(target);
     if (!isPentestMentionTarget(target)) {
       setGoalModeEnabled(false);
+      setEngagementTemplate(null);
     }
-  }, [input]);
+  }, [activeId, markComposerRestoreHandled]);
+
+  const handleEngagementTemplate = useCallback((value: EngagementTemplateId | null) => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
+    markComposerRestoreHandled();
+    setEngagementTemplate(value);
+  }, [activeId, markComposerRestoreHandled]);
+
+  const handleGoalMode = useCallback((enabled: boolean) => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
+    markComposerRestoreHandled();
+    setGoalModeEnabled(enabled);
+  }, [activeId, markComposerRestoreHandled]);
 
   const handleImportReport = useCallback(async (file: File | null) => {
     if (!file) return;
@@ -2472,6 +2652,8 @@ export default function ConversationPage() {
         // startFresh is false, and polluted plan_tree from WS-while-blank would stick.
         resetConversationState();
         setActiveId(convId);
+        // Spec #474: keep send-time chips; new Case snapshot has no expert_id yet.
+        composerRestoreCaseIdRef.current = convId;
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
         if (location.pathname !== casePath(convId)) {
@@ -2727,7 +2909,7 @@ export default function ConversationPage() {
       scope,
     };
     // Prefill composer + optimistic task envelope for Status/Surface seed.
-    setInput(text);
+    composerRef.current?.setValue(text);
     if (target || scope) {
       setTaskContext({
         ...(target ? { target } : {}),
@@ -2763,15 +2945,13 @@ export default function ConversationPage() {
     }
   }, [location.pathname, navigate]);
 
-  const handleSend = useCallback(async (overrideText?: string) => {
-    const displayText = (typeof overrideText === "string" ? overrideText : input).trim();
+  const handleSend = useCallback(async (overrideText: string) => {
+    const displayText = overrideText.trim();
     if (!displayText) return;
     const selectedCandidate = selectedMentionRef.current || selectedMention;
     // Prefer explicit toolbar partner; else parse @token from the message body.
     const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
     const text = stripMentionToken(displayText, resolved?.name || null);
-    // Keep selected partner after send so multi-turn stays with the same persona.
-    setInput("");
     // Spec #277 §3.3 14a / #312 L9: free-text freezes open cards via user_message only.
     // Platform `_forward_pending_approval_text` consumes all pending approvals, persists
     // decision rows, and unblocks Session — do NOT pre-send user_decision=answered here
@@ -2851,7 +3031,6 @@ export default function ConversationPage() {
       }).catch(() => {});
     }
   }, [
-    input,
     selectedMention,
     mentionTargets,
     launchTaskMessage,
@@ -2864,129 +3043,15 @@ export default function ConversationPage() {
     addMessageToConversation,
   ]);
 
-  const selectExpertFromToolbar = useCallback((key: string) => {
-    const selectable = mentionTargets.filter((t) => t.selectable !== false);
-    const fallback = selectable[0] || null;
-    const found = key ? mentionTargets.find((t) => t.key === key) : null;
-    // Spec #299: refuse offline-bound Expert as conversation partner.
-    const target = found && found.selectable !== false ? found : fallback;
-    selectedMentionRef.current = target;
-    setSelectedMention(target);
-    // Mode + Goal only apply to pentest experts; reset when leaving that pack.
-    if (!isPentestMentionTarget(target)) {
-      setGoalModeEnabled(false);
-      setModeMenuOpen(false);
-      setEngagementTemplate(null);
-    }
-    // Spec #277: stay on 不指定 (Free) when entering pentest — do not silent-set app_assessment.
-  }, [mentionTargets]);
-
-  const activePartner =
-    (selectedMention && selectedMention.selectable !== false ? selectedMention : null)
-    || mentionTargets.find((t) => t.selectable !== false)
-    || null;
-  const showPentestControls = isPentestMentionTarget(activePartner);
-  // Spec #278: null = 不指定 (user intent rail); actual Session mode is AgentRow badge.
-  const activeModeLabel =
-    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label
-    || ENGAGEMENT_UNSPECIFIED_LABEL;
-
-  // Close partner / mode menus on outside click or Escape.
-  useEffect(() => {
-    if (!partnerMenuOpen && !modeMenuOpen) return;
-    const onPointer = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (partnerMenuOpen && partnerMenuRef.current && !partnerMenuRef.current.contains(target)) {
-        setPartnerMenuOpen(false);
-      }
-      if (modeMenuOpen && modeMenuRef.current && !modeMenuRef.current.contains(target)) {
-        setModeMenuOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setPartnerMenuOpen(false);
-        setModeMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [partnerMenuOpen, modeMenuOpen]);
-
-
-function renderMentionText(text: string): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const pattern = /(@[^\s@]+)/g;
-  let lastIndex = 0;
-  for (const match of text.matchAll(pattern)) {
-    const index = match.index ?? 0;
-    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
-    parts.push(<span key={`${index}-${match[0]}`} className="font-semibold text-status-running">{match[0]}</span>);
-    lastIndex = index + match[0].length;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts.length ? parts : [text];
-}
-function getMentionState(value: string): MentionState {
-  const match = value.match(/(?:^|\s)@([^\s@]*)$/);
-  if (!match || match.index === undefined) return null;
-  const atOffset = value.slice(match.index).indexOf("@");
-  return { start: match.index + atOffset, query: match[1] || "" };
-}
-
-function filterMentionTargets(targets: MentionTarget[], query: string): MentionTarget[] {
-  const normalized = query.trim().toLowerCase();
-  const ordered = [...targets].sort((a, b) => a.name.localeCompare(b.name));
-  if (!normalized) return ordered.slice(0, 8);
-  return ordered
-    .filter(
-      (t) =>
-        t.name.toLowerCase().includes(normalized) ||
-        t.label.toLowerCase().includes(normalized) ||
-        (t.packId || "").toLowerCase().includes(normalized) ||
-        t.subtitle.toLowerCase().includes(normalized),
-    )
-    .slice(0, 8);
-}
+  const handleInterrupt = useCallback(() => {
+    if (!activeId || interrupting) return;
+    setInterrupting(true);
+    patchConversation(activeId, { working: true, status: "running" });
+    send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
+  }, [activeId, interrupting, patchConversation, send]);
 
 function resolveMentionedTarget(value: string, targets: MentionTarget[]): MentionTarget | null {
   return targets.find((t) => value.includes(`@${t.name}`)) || null;
-}
-
-/** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
-/**
- * New-chat partner priority (Spec #299: only online / schedulable seats):
- * 1) expert.is_default from 专家管理 (if online)
- * 2) pack_id === default (通用助理, if online)
- * 3) first online target
- * Never default to an offline-bound Expert.
- */
-function pickDefaultMentionTarget(
-  targets: MentionTarget[],
-  experts: ProductExpert[],
-): MentionTarget | null {
-  const selectable = targets.filter((t) => t.selectable !== false);
-  if (!selectable.length) return null;
-  const byId = new Map(experts.map((e) => [e.id, e]));
-  const flagged = selectable.find((t) => {
-    if (!t.expertId) return false;
-    const e = byId.get(t.expertId);
-    return Boolean(e?.is_default && e.enabled !== false);
-  });
-  if (flagged) return flagged;
-  const builtin = selectable.find((t) => String(t.packId || "").toLowerCase() === "default");
-  if (builtin) return builtin;
-  return selectable.find((t) => t.status === "online") || selectable[0] || null;
-}
-
-function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
-  if (!target || target.kind !== "expert") return false;
-  const pack = String(target.packId || "").trim().toLowerCase();
-  return pack === "pentest" || pack.startsWith("pentest");
 }
 
 function stripMentionToken(value: string, name: string | null): string {
@@ -3094,7 +3159,17 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         />
         <div className="flex min-w-0 flex-1 overflow-hidden">
           <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${rightPanelOpen ? "border-r border-hairline-soft" : ""}`}>
-            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-9 py-4 space-y-4">
+            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="no-scrollbar min-w-0 flex-1 overflow-y-auto px-9 py-4 space-y-4">
+              {caseSurfaceLoading && (
+                <div
+                  role="status"
+                  aria-label="正在加载会话"
+                  data-testid="case-loading-skeleton"
+                  className="h-full"
+                >
+                  <ConversationMessagesSkeleton />
+                </div>
+              )}
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
@@ -3126,7 +3201,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 </div>
               )}
-              {messages.length === 0 && activeId && (
+              {!caseSurfaceLoading && messages.length === 0 && activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center">
                     <h2 className="text-xl font-semibold">No messages yet</h2>
@@ -3134,9 +3209,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 </div>
               )}
-              {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
-              {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {streamChromeItems.map((item, index) => {
+              {!caseSurfaceLoading && messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
+              {!caseSurfaceLoading && messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
+              {!caseSurfaceLoading && streamChromeItems.map((item, index) => {
                 if (item.kind === "time_separator" || item.kind === "day_separator") {
                   const stampKey =
                     item.kind === "time_separator" ? item.stampKey : item.dayKey;
@@ -3190,7 +3265,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {/* Spec #276: list-tail Working is chrome only — not a Message.
                   Visibility = work-burst / Case working (same lifecycle as composer-work-timer).
                   Spec #305: speaker row when send_success left attribution for this Case. */}
-              {showListTailWorking && (() => {
+              {!caseSurfaceLoading && showListTailWorking && (() => {
                 const pendingContent = pendingChrome && pendingChrome.conversationId === activeId
                   ? pendingChromeSpeakerContent(pendingChrome)
                   : { text: listTailWorkingLabel };
@@ -3220,355 +3295,40 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         <span className="font-medium text-ink-secondary">{speakerLabel}</span>
                       </div>
                     )}
-                    <AgentPendingCard content={{ text: listTailWorkingLabel }} />
+                    <AgentPendingCard
+                      content={{ text: listTailWorkingLabel }}
+                      workBurst={workBurst}
+                      working={isActiveConversationRunning}
+                    />
                   </div>
                 );
               })()}
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
-            <div className="px-6 pt-4 pb-4">
-              {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
-              <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
-                {mentionState && mentionOptions.length > 0 && (
-                  <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-hairline bg-canvas shadow-lg">
-                    {mentionOptions.map((target) => {
-                      const accent = target.color || resolveExpertColor(null, target.expertId || target.key);
-                      const disabled = target.selectable === false;
-                      return (
-                      <button
-                        key={target.key}
-                        type="button"
-                        disabled={disabled}
-                        title={disabled ? "绑定节点离线，不可调度" : undefined}
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          if (disabled) return;
-                          chooseMention(target);
-                        }}
-                        className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${
-                          disabled
-                            ? "cursor-not-allowed opacity-45"
-                            : "hover:bg-surface-default"
-                        }`}
-                      >
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: accent }}
-                          aria-hidden
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium text-ink">
-                            {target.label || target.name}
-                          </span>
-                          <span className="block truncate text-[11px] text-ink-muted">
-                            {target.subtitle || target.label}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-                          {disabled
-                            ? "不可调度"
-                            : target.status === "online"
-                              ? "Online"
-                              : target.status === "offline"
-                                ? "Offline"
-                                : expertLabel(target.packId)}
-                        </span>
-                      </button>
-                      );
-                    })}
-                  </div>
-                )}
-                <div className="relative min-w-0">
-                  {input && (
-                    <div
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-3.5 text-sm leading-5 text-ink"
-                    >
-                      {renderMentionText(input)}
-                    </div>
-                  )}
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void handleSend();
-                      }
-                    }}
-                    rows={3}
-                    placeholder={
-                      activePartner
-                        ? `向 ${activePartner.label || activePartner.name} 描述任务…（Shift+Enter 换行）`
-                        : "请先在专家管理创建专家，或从下方选择对话对象…"
-                    }
-                    className="relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
-                  />
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
-                  {/* Shared chip height: h-8 (32px) for partner / mode / Goal / send */}
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-                    {/* Partner chip + custom menu */}
-                    <div ref={partnerMenuRef} className="relative">
-                      <button
-                        type="button"
-                        aria-haspopup="listbox"
-                        aria-expanded={partnerMenuOpen}
-                        title="选择对话对象"
-                        onClick={() => {
-                          setPartnerMenuOpen((open) => !open);
-                          setModeMenuOpen(false);
-                        }}
-                        className={`inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-2 pr-2 text-xs leading-none text-ink transition-colors ${
-                          partnerMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
-                        }`}
-                      >
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{
-                            backgroundColor:
-                              activePartner?.color ||
-                              resolveExpertColor(null, activePartner?.expertId || activePartner?.key || "none"),
-                          }}
-                          aria-hidden
-                        />
-                        <span className="min-w-0 truncate font-medium leading-none">
-                          {activePartner?.label || activePartner?.name || "选择专家"}
-                        </span>
-                        <ChevronDown
-                          size={12}
-                          className={`shrink-0 text-ink-muted transition-transform ${partnerMenuOpen ? "rotate-180" : ""}`}
-                        />
-                      </button>
-                      {partnerMenuOpen && (
-                        <div
-                          role="listbox"
-                          aria-label="对话对象"
-                          className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
-                        >
-                          <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
-                            对话对象
-                          </p>
-                          {mentionTargets.map((t) => {
-                            const selected = t.key === activePartner?.key;
-                            const disabled = t.selectable === false;
-                            const statusLabel = disabled
-                              ? "不可调度"
-                              : t.status === "online"
-                                ? "在线"
-                                : t.status === "offline"
-                                  ? "离线"
-                                  : expertLabel(t.packId);
-                            const accent = t.color || resolveExpertColor(null, t.expertId || t.key);
-                            return (
-                              <button
-                                key={t.key}
-                                type="button"
-                                role="option"
-                                aria-selected={selected}
-                                aria-disabled={disabled}
-                                disabled={disabled}
-                                title={disabled ? "绑定节点离线，不可调度" : undefined}
-                                onClick={() => {
-                                  if (disabled) return;
-                                  selectExpertFromToolbar(t.key);
-                                  setPartnerMenuOpen(false);
-                                }}
-                                className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                                  disabled
-                                    ? "cursor-not-allowed opacity-45"
-                                    : selected
-                                      ? "bg-surface-elevated"
-                                      : "hover:bg-surface-default"
-                                }`}
-                              >
-                                <span
-                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: accent }}
-                                  aria-hidden
-                                />
-                                <span className="min-w-0 flex-1">
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="truncate text-sm font-medium text-ink">
-                                      {t.label || t.name}
-                                    </span>
-                                    {t.status === "online" && !disabled && (
-                                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-success" />
-                                    )}
-                                  </span>
-                                  <span className="mt-0.5 block truncate text-[11px] text-ink-muted">
-                                    {t.subtitle || statusLabel}
-                                  </span>
-                                </span>
-                                {selected && !disabled ? (
-                                  <Check size={14} className="shrink-0 text-ink" strokeWidth={2.25} />
-                                ) : (
-                                  <span className="shrink-0 text-[10px] font-medium text-ink-muted">
-                                    {statusLabel}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                          {mentionTargets.length === 0 && (
-                            <p className="px-3 py-3 text-xs text-ink-muted">暂无可用对象</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Mode chip — pentest only */}
-                    {showPentestControls && (
-                      <div ref={modeMenuRef} className="relative">
-                        <button
-                          type="button"
-                          aria-haspopup="listbox"
-                          aria-expanded={modeMenuOpen}
-                          title="工作流偏好（用户意图；AgentRow 显示 Session 实际模式）"
-                          onClick={() => {
-                            setModeMenuOpen((open) => !open);
-                            setPartnerMenuOpen(false);
-                          }}
-                          className={`inline-flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs leading-none text-ink transition-colors ${
-                            modeMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
-                          }`}
-                        >
-                          <Target size={12} className="shrink-0 text-ink-muted" />
-                          <span className="min-w-0 truncate font-medium leading-none">{activeModeLabel}</span>
-                          <ChevronDown
-                            size={12}
-                            className={`shrink-0 text-ink-muted transition-transform ${modeMenuOpen ? "rotate-180" : ""}`}
-                          />
-                        </button>
-                        {modeMenuOpen && (
-                          <div
-                            role="listbox"
-                            aria-label="工作流偏好"
-                            className="absolute bottom-full left-0 z-30 mb-2 w-64 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
-                          >
-                            <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
-                              工作流偏好
-                            </p>
-                            {/* Spec #278 A1: 不指定 = no force mode change (omit field on send). */}
-                            <button
-                              type="button"
-                              role="option"
-                              aria-selected={engagementTemplate == null}
-                              onClick={() => {
-                                setEngagementTemplate(null);
-                                setModeMenuOpen(false);
-                              }}
-                              className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                                engagementTemplate == null ? "bg-surface-elevated" : "hover:bg-surface-default"
-                              }`}
-                            >
-                              <span className="min-w-0 flex-1">
-                                <span className="block text-sm font-medium text-ink">
-                                  {ENGAGEMENT_UNSPECIFIED_LABEL}
-                                </span>
-                                <span className="mt-0.5 block text-[11px] leading-snug text-ink-muted">
-                                  不强制改模式：已在 Graph 则保持；否则 Free
-                                </span>
-                              </span>
-                              {engagementTemplate == null && (
-                                <Check size={14} className="mt-0.5 shrink-0 text-ink" strokeWidth={2.25} />
-                              )}
-                            </button>
-                            {ENGAGEMENT_TEMPLATES.map((t) => {
-                              const selected = t.id === engagementTemplate;
-                              return (
-                                <button
-                                  key={t.id}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={selected}
-                                  onClick={() => {
-                                    setEngagementTemplate(t.id);
-                                    setModeMenuOpen(false);
-                                  }}
-                                  className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                                    selected ? "bg-surface-elevated" : "hover:bg-surface-default"
-                                  }`}
-                                >
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block text-sm font-medium text-ink">{t.label}</span>
-                                    <span className="mt-0.5 block text-[11px] leading-snug text-ink-muted">
-                                      {t.description}
-                                    </span>
-                                  </span>
-                                  {selected && (
-                                    <Check size={14} className="mt-0.5 shrink-0 text-ink" strokeWidth={2.25} />
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Goal toggle chip — pentest only; selected = ink fill */}
-                    {showPentestControls && (
-                      <button
-                        type="button"
-                        aria-pressed={goalModeEnabled}
-                        aria-label="Goal mode"
-                        title={goalModeEnabled ? "Goal 已开启" : "开启 Goal 模式"}
-                        onClick={() => setGoalModeEnabled((v) => !v)}
-                        className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none transition-colors ${
-                          goalModeEnabled
-                            ? "bg-ink text-on-ink"
-                            : "bg-canvas-inset text-ink-secondary hover:bg-surface-elevated"
-                        }`}
-                      >
-                        Goal
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex h-8 shrink-0 items-center gap-2">
-                    {/* Spec #325 C1: live work-burst timer near Send; hide on settle. */}
-                    {composerTimerText != null && (
-                      <span
-                        data-testid="composer-work-timer"
-                        className="font-mono text-xs tabular-nums text-ink-muted"
-                        title={workBurst?.authorize_paused ? "等待授权（不计工作时间）" : "本轮工作时长"}
-                      >
-                        {composerTimerText}
-                      </span>
-                    )}
-                    {isActiveConversationRunning ? (
-                      <button
-                        type="button"
-                        disabled={interrupting}
-                        onClick={() => {
-                          if (!activeId || interrupting) return;
-                          // Do not clear running optimistically — wait for conversation_working
-                          // after all session workers report idle (or platform settles).
-                          setInterrupting(true);
-                          patchConversation(activeId, { working: true, status: "running" });
-                          send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
-                        }}
-                        className="inline-flex h-8 items-center rounded-pill bg-severity-critical px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90 disabled:opacity-70"
-                      >
-                        {interrupting ? "中断中…" : "中断"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => { void handleSend(); }}
-                        disabled={!input.trim()}
-                        className="inline-flex h-8 items-center rounded-pill bg-ink px-4 text-xs font-medium leading-none text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
-                      >
-                        发送
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* Draft state lives in ChatComposer — page-level input re-rendered the whole stream. */}
+            {composerSurfaceLoading ? (
+              <ChatComposerSkeleton />
+            ) : (
+              <ChatComposer
+                ref={composerRef}
+                mentionTargets={mentionTargets}
+                selectedMention={selectedMention}
+                onSelectPartner={handleSelectPartner}
+                engagementTemplate={engagementTemplate}
+                onEngagementTemplate={handleEngagementTemplate}
+                goalModeEnabled={goalModeEnabled}
+                onGoalMode={handleGoalMode}
+                running={isActiveConversationRunning}
+                interrupting={interrupting}
+                workBurst={workBurst}
+                onSend={(text) => { void handleSend(text); }}
+                onInterrupt={handleInterrupt}
+              />
+            )}
           </main>
           {rightPanelOpen && (
             <RightPanel
+              loading={caseSurfaceLoading}
               phase={agentState.phase as string}
               activeTool={agentState.activeTool as string}
               intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}

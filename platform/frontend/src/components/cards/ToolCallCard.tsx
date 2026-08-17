@@ -37,6 +37,37 @@ import {
   PROCESS_LEADING_SLOT_CLASS,
 } from "../../lib/processChromeIcon";
 
+const TOOL_CARD_CLASS = "my-1.5 w-full min-w-0 max-w-full overflow-hidden";
+const TOOL_CARD_HEADER_CLASS =
+  "group/tool -mx-1 flex h-7 w-fit max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left";
+const TOOL_CARD_BODY_CLASS =
+  "relative ml-2.5 min-w-0 max-w-full space-y-0.5 border-l border-hairline py-0.5 pl-3";
+
+export function ToolCallCardSkeleton() {
+  return (
+    <div aria-hidden="true" className={TOOL_CARD_CLASS} data-testid="tool-card-skeleton">
+      <div className={TOOL_CARD_HEADER_CLASS}>
+        <div className={`${PROCESS_LEADING_SLOT_CLASS} rounded bg-canvas-inset`} />
+        <div className="h-3 w-20 rounded-full bg-canvas-inset" />
+        <div className="h-3.5 w-3.5 rounded bg-canvas-inset" />
+      </div>
+      <div className={TOOL_CARD_BODY_CLASS}>
+        {[72, 54].map((width) => (
+          <div key={width} className="flex min-h-7 w-full min-w-0 max-w-full items-start gap-2 rounded px-0.5 py-0.5">
+            <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-canvas-inset" />
+            <div className="flex min-h-6 flex-1 items-center">
+              <div
+                className="h-3 rounded-full bg-canvas-inset"
+                style={{ width: `${width}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Tool process chrome — group by **tool type**:
  *
@@ -173,13 +204,13 @@ export function ToolCallCard({
   // Header: this tool type's category icon.
   const leading = <ToolCategoryIcon category={category} />;
   return (
-    <div data-testid="tool-card" className="my-1.5 w-full min-w-0 max-w-full overflow-hidden">
+    <div data-testid="tool-card" className={TOOL_CARD_CLASS}>
       <button
         data-testid="tool-card-toggle"
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}
-        className="group/tool -mx-1 flex h-7 w-fit max-w-full min-w-0 items-center gap-1.5 rounded-md px-1 text-left transition-colors hover:bg-canvas-inset"
+        className={`${TOOL_CARD_HEADER_CLASS} transition-colors hover:bg-canvas-inset`}
       >
         <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
         <span
@@ -211,7 +242,7 @@ export function ToolCallCard({
         {/* min-w-0: allow shrink inside chat column; no w-full + ml-* (that overflows). */}
         <div className="min-h-0 min-w-0 overflow-hidden">
           <div
-            className="relative ml-2.5 min-w-0 max-w-full space-y-0.5 border-l border-hairline py-0.5 pl-3"
+            className={TOOL_CARD_BODY_CLASS}
             data-testid="tool-card-body"
           >
             {rows.map((item, index) => (

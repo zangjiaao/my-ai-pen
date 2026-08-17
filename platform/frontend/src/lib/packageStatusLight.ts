@@ -24,7 +24,7 @@ export function packageStatusDotClass(
     s === "waiting" ||
     s === "waiting_user"
   ) {
-    return "bg-severity-medium";
+    return "bg-severity-high";
   }
   // Live work-burst wins (platform workers / status=running).
   if (working === true || s === "running") {
@@ -125,9 +125,17 @@ export function resolvePackageLightStatus(input: {
   const pkg = String(input.packageStatus || "")
     .trim()
     .toLowerCase();
-  // paused wins over working (authorize wait keeps working=true for Send interrupt).
-  if (pkg === "paused" || pkg === "pause" || pkg === "waiting_user") {
-    return "paused";
+  // Wait / park wins over working (authorize keeps working=true for Send interrupt;
+  // incomplete park has no live task — must not paint blue).
+  if (
+    pkg === "paused" ||
+    pkg === "pause" ||
+    pkg === "waiting_user" ||
+    pkg === "incomplete" ||
+    pkg === "pending" ||
+    pkg === "waiting"
+  ) {
+    return pkg === "incomplete" ? "incomplete" : "paused";
   }
   if (input.working === true) return "running";
   // Authoritative package terminals / running always win for Main sync.

@@ -124,6 +124,28 @@ export function GraphAwareTodoList({
   );
 }
 
+export function GraphAwareTodoListSkeleton() {
+  return (
+    <div aria-hidden="true" className="space-y-1" data-testid="graph-todo-list-skeleton">
+      <div className="space-y-0">
+        <PlanRowSkeleton titleWidth="w-24" metaWidth="w-8" />
+        <div className="ml-3 border-l border-hairline-soft pl-2">
+          <div className="space-y-0">
+            <PlanRowSkeleton titleWidth="w-[72%]" badgeWidth="w-12" />
+            <PlanRowSkeleton titleWidth="w-[58%]" />
+          </div>
+        </div>
+      </div>
+      <div className="space-y-0">
+        <PlanRowSkeleton titleWidth="w-32" metaWidth="w-8" />
+      </div>
+      <div className="space-y-0">
+        <PlanRowSkeleton titleWidth="w-20" metaWidth="w-8" />
+      </div>
+    </div>
+  );
+}
+
 /** Recover L1 headers when only L2 work_items with graph-stage-* parents remain. */
 function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
   const order: string[] = [];
@@ -186,6 +208,29 @@ function StrixTodoList({
   );
 }
 
+const PLAN_ROW_CLASS = "flex min-w-0 items-start gap-2 rounded-md px-2 py-2";
+
+function PlanRowSkeleton({
+  titleWidth,
+  metaWidth,
+  badgeWidth,
+}: {
+  titleWidth: string;
+  metaWidth?: string;
+  badgeWidth?: string;
+}) {
+  return (
+    <div className={PLAN_ROW_CLASS}>
+      <div className="mt-0.5 h-4 w-4 shrink-0 rounded-full bg-canvas-inset" />
+      <div className="flex h-5 min-w-0 flex-1 items-center gap-1.5">
+        <div className={`h-3 rounded-full bg-canvas-inset ${titleWidth}`} />
+        {badgeWidth ? <div className={`h-4 shrink-0 rounded-sm bg-canvas-inset ${badgeWidth}`} /> : null}
+        {metaWidth ? <div className={`h-2.5 shrink-0 rounded-full bg-canvas-inset ${metaWidth}`} /> : null}
+      </div>
+    </div>
+  );
+}
+
 /** Shared L1/L2 row shell — same icon size and padding so stages and todos read as one list. */
 function PlanRow({
   status,
@@ -235,7 +280,7 @@ function PlanRow({
     return (
       <button
         type="button"
-        className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
+        className={`${PLAN_ROW_CLASS} w-full text-left hover:bg-canvas-inset`}
         onClick={onClick}
         aria-expanded={ariaExpanded}
       >
@@ -243,7 +288,7 @@ function PlanRow({
       </button>
     );
   }
-  return <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">{body}</div>;
+  return <div className={`${PLAN_ROW_CLASS} hover:bg-canvas-inset`}>{body}</div>;
 }
 
 function StrixTodoItem({ item, agents }: { item: PlanNode; agents?: StrixAgentStatus[] }) {

@@ -22,6 +22,21 @@ export type WorkBurstProjection = {
   >;
 };
 
+export type ScopedWorkBurst = {
+  conversationId: string;
+  projection: WorkBurstProjection;
+} | null;
+
+/** Return a work-burst only to the Case that owns the projection. */
+export function workBurstForConversation(
+  scoped: ScopedWorkBurst,
+  conversationId: string | null | undefined,
+): WorkBurstProjection | null {
+  const activeId = String(conversationId || "").trim();
+  if (!scoped || !activeId || scoped.conversationId !== activeId) return null;
+  return scoped.projection;
+}
+
 /** Format busy-union seconds as compact mm:ss or h:mm:ss (composer live timer). */
 export function formatWorkSeconds(seconds: unknown): string {
   const n = Math.max(0, Math.floor(Number(seconds) || 0));
@@ -71,19 +86,36 @@ export function composerTimerVisible(workBurst: WorkBurstProjection | null | und
  */
 export function composerLiveSeconds(
   workBurst: WorkBurstProjection | null | undefined,
-  opts?: { nowMs?: number; tickAnchor?: { seconds: number; atMs: number } | null },
+  opts?: {
+    nowMs?: number;
+    tickAnchor?: { seconds: number; atMs: number } | null;
+    /** Tenths / remount-safe display. Default floors to whole seconds (composer C1). */
+    precise?: boolean;
+  },
 ): number | null {
   if (!workBurst?.active_burst_id) return null;
   const base = workBurst.live_work_seconds;
   if (base == null || !Number.isFinite(Number(base))) return null;
   const paused = workBurst.authorize_paused === true || workBurst.accruing === false;
-  if (paused) return Math.max(0, Math.floor(Number(base)));
+  const n = Number(base);
+  if (paused) return Math.max(0, opts?.precise ? n : Math.floor(n));
   const tick = opts?.tickAnchor;
   if (tick && opts?.nowMs != null) {
-    const delta = Math.max(0, Math.floor((opts.nowMs - tick.atMs) / 1000));
-    return Math.max(0, Math.floor(tick.seconds) + delta);
+    const rawDelta = Math.max(0, (opts.nowMs - tick.atMs) / 1000);
+    const delta = opts?.precise ? rawDelta : Math.floor(rawDelta);
+    const start = opts?.precise ? Number(tick.seconds) : Math.floor(tick.seconds);
+    return Math.max(0, start + delta);
   }
-  return Math.max(0, Math.floor(Number(base)));
+  return Math.max(0, opts?.precise ? n : Math.floor(n));
+}
+
+/** List-tail Working tenths (`12.3s` / `1m 5.3s`) from the same C1 seconds. */
+export function formatElapsedTenths(seconds: unknown): string {
+  const n = Math.max(0, Number(seconds) || 0);
+  if (n < 60) return `${n.toFixed(1)}s`;
+  const m = Math.floor(n / 60);
+  const s = n % 60;
+  return `${m}m ${s.toFixed(1)}s`;
 }
 
 /** B1: message content carries finalized duration for result-anchor card only. */

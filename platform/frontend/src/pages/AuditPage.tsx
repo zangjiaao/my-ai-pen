@@ -2,7 +2,9 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import PageToolbarSkeleton from "../components/PageToolbarSkeleton";
 import { authFetch } from "../lib/api";
+import { useRenderAudit } from "../lib/renderAudit";
 
 const ALL = "all";
 
@@ -42,11 +44,43 @@ type AuditLog = {
   detail: Record<string, unknown>;
 };
 
+const AUDIT_TABLE_CONTAINER_CLASS =
+  "overflow-hidden rounded-md border border-hairline-soft bg-surface-raised";
+const AUDIT_TABLE_CLASS = "w-full table-fixed";
+const AUDIT_ROW_CLASS = "border-b border-hairline-soft text-sm";
+
+function AuditTableSkeletonRows() {
+  return (
+    <>
+      {[72, 58, 84, 66, 78, 62].map((resourceWidth, index) => (
+        <tr key={index} aria-hidden="true" className={`${AUDIT_ROW_CLASS} h-[3.25rem]`}>
+          <td className="px-4 py-2.5"><div className="h-3 w-28 rounded-full bg-canvas-inset" /></td>
+          <td className="px-4 py-2.5"><div className="h-3 w-20 rounded-full bg-canvas-inset" /></td>
+          <td className="px-4 py-2.5"><div className="h-3 w-24 rounded-full bg-canvas-inset" /></td>
+          <td className="px-4 py-2.5">
+            <div className="space-y-2">
+              <div
+                className="h-3 rounded-full bg-canvas-inset"
+                style={{ width: `${resourceWidth}%` }}
+              />
+              <div className="h-2.5 w-24 rounded-full bg-canvas-inset" />
+            </div>
+          </td>
+          <td className="px-4 py-2.5"><div className="h-5 w-14 rounded-md bg-canvas-inset" /></td>
+          <td className="px-2 py-2.5"><div className="mx-auto h-4 w-4 rounded bg-canvas-inset" /></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 export default function AuditPage() {
+  useRenderAudit("AuditPage");
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [category, setCategory] = useState(ALL);
   const [status, setStatus] = useState(ALL);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -69,6 +103,7 @@ export default function AuditPage() {
       setError(err instanceof Error ? err.message : "操作审计加载失败");
     } finally {
       setLoading(false);
+      setInitialLoading(false);
     }
   };
 
@@ -86,6 +121,14 @@ export default function AuditPage() {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="操作审计" />
         <main className="flex-1 overflow-y-auto p-6">
+          {initialLoading ? (
+            <PageToolbarSkeleton
+              controls={[112, 112]}
+              trailingWidth={76}
+              label="正在加载审计操作栏"
+              testId="audit-toolbar-loading-skeleton"
+            />
+          ) : (
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <select
               value={category}
@@ -120,6 +163,7 @@ export default function AuditPage() {
               刷新
             </button>
           </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
@@ -127,8 +171,13 @@ export default function AuditPage() {
             </div>
           )}
 
-          <div className="overflow-hidden rounded-md border border-hairline-soft bg-surface-raised">
-            <table className="w-full table-fixed">
+          <div
+            className={`${AUDIT_TABLE_CONTAINER_CLASS} ${loading && logs.length === 0 ? "animate-pulse" : ""}`}
+            data-testid={loading && logs.length === 0 ? "audit-loading-skeleton" : undefined}
+            role={loading && logs.length === 0 ? "status" : undefined}
+            aria-label={loading && logs.length === 0 ? "正在加载操作审计" : undefined}
+          >
+            <table className={AUDIT_TABLE_CLASS}>
               <thead>
                 <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
                   <th className="w-40 px-4 py-2.5">时间</th>
@@ -145,7 +194,7 @@ export default function AuditPage() {
                   const hasDetail = log.detail && Object.keys(log.detail).length > 0;
                   return (
                     <Fragment key={log.id}>
-                      <tr className="border-b border-hairline-soft text-sm hover:bg-surface-default">
+                      <tr className={`${AUDIT_ROW_CLASS} hover:bg-surface-default`}>
                         <td className="px-4 py-2.5 text-xs text-ink-muted whitespace-nowrap">
                           {formatDate(log.timestamp)}
                         </td>
@@ -208,11 +257,15 @@ export default function AuditPage() {
                   );
                 })}
                 {!logs.length && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-sm text-ink-muted">
-                      {loading ? "加载中…" : "暂无操作记录"}
-                    </td>
-                  </tr>
+                  loading ? (
+                    <AuditTableSkeletonRows />
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-10 text-center text-sm text-ink-muted">
+                        暂无操作记录
+                      </td>
+                    </tr>
+                  )
                 )}
               </tbody>
             </table>

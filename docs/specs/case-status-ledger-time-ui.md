@@ -70,7 +70,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
 | **Start anchor (E1)** | First successful **task_assign / work-burst enter**; write-once `started_at` |
 | **Work seconds (S)** | Sum of busy intervals — **not** wall-clock `now − started_at` |
 | **Parallel (U)** | **Union** of busy intervals (at least one worker busy), not sum of Main+Sub seconds |
-| **Authorize wait (H1)** | Pending user authorize/cancel is **not** busy; Task package status **`paused`** (yellow light; not covered by `working` blue; alias `pause` normalizes to `paused`) |
+| **Authorize wait (H1)** | Pending user authorize/cancel is **not** busy; Task package status **`paused`** (yellow light; not covered by `working` blue; alias `pause` normalizes to `paused`). The burst durably binds the authorization `request_id`; resolving after a platform restart must unpause the matching burst. Terminal Case + no workers must reconcile any legacy orphaned pause to finalized. |
 | **Park / incomplete** | Harness half-settle (user interrupt / Session continue). No live task. Light is **yellow** (`incomplete`) — same wait family as paused. Sticky `working` must not repaint it blue. |
 | **Same-user-message auto-retry (R1)** | Same work-burst; mergeable busy until final success/abandon |
 | **API error** | Closes **current** busy interval; updates last activity; **does not** close Case or clear `started_at` |
@@ -82,7 +82,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
 |-----------|----------|
 | **Chat day/time stamps** | Chat-app style date separators / message times; long-lived |
 | **Composer live timer** (near Send) | Visible only while Case has active work-burst busy (**C1**); pauses on authorize; **stops and disappears** on burst settle |
-| **List-tail Working chrome** | Same **C1** seconds as composer (work-burst ledger). Not mount-local — remount / route change must resume, not restart. |
+| **List-tail Working chrome** | Same **C1** seconds as composer (work-burst ledger). Not mount-local — remount / route change must resume, not restart. Projection is Case-scoped: while switching A → B, B must never render A’s burst before B snapshot loads. |
 | **Agent result anchor** (bottom-right of burst result) | **One duration per work-burst (B1)** — finalized work-seconds from the same C1 clock; long-lived; not on every tool/thinking card |
 | **Internal status notices** | Do **not** render infra notices such as `tooling_health` as chat status chrome |
 
@@ -219,8 +219,8 @@ on LLM usage event:
 | Seam | Example external behaviors |
 |------|----------------------------|
 | **S1** | Two Participants + Sub tokens → Case total = sum once; handoff / new Graph / #321 archive → totals unchanged; double-count fixture fails if Sub folded twice; snapshot exposes case + participant usage. |
-| **S2** | Main 10m with overlapping Subs → union ≈ 10m not 10+8+8; authorize gap excluded; retry same burst id; API fail finalizes seconds and leaves case open; reload returns same finalized burst seconds. |
-| **UI** | Status has no elapsed hero requirement; header shows Case tok+cost; AgentRow has model/requests/tokens and no required work-summary string; tooling_health not rendered; composer timer present only when working; one B1 duration per burst after settle. |
+| **S2** | Main 10m with overlapping Subs → union ≈ 10m not 10+8+8; authorize gap excluded; request-bound authorize survives restart; terminal workerless orphan pause finalizes; retry same burst id; API fail finalizes seconds and leaves case open; reload returns same finalized burst seconds. |
+| **UI** | Status has no elapsed hero requirement; header shows Case tok+cost; AgentRow has model/requests/tokens and no required work-summary string; tooling_health not rendered; composer timer present only when working; Case B cannot render Case A work-burst during switch; one B1 duration per burst after settle. |
 
 **Prior art:** `test_case_participants` / `recompute_case_run`; conversation snapshot purity (#280); `conversation_working` / work_status paths; RightPanel / AgentCollaborationTree tests; MessageRenderer status rendering; #321 projection tests when present.
 

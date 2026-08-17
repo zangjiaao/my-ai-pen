@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { useRenderAudit } from "../lib/renderAudit";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { AUTH_BADGE } from "../lib/findingKinds";
@@ -7,11 +8,18 @@ import { PROCESS_LEADING_SLOT_CLASS } from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
-import { ToolCallCard } from "./cards/ToolCallCard";
+import { ToolCallCard, ToolCallCardSkeleton } from "./cards/ToolCallCard";
 import { LoadingPixelMark } from "./LoadingState";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
-import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
+import {
+  composerLiveSeconds,
+  composerTimerVisible,
+  formatAgentDurationLabel,
+  formatElapsedTenths,
+  resultAnchorWorkSeconds,
+  type WorkBurstProjection,
+} from "../lib/workBurstTime";
 import { isSteerDeliveryQueued, STEER_QUEUED_HINT } from "../lib/steerDelivery";
 
 interface Props {
@@ -44,6 +52,54 @@ interface Props {
    * result anchor (one duration per work-burst; not on tool/thinking cards).
    */
   resultAnchorWorkSeconds?: number | null;
+}
+
+const USER_MESSAGE_CONTAINER_CLASS = "my-2 flex min-w-0 flex-col items-end";
+const USER_MESSAGE_BUBBLE_CLASS =
+  "max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]";
+const AGENT_MESSAGE_CONTAINER_CLASS = "my-2 min-w-0";
+const AGENT_MESSAGE_LABEL_CLASS = "mb-1 flex items-center gap-2 text-xs text-ink-muted";
+
+export function ConversationMessagesSkeleton() {
+  return (
+    <div aria-hidden="true" className="w-full animate-pulse space-y-4">
+      <div className="my-3 flex items-center justify-center">
+        <div className="h-[18px] w-16 rounded-full bg-canvas-inset" />
+      </div>
+      <div className={USER_MESSAGE_CONTAINER_CLASS}>
+        <div className={`${USER_MESSAGE_BUBBLE_CLASS} w-[44%]`}>
+          <div className="flex h-5 items-center">
+            <div className="h-3 w-full rounded-full bg-canvas-inset" />
+          </div>
+          <div className="flex h-5 items-center">
+            <div className="h-3 w-[64%] rounded-full bg-canvas-inset" />
+          </div>
+        </div>
+      </div>
+      <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
+        <div className={AGENT_MESSAGE_LABEL_CLASS}>
+          <div className="h-3 w-20 rounded-full bg-canvas-inset" />
+        </div>
+        <div className="relative min-w-0">
+          <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed">
+            {[100, 86, 58].map((width) => (
+              <div key={width} className="flex h-6 max-w-[78%] items-center">
+                <div
+                  className="h-3 rounded-full bg-canvas-inset"
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
+        <div className="relative min-w-0">
+          <ToolCallCardSkeleton />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
@@ -274,22 +330,46 @@ function normalizeSeverity(value: unknown): string {
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 /**
- * Wall-clock tenths since mount (`0.0s` / `1m 5.3s`). Remeasures Date.now()
- * each tick so Agent streaming re-renders cannot under-count.
+ * C1 tenths from the work-burst ledger (survives ConversationPage remount).
+ * Local tick only interpolates; it does not invent a new start.
  */
-function useMountElapsedTenthsLabel(): string {
-  const [totalSec, setTotalSec] = useState(0);
+function useWorkBurstElapsedTenthsLabel(
+  workBurst: WorkBurstProjection | null | undefined,
+  working: boolean,
+): string {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const tickAnchorRef = useRef<{ seconds: number; atMs: number } | null>(null);
+
   useEffect(() => {
-    const startedAt = Date.now();
-    const tick = () => setTotalSec(Math.max(0, (Date.now() - startedAt) / 1000));
-    tick();
-    const id = window.setInterval(tick, 100);
+    if (workBurst?.active_burst_id && workBurst.live_work_seconds != null && workBurst.accruing) {
+      tickAnchorRef.current = { seconds: Number(workBurst.live_work_seconds) || 0, atMs: Date.now() };
+    } else if (!workBurst?.active_burst_id) {
+      tickAnchorRef.current = null;
+    } else if (workBurst.authorize_paused || workBurst.accruing === false) {
+      const live = workBurst.live_work_seconds;
+      tickAnchorRef.current = live != null
+        ? { seconds: Number(live) || 0, atMs: Date.now() }
+        : tickAnchorRef.current;
+    }
+  }, [workBurst]);
+
+  useEffect(() => {
+    if (!composerTimerVisible(workBurst, working) || workBurst?.authorize_paused || workBurst?.accruing === false) {
+      return;
+    }
+    const id = window.setInterval(() => setNowMs(Date.now()), 100);
     return () => window.clearInterval(id);
-  }, []);
-  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${s.toFixed(1)}s`;
+  }, [workBurst, working]);
+
+  const secs = composerLiveSeconds(workBurst, {
+    nowMs,
+    tickAnchor: workBurst?.authorize_paused || workBurst?.accruing === false
+      ? null
+      : tickAnchorRef.current,
+    precise: true,
+  });
+  if (secs == null) return "";
+  return formatElapsedTenths(secs);
 }
 
 /**
@@ -298,10 +378,18 @@ function useMountElapsedTenthsLabel(): string {
  *   【像素 Loading 格】工作中...  12.3s
  *
  * Leading is the original Drive pixel-grid (not a status light). Row metrics
- * match Think/Tool (h-7, gap-1.5). Elapsed is mount wall-clock with tenths.
+ * match Think/Tool (h-7, gap-1.5). Elapsed is work-burst C1 (not mount).
  * Hide via localStorage my-ai-pen.workingChrome=0.
  */
-export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
+export function AgentPendingCard({
+  content,
+  workBurst,
+  working = false,
+}: {
+  content: Record<string, unknown>;
+  workBurst?: WorkBurstProjection | null;
+  working?: boolean;
+}) {
   const raw = String(content.text || "工作中...").trim() || "工作中...";
   const title =
     raw === "思考" ||
@@ -312,7 +400,7 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     /^working\b/i.test(raw)
       ? "工作中..."
       : raw;
-  const elapsed = useMountElapsedTenthsLabel();
+  const elapsed = useWorkBurstElapsedTenthsLabel(workBurst, working);
 
   return (
     <div
@@ -335,13 +423,15 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
         >
           {title}
         </span>
-        <span
-          data-testid="loading-state-elapsed"
-          className="shrink-0 font-mono text-[12px] tabular-nums text-ink-muted"
-          title="本段展示计时（挂载墙钟）"
-        >
-          {elapsed}
-        </span>
+        {elapsed ? (
+          <span
+            data-testid="loading-state-elapsed"
+            className="shrink-0 font-mono text-[12px] tabular-nums text-ink-muted"
+            title="本轮工作时长"
+          >
+            {elapsed}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -367,7 +457,8 @@ function SystemNotice({ content, msgType }: { content: Record<string, unknown>; 
   return <StatusNotice content={content} msgType={msgType} />;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
+function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
+  useRenderAudit("MessageRenderer");
   const { role, msg_type, content } = message;
 
   // Spec #163: engagement_closeout only. Generic status/harness lines are not rendered.
@@ -383,7 +474,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     const decisionText = String(content.text || "").trim() || "已选择";
     return (
       <div className="my-2 flex min-w-0 justify-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">
+        <div className={USER_MESSAGE_BUBBLE_CLASS}>
           {renderMentionText(decisionText)}
         </div>
       </div>
@@ -394,8 +485,8 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     // Mid-run user_steer: FE marks delivery=queued until Agent processes after tools.
     const deliveryQueued = isSteerDeliveryQueued(content);
     return (
-      <div className="my-2 flex min-w-0 flex-col items-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
+      <div className={USER_MESSAGE_CONTAINER_CLASS}>
+        <div className={USER_MESSAGE_BUBBLE_CLASS}>{renderMentionText(String(content.text || ""))}</div>
         {deliveryQueued ? (
           <div
             className="mt-1 max-w-[70%] text-right text-xs text-ink-muted"
@@ -464,7 +555,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       break;
     }
     case "agent_pending":
-      body = <AgentPendingCard content={content} />;
+      body = <AgentPendingCard content={content} working={Boolean(sessionActive)} />;
       break;
     case "thinking":
     case "reasoning":
@@ -483,9 +574,9 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   // Spec #325 B1: total work duration only on Agent result (bottom-right), not user bubbles.
   // Stream datetime stamps live in ConversationPage chrome *before* dialogue.
   return (
-    <div className="my-2 min-w-0">
+    <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
       {showAgentLabel && (
-        <div className="mb-1 flex items-center gap-2 text-xs text-ink-muted">
+        <div className={AGENT_MESSAGE_LABEL_CLASS}>
           <span className="font-medium text-ink-secondary">{agentLabel}</span>
         </div>
       )}
@@ -507,6 +598,5 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   );
 }
 
-
-
+export default memo(MessageRenderer);
 

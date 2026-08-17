@@ -590,6 +590,14 @@ export function isExpertSchedulable(nodeStatus: string | null | undefined): bool
   return String(nodeStatus || "").trim().toLowerCase() === "online";
 }
 
+/** A new-conversation default must be enabled and selectable now. */
+export function canSetExpertAsDefault(
+  enabled: boolean,
+  nodeStatus: string | null | undefined,
+): boolean {
+  return enabled && isExpertSchedulable(nodeStatus);
+}
+
 /** True if this pack can be used when creating an Expert on the node. */
 export function nodeOffersExpert(offers: unknown, expertId: unknown): boolean {
   const pack = normalizeExpertId(expertId) ?? DEFAULT_EXPERT_ID;

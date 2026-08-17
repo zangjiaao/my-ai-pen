@@ -4,6 +4,7 @@
 **Issue:** [#284](https://github.com/zangjiaao/my-ai-pen/issues/284)  
 **Field case:** `e4876015-ca2d-4c6a-a093-2aeac86275f8` (composer/UI Graph vs Node Free split-brain; Findings empty after re-verify without booking)  
 **Depends on:** Spec #277 `participant-session.md`, Spec #278 `graph-catalog-work-mode-ui.md`, Spec #280 Findings SoT  
+**Amended (restore UX only):** Spec [#474](https://github.com/zangjiaao/my-ai-pen/issues/474) `composer-case-restore.md` — remount reads Session mode, **not** Case sticky template (B5).  
 **Product path:** Graph × Pi + Node4 (ADR 0001). Soft Graph retired.  
 **Does not reintroduce:** silent sticky Graph promote from Case alone; Soft scenario Graph; platform NLP invent of engagement/mode.
 
@@ -32,7 +33,7 @@ Kill the failure mode from field Case `e4876015-…` where:
 | **B2** | Node with structured Graph intent + pack Graph capability **must** take Expert Hard Graph path (or fail-closed `unavailable` / `task_error`). **Never silent Free** when the user selected a product Graph this turn. |
 | **B3** | **Expert @mention / toolbar expert** is the Participant Session identity and pack seat. Dispatch must use that expert’s pack, not a default seat divert. |
 | **B4** | Session private `work_mode` / `graph_id` after settle **must match** the harness Node actually started (AgentRow = actual; Spec #278 D2/D6). No “Session says graph, Node free” split-brain. |
-| **B5** | Case sticky `engagement_template` alone **must not** promote Free → Graph (Spec #277). Sticky may inform RoE labels only when envelope is already Graph. |
+| **B5** | Case sticky `engagement_template` alone **must not** promote Free → Graph (Spec #277). Sticky may inform RoE labels only when envelope is already Graph. Composer remount must not treat sticky template as the Graph chip (Spec #474). |
 | **B6** | Composer **不指定** does not force exit Graph (A1). Exit Graph still needs permission card. |
 | **B7** | Product Findings SoT is the Case ledger. Re-verify / rediscovery of open priors and new product issues require Main `finding(confirm)` with proof (or package auto-ingest + confirm path). Chat/todo/report prose is not a Finding row. |
 | **B8** | Structured fields only — no free-text NLP invent of mode/graph id on platform or Node. |

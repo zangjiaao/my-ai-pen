@@ -3,6 +3,7 @@
  * Run: npx tsx src/lib/experts.wire.test.ts
  */
 import {
+  canSetExpertAsDefault,
   composerEngagementWireFields,
   ENGAGEMENT_TEMPLATES,
   FREE_COMPOSER_WIRE_ALIASES,
@@ -70,5 +71,9 @@ assert(nonPen.engagement_template === undefined, "non-pentest omits template");
 // Unknown junk is not inventing Graph
 const junk = composerEngagementWireFields("please use hard graph", { isPentest: true });
 assert(junk.engagement_template === undefined, "no NLP invent");
+
+assert(canSetExpertAsDefault(true, "online"), "enabled online expert may become default");
+assert(!canSetExpertAsDefault(true, "offline"), "offline expert may not become default");
+assert(!canSetExpertAsDefault(false, "online"), "disabled expert may not become default");
 
 console.log("experts.wire.test.ts: ok");

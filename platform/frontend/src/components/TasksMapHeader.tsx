@@ -22,6 +22,19 @@ type Props = {
   onReturnToLive?: () => void;
 };
 
+const TASKS_MAP_HEADER_CLASS = "mb-2 space-y-1";
+
+export function TasksMapHeaderSkeleton() {
+  return (
+    <div aria-hidden="true" className={TASKS_MAP_HEADER_CLASS}>
+      <div className="flex h-4 items-center justify-between gap-2">
+        <div className="h-3 w-12 rounded-full bg-canvas-inset" />
+        <div className="h-2.5 w-8 rounded-full bg-canvas-inset" />
+      </div>
+    </div>
+  );
+}
+
 export default function TasksMapHeader({
   revisions,
   liveRevisionId,
@@ -34,7 +47,7 @@ export default function TasksMapHeader({
     revisions.some((r) => r.sealed && isLiveRevision(r, liveRevisionId));
 
   return (
-    <div className="mb-2 space-y-1" data-testid="tasks-map-header">
+    <div className={TASKS_MAP_HEADER_CLASS} data-testid="tasks-map-header">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <p className="text-xs text-ink-muted">Tasks</p>

@@ -7,9 +7,12 @@ import {
   composerLiveSeconds,
   composerTimerVisible,
   formatAgentDurationLabel,
+  formatElapsedTenths,
   formatWorkSeconds,
   resultAnchorWorkSeconds,
   selectResultAnchorMessageIds,
+  workBurstForConversation,
+  type ScopedWorkBurst,
   type WorkBurstProjection,
 } from "./workBurstTime.ts";
 
@@ -24,6 +27,28 @@ import {
   assert.equal(formatAgentDurationLabel(65), "耗时：1m 5s");
   assert.equal(formatAgentDurationLabel(3600 + 65), "耗时：1h 1m 5s");
   console.log("ok: formatAgentDurationLabel");
+}
+
+{
+  const scoped: ScopedWorkBurst = {
+    conversationId: "case-a",
+    projection: {
+      active_burst_id: "wb-a",
+      live_work_seconds: 12,
+      accruing: true,
+    },
+  };
+  assert.equal(
+    workBurstForConversation(scoped, "case-a")?.active_burst_id,
+    "wb-a",
+    "the owning Case can render its work burst",
+  );
+  assert.equal(
+    workBurstForConversation(scoped, "case-b"),
+    null,
+    "Case B must never render Case A work-burst chrome while loading",
+  );
+  assert.equal(workBurstForConversation(scoped, null), null);
 }
 
 {
@@ -50,7 +75,29 @@ import {
   assert.equal(composerTimerVisible(paused, true), true);
   assert.equal(composerLiveSeconds(paused), 12);
   assert.equal(composerLiveSeconds(open, { nowMs: 5000, tickAnchor: { seconds: 10, atMs: 2000 } }), 13);
+  const remount: WorkBurstProjection = {
+    active_burst_id: "wb_1",
+    live_work_seconds: 87,
+    accruing: true,
+  };
+  assert.equal(composerLiveSeconds(remount), 87, "reload uses ledger seconds, not 0");
+  assert.equal(composerLiveSeconds(remount, { precise: true }), 87);
+  assert.equal(
+    composerLiveSeconds(remount, {
+      precise: true,
+      nowMs: 2500,
+      tickAnchor: { seconds: 87, atMs: 1000 },
+    }),
+    88.5,
+  );
   console.log("ok: composer C1 visibility + pause");
+}
+
+{
+  assert.equal(formatElapsedTenths(0), "0.0s");
+  assert.equal(formatElapsedTenths(12.3), "12.3s");
+  assert.equal(formatElapsedTenths(65.3), "1m 5.3s");
+  console.log("ok: formatElapsedTenths");
 }
 
 {

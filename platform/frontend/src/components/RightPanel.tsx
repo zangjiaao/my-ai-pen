@@ -4,6 +4,7 @@ import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes"
 import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
 import {
   StrixAgentList,
+  StrixAgentListSkeleton,
   agentStatusCount,
   orderStrixAgents,
 } from "./AgentCollaborationTree";
@@ -25,13 +26,14 @@ import {
 import FindingCard from "./cards/FindingCard";
 import { IntelList } from "./IntelList";
 import type { IntelRow } from "../lib/intelView";
-import { GraphAwareTodoList } from "./TasksPlanList";
-import TasksMapHeader from "./TasksMapHeader";
+import { GraphAwareTodoList, GraphAwareTodoListSkeleton } from "./TasksPlanList";
+import TasksMapHeader, { TasksMapHeaderSkeleton } from "./TasksMapHeader";
 import ConfirmDialog from "./ConfirmDialog";
 import type { TaskMapRevision } from "../lib/taskMapHistory";
 import { isViewingHistory, planTreeForView } from "../lib/taskMapHistory";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
 import { authFetch } from "../lib/api";
+import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
   TRAFFIC_EMPTY_COPY,
   bodyDisplayText,
@@ -161,6 +163,8 @@ interface Props {
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
   /** Spec #354: Case id for Session Reset/Delete APIs. */
   conversationId?: string | null;
+  /** Case snapshot / first message page is still loading. */
+  loading?: boolean;
   /** Spec #354 S4: expert ids with pending incomplete-map handoff. */
   pendingHandoffExpertIds?: string[];
   /** Spec #354: refresh Case snapshot after Session Reset/Delete. */
@@ -227,12 +231,14 @@ export default function RightPanel({
   onEnrolledAsset,
   onWorkerClick,
   conversationId = null,
+  loading = false,
   pendingHandoffExpertIds = [],
   onSessionLifecycleDone,
   packageStatus = null,
   packageWorking = false,
   packageExpertId = null,
 }: Props) {
+  useRenderAudit("RightPanel");
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
@@ -384,6 +390,12 @@ export default function RightPanel({
     }
   }, [panelWidth]);
 
+  useEffect(() => {
+    setSelectedTrafficId(null);
+    setSessionConfirm(null);
+    setSessionActionError(null);
+  }, [conversationId]);
+
   const handlePanelResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -443,16 +455,44 @@ export default function RightPanel({
         {tabs.map((item) => (
           <button
             key={item.key}
+            type="button"
             data-testid={`right-tab-${item.key}`}
             title={item.title || item.label}
+            disabled={loading}
+            aria-current={tab === item.key ? "page" : undefined}
             onClick={() => setTab(item.key)}
-            className={`px-0.5 py-2.5 text-[13px] font-medium transition-colors ${tab === item.key ? "border-b-2 border-ink text-ink" : "border-b-2 border-transparent text-ink-secondary hover:text-ink"}`}
+            className={`border-b-2 px-0.5 py-2.5 text-[13px] font-medium transition-colors ${
+              tab === item.key
+                ? "border-ink text-ink"
+                : `border-transparent text-ink-secondary ${loading ? "" : "hover:text-ink"}`
+            }`}
           >
             {item.label}
           </button>
         ))}
       </nav>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div
+        role={loading ? "status" : undefined}
+        aria-label={loading ? "正在加载状态面板" : undefined}
+        data-testid={loading ? "right-panel-loading-skeleton" : undefined}
+        className="no-scrollbar flex-1 overflow-y-auto p-4"
+      >
+        {loading ? (
+          <div aria-hidden="true" className="animate-pulse space-y-4">
+            <section>
+              <div className="mb-2 flex h-4 items-center justify-between gap-2">
+                <div className="h-3 w-24 rounded-full bg-canvas-inset" />
+                <div className="h-2.5 w-16 rounded-full bg-canvas-inset" />
+              </div>
+              <StrixAgentListSkeleton />
+            </section>
+            <section>
+              <TasksMapHeaderSkeleton />
+              <GraphAwareTodoListSkeleton />
+            </section>
+          </div>
+        ) : (
+          <>
         {tab === "status" && (
           <div className="space-y-4">
             {/* Spec #324 D1: Case tokens+cost primary; active count secondary. No elapsed hero. */}
@@ -635,6 +675,8 @@ export default function RightPanel({
             onOpen={(id) => setSelectedTrafficId(id)}
           />
         )}
+        </>
+      )}
       </div>
       {selectedTrafficId &&
         typeof document !== "undefined" &&
@@ -706,6 +748,7 @@ function TrafficAuditList({
   emptyCopy: string;
   onOpen: (exchangeId: string) => void;
 }) {
+  useRenderAudit("TrafficAuditList");
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<TrafficSourceFilter>("all");
   const visible = useMemo(
@@ -719,7 +762,7 @@ function TrafficAuditList({
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={handleTypedInput("TrafficAuditList", setQuery)}
           placeholder="Search method, domain, path…"
           data-testid="traffic-search"
           className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-muted outline-none focus:border-ink"
