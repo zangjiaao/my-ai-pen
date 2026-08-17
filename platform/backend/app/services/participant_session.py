@@ -98,6 +98,32 @@ def merge_session_into_context(
     return ctx
 
 
+def sessions_projection_for_snapshot(context: object) -> dict[str, dict[str, str]]:
+    """Thin Session work_mode / graph_id map for composer restore (Spec #474 S3).
+
+    Not a new SOT — projects conversation.context.sessions only.
+    """
+    ctx = context if isinstance(context, dict) else {}
+    sessions = ctx.get("sessions") if isinstance(ctx.get("sessions"), dict) else {}
+    out: dict[str, dict[str, str]] = {}
+    for key, row in sessions.items():
+        if not isinstance(row, dict):
+            continue
+        eid = str(key or "").strip()
+        if not eid:
+            continue
+        item: dict[str, str] = {}
+        mode = str(row.get("work_mode") or "").strip().lower()
+        if mode in {"free", "graph"}:
+            item["work_mode"] = mode
+        gid = str(row.get("graph_id") or "").strip()
+        if gid:
+            item["graph_id"] = gid
+        if item:
+            out[eid] = item
+    return out
+
+
 def resolve_work_envelope(
     *,
     expert_id: object = None,

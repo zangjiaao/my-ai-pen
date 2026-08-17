@@ -25,6 +25,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/session-auto-title.md`](specs/session-auto-title.md) | Session auto-title — Main Task layer names default「新会话」(Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457)) |
 | [`specs/graph-catalog-work-mode-ui.md`](specs/graph-catalog-work-mode-ui.md) | Graph L1 catalog (skill-like) + dual-rail composer/AgentRow (Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278)) |
 | [`specs/composer-graph-harness-bind.md`](specs/composer-graph-harness-bind.md) | Composer Graph + Expert → harness bind fail-closed; re-verify booking (Spec [#284](https://github.com/zangjiaao/my-ai-pen/issues/284)) |
+| [`specs/composer-case-restore.md`](specs/composer-case-restore.md) | Composer restore on Case open — current Mention + Session work mode + Goal; not browser-global last pick (Spec [#474](https://github.com/zangjiaao/my-ai-pen/issues/474)) |
 | [`specs/engagement-graph-back-edges.md`](specs/engagement-graph-back-edges.md) | Constrained Engagement Graph (declarative back-edges) + `hypothesis_cycle` (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)) |
 | [`specs/engagement-graph-json-boundary.md`](specs/engagement-graph-json-boundary.md) | Graph JSON data-plane vs code standards-plane (topology/budgets in JSON; interpreter/predicates/projection/booking in code) |
 | [`specs/lab-scorecard-hypothesis-cycle.md`](specs/lab-scorecard-hypothesis-cycle.md) | Offline dual-arm D0–D3 × R0–R3 scorecard (DVWA+Juice); never agent-facing (Spec #285 S6) |
