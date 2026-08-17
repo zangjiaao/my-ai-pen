@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,13 @@ class Expert(Base):
     __tablename__ = "experts"
     __table_args__ = (
         UniqueConstraint("name", name="uq_experts_name"),
+        Index(
+            "uq_experts_single_default",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default IS TRUE"),
+            sqlite_where=text("is_default = 1"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -40,7 +47,7 @@ class Expert(Base):
     # Accent hex (#RRGGBB) for conversation partner chips; optional.
     color: Mapped[str | None] = mapped_column(String(32), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # At most one enabled expert should be is_default=True (enforced in API).
+    # At most one expert may be is_default=True (enforced by a partial unique index).
     # Used as the default conversation partner for new chats.
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
