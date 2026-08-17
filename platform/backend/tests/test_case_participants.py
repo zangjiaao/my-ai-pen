@@ -571,6 +571,32 @@ def test_s1_sub_usage_included_once_in_parent_and_case():
     # Case still 100 — Sub shown on row does not add a second Case line
     assert recompute_case_run(ctx)["case_run"]["llm_usage"]["total_tokens"] == 100
 
+    # Spec #487: re-applying the same Node4 checkpoint must not create spend.
+    again = apply_checkpoint_to_participant(
+        ctx,
+        {
+            "role_pack": "pentest",
+            "panel_agents": [
+                {"id": "node4-main", "name": "渗透大师", "status": "running", "parent_id": None},
+                {
+                    "id": "sub_1",
+                    "name": "Worker 1",
+                    "status": "running",
+                    "parent_id": "node4-main",
+                    "usage": {"total_tokens": 30, "cost": 0.003, "requests": 1},
+                },
+            ],
+            "llm_usage": {"total_tokens": 70, "cost": 0.007, "requests": 2, "model": "gpt-main"},
+        },
+        expert_id="e2",
+        expert_name="渗透大师",
+        pack_id="pentest",
+        running=True,
+    )
+    assert again["case_run"]["llm_usage"]["total_tokens"] == 100
+    assert again["participants"]["expert:e2"]["usage"]["total_tokens"] == 100
+    assert again["participants"]["expert:e2"]["usage_own"]["total_tokens"] == 70
+
 
 def test_s1_double_count_refusal_recompute_stable():
     """Rolling Sub into parent must not inflate Case when recomputed repeatedly."""

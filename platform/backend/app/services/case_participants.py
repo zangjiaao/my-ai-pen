@@ -178,6 +178,25 @@ _RUNNING_PANEL_STATUSES = frozenset(
 )
 
 
+def _seed_panel_usage_cursors(panel: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """On first panel write, baseline each child usage cursor at the incoming snap."""
+    out: list[dict[str, Any]] = []
+    for item in panel:
+        row = dict(item)
+        if not str(row.get("parent_id") or "").strip():
+            out.append(row)
+            continue
+        snap = row.get("usage") if isinstance(row.get("usage"), dict) else None
+        if snap is None and isinstance(row.get("llm_usage"), dict):
+            snap = row.get("llm_usage")
+        if isinstance(snap, dict) and not isinstance(row.get("usage_cursor"), dict):
+            fields = _usage_fields(snap)
+            row["usage"] = fields
+            row["usage_cursor"] = dict(fields)
+        out.append(row)
+    return out
+
+
 def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
     """Merge a live burst panel into the Case participant's historical roster.
 
@@ -198,7 +217,9 @@ def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
     if not inc_list:
         return prev_list
     if not prev_list:
-        return inc_list
+        # First write must seed child usage_cursor so a later identical
+        # cumulative snap is idempotent (Spec #324 / #487).
+        return _seed_panel_usage_cursors(inc_list)
 
     by_id: dict[str, dict[str, Any]] = {str(a["id"]): dict(a) for a in prev_list}
     inc_ids = {str(a["id"]) for a in inc_list}

@@ -49,6 +49,14 @@ export type IdleSubagentHandle = {
   childRuntime?: import("../types.js").ToolRuntime;
   /** Spec #308: dispose Worker process stream on hard release. */
   disposeWorkerAudit?: () => Promise<void>;
+  /**
+   * Spec #487: child pi usage ledger + event subscription.
+   * Park retains it (cumulative warm resume). Hard release disposes it.
+   */
+  usageMeter?: {
+    snapshot: () => import("./llm-usage.js").LlmUsageSnapshot;
+    dispose: () => void;
+  };
 };
 
 export type IdleWorkerSnapshot = {
@@ -115,6 +123,11 @@ async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
   clearIdleTimer(handle);
   try {
     handle.clearAbort?.();
+  } catch {
+    /* ignore */
+  }
+  try {
+    handle.usageMeter?.dispose();
   } catch {
     /* ignore */
   }

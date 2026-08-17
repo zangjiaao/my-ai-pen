@@ -21,7 +21,9 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
-import { createBoundNode4Session } from "./run-node4-agent.js";
+import { createBoundNode4Session, type Node4AgentSession } from "./run-node4-agent.js";
+import { attachChildSessionUsage, type ChildSessionLike, type ChildUsageMeter } from "./child-session-usage.js";
+import type { LlmUsageSnapshot } from "./llm-usage.js";
 import {
   formatSubagentReturnContractPrompt,
   normalizeSubagentResult,
@@ -99,6 +101,18 @@ export type SubagentLlmSessionInput = {
    * When set, re-prompt this session; do not cold-create.
    */
   warmHandle?: IdleSubagentHandle;
+  /**
+   * Test inject: replace createBoundNode4Session (same idea as Hard Graph
+   * boundSessionFactory). Fake sessions must implement subscribe / prompt / dispose.
+   */
+  boundSessionFactory?: (options: {
+    config: ReturnType<typeof loadConfig>;
+    runtime: ToolRuntime;
+    pack: RolePack;
+    systemPrompt: string;
+    thinkingLevel?: string;
+    sessionId?: string;
+  }) => Promise<{ session: Node4AgentSession; segmentCounter?: { tools: number } }>;
 };
 
 export type SubagentLlmSessionOutput = {
@@ -179,6 +193,40 @@ function sessionTimeoutMs(): number {
   );
 }
 
+function publishChildUsage(
+  parent: ToolRuntime,
+  agentId: string,
+  meter: ChildUsageMeter | undefined,
+): LlmUsageSnapshot | undefined {
+  if (!meter) return undefined;
+  const snap = meter.snapshot();
+  try {
+    parent.lifecycle.panelAgents?.setChildUsage(agentId, snap);
+  } catch {
+    /* observability must not change package settlement */
+  }
+  return snap;
+}
+
+function attachOrReuseChildUsage(
+  session: ChildSessionLike,
+  parent: ToolRuntime,
+  agentId: string,
+  existing?: ChildUsageMeter,
+): ChildUsageMeter {
+  if (existing) return existing;
+  return attachChildSessionUsage({
+    session,
+    onRecorded: (snap) => {
+      try {
+        parent.lifecycle.panelAgents?.setChildUsage(agentId, snap);
+      } catch {
+        /* ignore */
+      }
+    },
+  });
+}
+
 type PromptRaceResult = {
   aborted: boolean;
   timedOut: boolean;
@@ -196,8 +244,11 @@ async function raceSessionPrompt(
     void Promise.resolve(session.abort?.()).catch(() => {});
   };
   if (abort) {
-    if (abort.aborted) onAbort();
-    else abort.addEventListener("abort", onAbort, { once: true });
+    if (abort.aborted) {
+      // Spec #487: cancel before dispatch — do not send a model request.
+      return { aborted: true, timedOut: false };
+    }
+    abort.addEventListener("abort", onAbort, { once: true });
   }
 
   const timeoutMs = sessionTimeoutMs();
@@ -396,6 +447,14 @@ async function runWarmPackage(args: {
   if (warm.childRuntime) {
     setWorkerAuditScope(warm.childRuntime, auditScope);
   }
+  const usageMeter = attachOrReuseChildUsage(
+    warm.session as unknown as ChildSessionLike,
+    input.parent,
+    agentId,
+    warm.usageMeter as ChildUsageMeter | undefined,
+  );
+  warm.usageMeter = usageMeter;
+
   await emitWorkerPackageStart({
     platform: input.parent.platform,
     task: auditTask,
@@ -421,8 +480,10 @@ async function runWarmPackage(args: {
         status: "failed",
         summary: llmErr,
       }).catch(() => {});
+      publishChildUsage(input.parent, agentId, usageMeter);
       try {
         warm.clearAbort?.();
+        usageMeter.dispose();
         await Promise.resolve(warm.disposeWorkerAudit?.());
         await Promise.resolve(warm.session.dispose?.());
       } catch {
@@ -472,11 +533,13 @@ async function runWarmPackage(args: {
   const shouldPark =
     Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
+  publishChildUsage(input.parent, agentId, usageMeter);
   if (shouldPark) {
     pool.park(warm);
   } else {
     try {
       warm.clearAbort?.();
+      usageMeter.dispose();
       await Promise.resolve(warm.disposeWorkerAudit?.());
       await Promise.resolve(warm.session.dispose?.());
     } catch {
@@ -647,17 +710,23 @@ async function runColdPackage(args: {
 
   const userPrompt = buildUserPrompt(assignment, sessionSeed.seeded, false);
 
-  const { session, segmentCounter } = await createBoundNode4Session({
+  const boundOpts = {
     config,
     runtime: childRuntime,
     pack,
     systemPrompt,
-    thinkingLevel: "low",
+    thinkingLevel: "low" as const,
     sessionId: subagentId,
-  });
+  };
+  const bound = input.boundSessionFactory
+    ? await input.boundSessionFactory(boundOpts)
+    : await createBoundNode4Session(boundOpts);
+  const session = bound.session;
+  const segmentCounter = bound.segmentCounter ?? { tools: 0 };
 
   // Spec #308: progressive thinking/text on Worker channel (not Main observability).
   const workerProcess = attachWorkerProcessStream({ session, runtime: childRuntime });
+  const usageMeter = attachOrReuseChildUsage(session, parent, agentId);
 
   await emitWorkerPackageStart({
     platform: parent.platform,
@@ -671,9 +740,7 @@ async function runColdPackage(args: {
 
   // Soft LLM failure (stopReason=error): fail hard — Main must not see silent empty success.
   if (!race.aborted) {
-    const llmErr = extractLlmTurnError(
-      (session as { messages?: unknown[] }).messages,
-    );
+    const llmErr = extractLlmTurnError(session.messages);
     if (llmErr) {
       await emitWorkerPackageDelivery({
         platform: parent.platform,
@@ -682,7 +749,9 @@ async function runColdPackage(args: {
         status: "failed",
         summary: llmErr,
       }).catch(() => {});
+      publishChildUsage(parent, agentId, usageMeter);
       try {
+        usageMeter.dispose();
         await workerProcess.dispose();
         await Promise.resolve((session as any).dispose?.());
       } catch {
@@ -730,6 +799,7 @@ async function runColdPackage(args: {
   const shouldPark =
     Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
+  publishChildUsage(parent, agentId, usageMeter);
   if (shouldPark && pool) {
     const handle: IdleSubagentHandle = {
       agentId,
@@ -744,10 +814,12 @@ async function runColdPackage(args: {
       lastUsedAt: Date.now(),
       childRuntime,
       disposeWorkerAudit: () => workerProcess.dispose(),
+      usageMeter,
     };
     pool.park(handle);
   } else {
     try {
+      usageMeter.dispose();
       await workerProcess.dispose();
       await Promise.resolve((session as any).dispose?.());
     } catch {
