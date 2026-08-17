@@ -1585,6 +1585,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "surface_upsert",
             # Spec #457: sidebar/top-bar title only — not a chat timeline event.
             "conversation_title_updated",
+            # Intel projects in Findings 线索 / asset 情报 — not a second chat list.
+            "intel_upsert",
         }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)

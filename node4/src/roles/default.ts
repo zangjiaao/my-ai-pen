@@ -54,6 +54,7 @@ const DEFAULT_TOOL_NAMES = [
   "platform_assemble_group",
   "platform_list_vulnerabilities",
   "platform_get_vulnerability",
+  "fact",
   "platform_update_finding_status",
   "platform_enrich_asset",
   "platform_batch_enrich_assets",

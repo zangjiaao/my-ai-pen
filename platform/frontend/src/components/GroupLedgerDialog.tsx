@@ -615,7 +615,7 @@ export default function GroupLedgerDialog({
 
           {tab === "intel" ? (
             <p className="text-sm leading-relaxed text-ink-muted">
-              情报块还没接入。组 / 主机 / 端口的档案位已经留好，不会用空话填充。
+              组不挂线索（v1）。主机 / 端口档案里可以记笔记本。
             </p>
           ) : null}
         </div>

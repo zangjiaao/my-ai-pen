@@ -102,6 +102,17 @@ export type CaseContext = {
   next_work?: CaseNextWork;
   /** Thin Scope Host memory: counts + samples + surface sketch. */
   scope_intel?: CaseScopeIntel;
+  /** Living notebook clues (id + summary + hang). Distinct from scope_intel priors. */
+  intel_summary?: CaseIntelLine[];
+};
+
+export type CaseIntelLine = {
+  id?: string;
+  summary?: string;
+  kind?: string;
+  asset_id?: string;
+  port?: string;
+  is_new?: boolean;
 };
 
 const MAX_THREAD_LINES = 50;
@@ -169,13 +180,15 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     o.scope_intel && typeof o.scope_intel === "object" && !Array.isArray(o.scope_intel)
       ? (o.scope_intel as CaseScopeIntel)
       : undefined;
+  const intel_summary = parseIntelSummary(o.intel_summary);
   if (
     !thread.length &&
     !findings.length &&
     !hints.length &&
     !snippets.length &&
     !next_work &&
-    !scope_intel
+    !scope_intel &&
+    !intel_summary?.length
   ) {
     if (!o.note && !o.conversation_id) return undefined;
   }
@@ -189,7 +202,26 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     artifact_hints: hints,
     next_work,
     scope_intel,
+    intel_summary,
   };
+}
+
+function parseIntelSummary(raw: unknown): CaseIntelLine[] | undefined {
+  if (!Array.isArray(raw) || !raw.length) return undefined;
+  const out: CaseIntelLine[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const r = row as Record<string, unknown>;
+    const line: CaseIntelLine = {};
+    if (r.id != null) line.id = String(r.id);
+    if (r.summary != null) line.summary = String(r.summary);
+    if (r.kind != null) line.kind = String(r.kind);
+    if (r.asset_id != null) line.asset_id = String(r.asset_id);
+    if (r.port != null) line.port = String(r.port);
+    if (r.is_new != null) line.is_new = Boolean(r.is_new);
+    if (line.id || line.summary) out.push(line);
+  }
+  return out.length ? out : undefined;
 }
 
 /** Render case work-group block for LLM (budgeted). */
@@ -309,6 +341,23 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       if (f.proof_excerpt) {
         lines.push(`  proof: ${String(f.proof_excerpt).replace(/\s+/g, " ").slice(0, 280)}`);
       }
+    }
+  }
+
+  const clues = ctx.intel_summary || [];
+  if (clues.length) {
+    lines.push(
+      "",
+      "### Living notebook (intel_summary)",
+      "Operational clues on Scope Hosts/Services — not Findings. " +
+        "Full body via platform_get_intel(id). Soft-forgotten / 遗忘区 are omitted.",
+    );
+    for (const c of clues) {
+      const hang = c.port ? `${c.asset_id || "?"}:${c.port}` : String(c.asset_id || "");
+      const kind = c.kind ? ` kind=${c.kind}` : "";
+      const hangBit = hang ? ` hang=${hang}` : "";
+      const id = c.id ? c.id : "?";
+      lines.push(`- ${id}${kind}${hangBit} — ${c.summary || "(no summary)"}`);
     }
   }
 

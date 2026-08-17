@@ -6,11 +6,16 @@ from app.services.case_context import (
     build_findings_summary,
     build_scope_intel_card,
     build_thread_from_messages,
+    case_intel_port_scope,
+    collapse_prior_index,
     excerpt_from_properties,
     evidence_role,
     extract_hosts_from_task,
+    extract_scope_ports_from_task,
     path_or_url_from_properties,
+    prior_index_module_key,
 )
+from app.services.owner_intel import intel_matches_case_scope
 
 
 def test_thread_keeps_user_and_agent_text_skips_noise_status():
@@ -221,6 +226,76 @@ def test_extract_hosts_from_task_target_and_scope():
     assert not any("3000" in h for h in hosts)
 
 
+def test_extract_scope_ports_named_service_not_sibling():
+    ports = extract_scope_ports_from_task(
+        {
+            "target": {"type": "url", "value": "http://host.docker.internal:3000"},
+            "scope": {"allow": ["http://host.docker.internal:3000"]},
+        }
+    )
+    assert ports["host.docker.internal"] == ["3000"]
+
+
+def test_extract_scope_ports_host_only_has_no_named_ports():
+    ports = extract_scope_ports_from_task(
+        {
+            "target": {"type": "url", "value": "http://host.docker.internal"},
+            "scope": {"allow": ["http://host.docker.internal"]},
+        }
+    )
+    assert ports["host.docker.internal"] == []
+
+
+def test_extract_scope_ports_structured_port_field():
+    ports = extract_scope_ports_from_task(
+        {"target": {"type": "host", "value": "lab.local", "port": "8443"}}
+    )
+    assert ports["lab.local"] == ["8443"]
+
+
+def test_case_intel_scope_3000_keeps_host_level_drops_8080():
+    task = {
+        "target": {"type": "url", "value": "http://host.docker.internal:3000"},
+        "scope": {"allow": ["http://host.docker.internal:3000"]},
+    }
+    scope = case_intel_port_scope([("a1", "host.docker.internal")], task)
+    assert scope["a1"] == {"3000"}
+    assert intel_matches_case_scope(asset_id="a1", port=None, port_scope=scope) is True
+    assert intel_matches_case_scope(asset_id="a1", port="", port_scope=scope) is True
+    assert intel_matches_case_scope(asset_id="a1", port="3000", port_scope=scope) is True
+    assert intel_matches_case_scope(asset_id="a1", port="8080", port_scope=scope) is False
+
+
+def test_case_intel_scope_host_only_includes_all_services():
+    task = {
+        "target": {"type": "url", "value": "http://host.docker.internal"},
+        "scope": {"allow": ["http://host.docker.internal"]},
+    }
+    scope = case_intel_port_scope([("a1", "host.docker.internal")], task)
+    assert scope["a1"] is None
+    assert intel_matches_case_scope(asset_id="a1", port="8080", port_scope=scope) is True
+
+
+def test_case_intel_scope_per_host_ports():
+    task = {
+        "scope": {
+            "allow": [
+                "http://alpha.lab:3000",
+                "http://beta.lab:8080",
+            ]
+        }
+    }
+    scope = case_intel_port_scope(
+        [("a1", "alpha.lab"), ("b1", "beta.lab")],
+        task,
+    )
+    assert scope["a1"] == {"3000"}
+    assert scope["b1"] == {"8080"}
+    assert intel_matches_case_scope(asset_id="a1", port="8080", port_scope=scope) is False
+    assert intel_matches_case_scope(asset_id="b1", port="8080", port_scope=scope) is True
+    assert intel_matches_case_scope(asset_id="a1", port=None, port_scope=scope) is True
+
+
 def test_scope_intel_card_is_thin_and_disciplined():
     card = build_scope_intel_card(
         hosts=[
@@ -246,8 +321,85 @@ def test_scope_intel_card_is_thin_and_disciplined():
     assert len(card["high_priority_sample"]) == 1
     assert "known_paths" in card["surface_sketch"]
     assert "expand" in card["discipline"].lower() or "Primary work" in card["discipline"]
+    assert "index" in card["discipline"].lower()
+    assert "interleaved" not in card["discipline"].lower()
     # No PoC field in sample
     assert "poc" not in card["high_priority_sample"][0]
+
+
+def test_prior_index_module_key_folds_dvwa_paths():
+    assert prior_index_module_key("/vulnerabilities/exec/") == "/vulnerabilities/exec"
+    assert prior_index_module_key("/hackable/uploads/cmd_shell.php") == "/hackable/uploads"
+    assert prior_index_module_key("http://host.docker.internal:8080/vulnerabilities/sqli/?id=1") == "/vulnerabilities/sqli"
+
+
+def test_collapse_prior_index_folds_rediscoveries():
+    rows = [
+        {
+            "id": "a",
+            "severity": "critical",
+            "title": "DVWA OS命令注入漏洞（RCE）",
+            "location": "/vulnerabilities/exec/",
+            "vuln_type": "command_injection",
+            "port": "8080",
+            "asset_id": "h1",
+            "summary": "low ;id",
+        },
+        {
+            "id": "b",
+            "severity": "critical",
+            "title": "DVWA OS命令注入漏洞（RCE）",
+            "location": "/vulnerabilities/exec",
+            "vuln_type": "command_injection",
+            "port": "8080",
+            "asset_id": "h1",
+            "summary": "high pipe",
+        },
+        {
+            "id": "c",
+            "severity": "high",
+            "title": "SQL注入",
+            "location": "/vulnerabilities/sqli/",
+            "vuln_type": "sqli",
+            "port": "8080",
+            "asset_id": "h1",
+            "summary": "union",
+        },
+        {
+            "id": "d",
+            "severity": "critical",
+            "title": "上传目录Webshell",
+            "location": "/hackable/uploads/cmd_shell.php",
+            "port": "8080",
+            "asset_id": "h1",
+            "summary": "unauth rce",
+        },
+        {
+            "id": "e",
+            "severity": "critical",
+            "title": "已上传的Webshell文件暴露",
+            "location": "/hackable/uploads/shell.php",
+            "vuln_type": "rce",
+            "port": "8080",
+            "asset_id": "h1",
+            "summary": "shell.php",
+        },
+    ]
+    out = collapse_prior_index(rows, limit=24)
+    assert len(out) == 3
+    exec_row = next(r for r in out if r["location"] == "/vulnerabilities/exec")
+    assert exec_row["discoveries"] == 2
+    assert exec_row["id"] == "a"
+    assert next(r for r in out if r["location"] == "/vulnerabilities/sqli")["discoveries"] == 1
+    assert next(r for r in out if r["location"] == "/hackable/uploads")["discoveries"] == 2
+
+
+def test_vuln_scope_sql_empty_does_not_match_all():
+    from app.services.case_context import vuln_scope_sql_clause
+
+    clause = vuln_scope_sql_clause({})
+    text = str(clause.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "false" in text
 
 
 def test_payload_includes_scope_intel():
@@ -263,6 +415,21 @@ def test_payload_includes_scope_intel():
     assert payload.get("scope_intel")
     assert payload["scope_intel"]["hosts"][0]["address"] == "lab.local"
     assert "scope_intel" in payload["note"]
+
+
+def test_payload_includes_intel_summary_distinct_from_scope_intel():
+    payload = build_case_context_payload(
+        messages=[],
+        findings=[],
+        conversation_id="conv-x",
+        intel_summary=[
+            {"id": "i1", "summary": "admin:admin invalid", "kind": "credential_status", "asset_id": "a1"},
+        ],
+    )
+    assert payload["intel_summary"][0]["id"] == "i1"
+    assert "intel_summary" in payload["note"]
+    assert "sibling ports" in payload["note"]
+    assert "scope_intel" not in payload
 
 
 def test_excerpt_and_role_helpers():

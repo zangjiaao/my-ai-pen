@@ -23,6 +23,8 @@ import {
   type SurfaceLedger,
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
+import { IntelList } from "./IntelList";
+import type { IntelRow } from "../lib/intelView";
 import { GraphAwareTodoList } from "./TasksPlanList";
 import TasksMapHeader from "./TasksMapHeader";
 import ConfirmDialog from "./ConfirmDialog";
@@ -135,6 +137,11 @@ interface Props {
   /** Spec #368 / #375: Case surface_ledger (snapshot + live upserts) — sole Surface inventory SoT. */
   surfaceLedger?: SurfaceLedger | null;
   findings?: Array<Record<string, unknown>>;
+  /** Living notebook clues for Case Scope ∩ Host/Service. */
+  intel?: IntelRow[];
+  intelForgotten?: IntelRow[];
+  intelSealed?: IntelRow[];
+  currentTaskId?: string | null;
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
   taskContext?: Record<string, unknown>;
@@ -204,6 +211,10 @@ export default function RightPanel({
   trafficExchanges = [],
   surfaceLedger = null,
   findings = [],
+  intel = [],
+  intelForgotten = [],
+  intelSealed = [],
+  currentTaskId = null,
   assets = [],
   taskContext,
   taskMapRevisions = [],
@@ -555,55 +566,67 @@ export default function RightPanel({
           )
         )}
         {tab === "findings" && (
-          findings.length === 0 ? (
-            <p className="text-sm text-ink-muted">No findings yet</p>
-          ) : (
-            <div className="space-y-4" title={findingsTabTitle}>
-              {findingGroups.map((group) =>
-                group.items.length === 0 ? null : (
-                  <section key={group.id} className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-medium text-ink-muted">
-                        {group.label} ({group.items.length})
-                      </p>
-                      <span className="font-mono text-[10px] text-ink-muted">{group.hint}</span>
-                    </div>
-                    {group.items.map((finding, index) => (
-                      <FindingCard
-                        key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
-                        caseStartedAt={caseRun?.started_at || strixRun?.start_time}
-                        finding={{
-                          ...finding,
-                          // Keep group assignment exclusive (Vuln / Key / Flag).
-                          finding_kind: group.id === "auth" ? "auth" : group.id,
-                          kind: group.id === "auth" ? "auth" : group.id,
-                          category: group.id === "auth" ? "auth" : group.id,
-                        }}
-                        onOpen={(opened) => {
-                          const resolved =
-                            resolveFindingSurfaceKey(
-                              finding,
-                              surfaceKeyList,
-                              new Set(surfaceKeyList.map((p) => p.toLowerCase())),
-                              surfaceEntries,
-                            ) || String((finding as { __surface_path?: string }).__surface_path || "");
-                          onOpenVulnerability?.({
-                            ...opened,
-                            ...(resolved
-                              ? {
-                                  __surface_path: resolved,
-                                  __surface_display: surfaceKeyToDisplay(resolved),
-                                }
-                              : {}),
-                          } as Partial<SecurityVulnerability>);
-                        }}
-                      />
-                    ))}
-                  </section>
-                ),
-              )}
-            </div>
-          )
+          <div className="space-y-6">
+            {findings.length === 0 ? (
+              <p className="text-sm text-ink-muted">No findings yet</p>
+            ) : (
+              <div className="space-y-4" title={findingsTabTitle}>
+                {findingGroups.map((group) =>
+                  group.items.length === 0 ? null : (
+                    <section key={group.id} className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-ink-muted">
+                          {group.label} ({group.items.length})
+                        </p>
+                        <span className="font-mono text-[10px] text-ink-muted">{group.hint}</span>
+                      </div>
+                      {group.items.map((finding, index) => (
+                        <FindingCard
+                          key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
+                          caseStartedAt={caseRun?.started_at || strixRun?.start_time}
+                          finding={{
+                            ...finding,
+                            // Keep group assignment exclusive (Vuln / Key / Flag).
+                            finding_kind: group.id === "auth" ? "auth" : group.id,
+                            kind: group.id === "auth" ? "auth" : group.id,
+                            category: group.id === "auth" ? "auth" : group.id,
+                          }}
+                          onOpen={(opened) => {
+                            const resolved =
+                              resolveFindingSurfaceKey(
+                                finding,
+                                surfaceKeyList,
+                                new Set(surfaceKeyList.map((p) => p.toLowerCase())),
+                                surfaceEntries,
+                              ) || String((finding as { __surface_path?: string }).__surface_path || "");
+                            onOpenVulnerability?.({
+                              ...opened,
+                              ...(resolved
+                                ? {
+                                    __surface_path: resolved,
+                                    __surface_display: surfaceKeyToDisplay(resolved),
+                                  }
+                                : {}),
+                            } as Partial<SecurityVulnerability>);
+                          }}
+                        />
+                      ))}
+                    </section>
+                  ),
+                )}
+              </div>
+            )}
+            <section data-testid="intel-clues-section" className="space-y-2 border-t border-hairline-soft pt-4">
+              <p className="text-xs font-medium text-ink-muted">线索</p>
+              <IntelList
+                rows={[...intel, ...intelForgotten, ...intelSealed]}
+                currentTaskId={currentTaskId}
+                conversationId={conversationId}
+                emptyCopy="还没有线索。Agent 笔记本会把值得记住的东西记在这里。"
+                showHang
+              />
+            </section>
+          </div>
         )}
         {tab === "traffic" && (
           <TrafficAuditList

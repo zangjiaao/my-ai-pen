@@ -24,6 +24,7 @@ export const PLATFORM_CITIZEN_TOOL_NAMES = [
   "platform_assemble_group",
   "platform_list_vulnerabilities",
   "platform_get_vulnerability",
+  "fact",
   "platform_conversation_snapshot",
   "platform_set_conversation_title",
   "platform_list_experts",
@@ -37,11 +38,11 @@ export const PLATFORM_CITIZEN_TOOL_NAMES = [
 export const PLATFORM_CITIZEN_MISSION_LINES: readonly string[] = [
   `${PLATFORM_CITIZEN_MARKER} Platform owner ledger is shared product truth (user 资产管理 + Agent tools). Chat/todo is not.`,
   "Inventory questions (能看到哪些主机 / 有没有某台机 / tags·ports·notes): **platform_list_assets first** (optional q=), then answer from tool data — never claim inventory is invisible.",
-  "Read inventory/priors: platform_list_assets / platform_get_asset / platform_list_vulnerabilities / platform_get_vulnerability / platform_conversation_snapshot / platform_list_experts.",
-  "Open priors on this Scope host = **interleaved re-verify** (not a finish-first checklist): high/critical sample may appear in case_context.scope_intel; deep-dive with **platform_list_vulnerabilities(asset_id=…)** / get_asset only when useful (never treat unfiltered top-N as that host's full set). finding(confirm) needs **fresh** tool proof + **path-bearing location**. Same path/module merges (再次发现). Primary work remains untested surface + NEW ledger identities.",
+  "Ledger Q&A only (user asked about the books): platform_list_assets / platform_get_asset / platform_list_vulnerabilities / platform_get_vulnerability / platform_conversation_snapshot / platform_list_experts. Pentest kickoff does not list the host vuln ledger.",
+  "Notebook is **fact** (not a second tool): write-as-you-go. Auth/creds/lessons the next Session needs → fact(upsert) on an existing Host (asset_id or the single Scope Host). That is 情报 — **not** Finding, **not** Evidence (proof stays on the booked vuln). Living intel_summary is current working memory (this-Case writes + login kinds first, then frequently opened clues; windowed). Recorded valid creds are the login path (try them first; do not recover via defaults / hash dump / booked RCE). Summary is enough to act; fact(get) for the body. **Correct a living clue with upsert on that id**. fact(forget, reason) hard-drops. This-task keys stay under facts/. Do not invent a Host. Before wrap/next_steps: persist only clues worth keeping (skip if none). Compact persist is a separate pass.",
+  "Open priors on this Scope host = an **index** (titles/summaries in case_context.scope_intel), not a start-of-turn work queue. Do not host-wide dump platform_list_vulnerabilities at kickoff. When you approach a path/module, look up that row (asset_id + port/q or platform_get_vulnerability). finding(confirm) needs **fresh** tool proof + **path-bearing location**. Same path/module merges (再次发现). Primary work remains untested surface + NEW ledger identities.",
   "Honest counts: 重新验证 N = successful confirm this session only; 新发现 = new ledger identity only. Reconcile with platform_list_vulnerabilities before closing claims — never invent rows.",
   "Cross-pack handoff: platform_list_experts → one request_user_decision(kind=handoff, …) and wait. Never silent seat switch; never invent experts.",
-  "Session title: if still default 新会话/New session and the user stated a real task, call platform_set_conversation_title(title=short, only_if_default=true) once (silent). User-asked rename: only_if_default=false. Never overwrite a non-default title unless asked.",
   "Hosts: identity=asset **id** (same IP OK across units as different Hosts). create_asset(group_name=): merge only if address already **in that Group**, else new Host. Ports: batch_enrich add **or** remove_ports. User says 新资产/改回端口 → short path: create + enrich(remove_ports); do not re-debate tool lists. assemble=装入组 only. Never invent Hosts from recon alone.",
   "Stay in authorized Scope; book with full path/URL. Out-of-scope hosts are attack-surface candidates — do not auto-dump scan hits into the ledger without user request.",
   // Spec #312/#313 / #398: short hard rules only — schema detail lives on the tool/ChoiceCard.

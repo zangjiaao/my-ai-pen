@@ -289,6 +289,8 @@ async def list_vulns(
     status: str | None = Query(default=None),
     asset_id: str | None = Query(default=None, description="Filter by one Host asset id"),
     asset_ids: list[str] | None = Query(default=None, description="Filter by multiple Host asset ids"),
+    port: str | None = Query(default=None, description="Filter by Service port"),
+    q: str | None = Query(default=None, description="Title / location / description needle"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -307,6 +309,8 @@ async def list_vulns(
         offset=offset,
         asset_id=asset_id,
         asset_ids=asset_ids,
+        port=port,
+        q=q,
     )
     return {
         "ok": True,
@@ -504,3 +508,133 @@ async def set_conversation_title_node(
         "before": before,
         "conversation_id": str(conv.id),
     }
+
+
+def _task_id_from_header(x_task_id: str | None) -> str | None:
+    """Harness-stamped Task id — never taken from Agent tool args."""
+    raw = str(x_task_id or "").strip()
+    return raw or None
+
+
+@router.post("/intel")
+async def record_intel_node(
+    body: dict | None = None,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
+):
+    """Create or update a notebook row. Agent supplies hang/kind/summary/body only."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    payload = body if isinstance(body, dict) else {}
+    from app.services import owner_intel as intel
+
+    try:
+        item = await intel.record_intel(
+            db,
+            user_id=user_id,
+            payload=payload,
+            source="agent",
+            created_task_id=_task_id_from_header(x_task_id),
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True, "intel": item}
+
+
+@router.get("/intel")
+async def list_intel_node(
+    conversation_id: str | None = Query(default=None),
+    asset_id: str | None = Query(default=None),
+    port: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
+):
+    """List living intel only (Agent v1). Sealed / soft-forgotten omitted."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    from app.services import owner_intel as intel
+
+    items, total = await intel.list_intel(
+        db,
+        user_id=user_id,
+        asset_id=asset_id,
+        port=port,
+        audience="agent",
+        current_task_id=str(x_task_id or "").strip() or None,
+        limit=limit,
+        offset=offset,
+        include_body=False,
+    )
+    return {
+        "ok": True,
+        "intel": items,
+        "count": len(items),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(items) < total,
+    }
+
+
+@router.get("/intel/{intel_id}")
+async def get_intel_node(
+    intel_id: str,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
+):
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    from app.services import owner_intel as intel
+
+    try:
+        item = await intel.get_intel(
+            db,
+            intel_id,
+            user_id=user_id,
+            audience="agent",
+            current_task_id=str(x_task_id or "").strip() or None,
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True, "intel": item}
+
+
+@router.post("/intel/{intel_id}/forget")
+async def forget_intel_node(
+    intel_id: str,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
+):
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    from app.services import owner_intel as intel
+
+    try:
+        item = await intel.forget_intel(
+            db,
+            intel_id,
+            user_id=user_id,
+            current_task_id=str(x_task_id or "").strip() or None,
+        )
+    except intel.IntelError as e:
+        raise HTTPException(e.status_code, e.message) from e
+    return {"ok": True, "intel": item}

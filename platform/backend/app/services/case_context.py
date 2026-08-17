@@ -42,10 +42,13 @@ DEFAULT_TOTAL_CHARS = 14000
 
 # Thin Scope intel (cross-Case Host memory) — caps keep injection small.
 SCOPE_INTEL_MAX_HOSTS = 5
-SCOPE_INTEL_HIGH_SAMPLE = 8
+SCOPE_INTEL_PRIOR_INDEX = 24
+SCOPE_INTEL_PRIOR_FETCH = 80
+SCOPE_INTEL_HIGH_SAMPLE = SCOPE_INTEL_PRIOR_INDEX  # alias — catalog, not high-only
 SCOPE_INTEL_PATH_SAMPLE = 16
 SCOPE_INTEL_URL_SAMPLE = 12
 SCOPE_INTEL_SERVICE_SAMPLE = 8
+SCOPE_INTEL_SUMMARY_CHARS = 140
 
 # Meta tools that should not dominate collab context (unless finding-linked).
 # Note: source_tool "finding" is *book-time product proof* (emitCaseEvidence) — not meta noise.
@@ -81,6 +84,60 @@ def _clip_block(text: str, limit: int = DEFAULT_EXCERPT_CHARS) -> str:
     if len(t) <= limit:
         return t
     return t[: max(0, limit - 20)] + "…(truncated)"
+
+
+_SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+def prior_index_module_key(location: object) -> str:
+    """Module-level path for the prior catalog (display fold, not ledger identity)."""
+    from app.services.finding_dedupe import location_resource_key
+
+    path = location_resource_key(location)
+    if not path:
+        return ""
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return path
+    if parts[0] in {"vulnerabilities", "hackable", "dvwa", "api", "rest", "external"}:
+        return "/" + "/".join(parts[:2] if len(parts) >= 2 else parts[:1])
+    return "/" + parts[0]
+
+
+def collapse_prior_index(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = SCOPE_INTEL_PRIOR_INDEX,
+) -> list[dict[str, Any]]:
+    """Fold duplicate rediscoveries into one module row (path + class).
+
+    First row in each bucket wins as the representative (caller should pass
+    severity-then-recency order). Not a Finding identity merge.
+    """
+    buckets: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        loc = str(raw.get("location") or "")
+        mod = prior_index_module_key(loc) or loc.strip() or str(raw.get("title") or "")[:48]
+        key = f"{raw.get('asset_id') or ''}|{raw.get('port') or ''}|{mod}"
+        if key not in buckets:
+            item = {k: v for k, v in raw.items() if v is not None and v != ""}
+            item["location"] = mod or loc
+            item["discoveries"] = 1
+            buckets[key] = item
+            order.append(key)
+            continue
+        buckets[key]["discoveries"] = int(buckets[key].get("discoveries") or 1) + 1
+    out = [buckets[k] for k in order]
+    out.sort(
+        key=lambda r: (
+            _SEV_RANK.get(str(r.get("severity") or "").lower(), 5),
+            -int(r.get("discoveries") or 1),
+        )
+    )
+    return out[: max(1, int(limit))]
 
 
 def _speaker_from_message(role: str, content: dict, msg_type: str) -> str:
@@ -507,6 +564,130 @@ def extract_hosts_from_task(task: dict | None) -> list[str]:
     return hosts
 
 
+def _iter_task_scope_items(task: dict | None):
+    """Structured target / scope entries only — no free-text scan."""
+    if not isinstance(task, dict):
+        return
+    yield task.get("target")
+    scope = task.get("scope")
+    if isinstance(scope, dict):
+        for key in ("allow", "hosts", "targets"):
+            arr = scope.get(key)
+            if isinstance(arr, list):
+                yield from arr
+    elif isinstance(scope, list):
+        yield from scope
+    for key in ("url", "host", "address", "target_url"):
+        if task.get(key) is not None:
+            yield task.get(key)
+
+
+def task_scope_blobs(task: dict | None) -> list[str]:
+    blobs: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: object) -> None:
+        if raw is None:
+            return
+        if isinstance(raw, dict):
+            for k in ("value", "url", "host", "address"):
+                if raw.get(k) is not None:
+                    _add(raw.get(k))
+            return
+        s = str(raw).strip()
+        if s and s not in seen:
+            seen.add(s)
+            blobs.append(s)
+
+    for item in _iter_task_scope_items(task):
+        _add(item)
+    return blobs
+
+
+def extract_scope_ports_from_task(task: dict | None) -> dict[str, list[str]]:
+    """Host → explicit Scope ports from structured target/scope (no implicit 80/443)."""
+    from app.services.asset_ledger import extract_ports_for_host, normalize_address, normalize_port
+
+    hosts = extract_hosts_from_task(task)
+    blobs = task_scope_blobs(task)
+    out: dict[str, list[str]] = {h: [] for h in hosts}
+
+    def _add_port(host: str, port: str | None) -> None:
+        if not host or not port:
+            return
+        bucket = out.setdefault(host, [])
+        if port not in bucket:
+            bucket.append(port)
+
+    for host in hosts:
+        for port in extract_ports_for_host(host, *blobs):
+            _add_port(host, port)
+
+    for item in _iter_task_scope_items(task):
+        if not isinstance(item, dict):
+            continue
+        host = normalize_address(
+            item.get("value") or item.get("url") or item.get("host") or item.get("address")
+        )
+        _add_port(host, normalize_port(item.get("port")))
+    return out
+
+
+def case_intel_port_scope(
+    assets: list[tuple[str, str]],
+    task: dict | None,
+) -> dict[str, set[str] | None]:
+    """asset_id → named Scope ports, or None when the Host is in Scope with no port.
+
+    None = whole Host (include sibling Service intel).
+    set = those Services plus Host-level (empty port) only.
+    """
+    from app.services.asset_ledger import normalize_address
+
+    host_ports = extract_scope_ports_from_task(task)
+    out: dict[str, set[str] | None] = {}
+    for aid, address in assets:
+        key = str(aid or "").strip()
+        if not key:
+            continue
+        addr = normalize_address(address) or str(address or "").strip()
+        named = list(host_ports.get(addr) or [])
+        out[key] = set(named) if named else None
+    return out
+
+
+def vuln_scope_sql_clause(port_scope: dict[str, set[str] | None]):
+    """Vulnerability hang filter: same law as Intel (Host-level + Scope Service ports)."""
+    import uuid as uuid_mod
+
+    from sqlalchemy import and_, false, or_
+
+    from app.models.vulnerability import Vulnerability
+    from app.services.owner_intel import intel_port_key
+
+    parts: list[Any] = []
+    host_level = or_(Vulnerability.port.is_(None), Vulnerability.port == "")
+    for aid_raw, ports in (port_scope or {}).items():
+        try:
+            aid = uuid_mod.UUID(str(aid_raw))
+        except ValueError:
+            continue
+        if ports is None:
+            parts.append(Vulnerability.asset_id == aid)
+            continue
+        allowed = sorted({p for p in (intel_port_key(x) for x in ports) if p})
+        if allowed:
+            parts.append(
+                and_(
+                    Vulnerability.asset_id == aid,
+                    or_(host_level, Vulnerability.port.in_(allowed)),
+                )
+            )
+        else:
+            parts.append(and_(Vulnerability.asset_id == aid, host_level))
+    return or_(*parts) if parts else false()
+
+
 def build_scope_intel_card(
     *,
     hosts: list[dict[str, Any]],
@@ -524,10 +705,11 @@ def build_scope_intel_card(
         "discipline": (
             "Scope Hosts already on the owner ledger — thin memory only. "
             "Primary work remains attack-surface expansion and NEW ledger identities. "
-            "Open priors are an interleaved re-verify stream (fresh proof → finding(confirm)), "
-            "not a checklist to finish first. Do not dump full prior lists into reasoning. "
-            "Deep-dive selectively: platform_get_asset / "
-            "platform_list_vulnerabilities(asset_id=…) / platform_get_vulnerability. "
+            "Open priors are an index (title + one-line summary), not a start-of-turn work queue. "
+            "Do not host-wide dump platform_list_vulnerabilities at kickoff. "
+            "When you approach a path/module, look up that row "
+            "(asset_id + port/q, or platform_get_vulnerability). "
+            "Same path/module merges (再次发现). Ledger presence ≠ skip and ≠ must-finish. "
             "Honest counts: 重新验证 N = confirms this session only."
         ),
     }
@@ -560,6 +742,7 @@ def build_case_context_payload(
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
     workset: dict | None = None,
     scope_intel: dict | None = None,
+    intel_summary: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
@@ -622,10 +805,13 @@ def build_case_context_payload(
         "note": (
             "Same case work-group. findings_summary = this Case's booked findings (board). "
             "scope_intel (when present) = thin owner-ledger memory for Scope Hosts "
-            "(counts, high/crit samples, surface sketch) — not a full prior dump; "
-            "deep-dive with platform.* tools when useful. "
+            "(counts + title/summary index on Scope ports, surface sketch) — not a work queue; "
+            "intel_summary = living notebook clues on Scope Hosts (host-level) and "
+            "matching Scope Service ports (id+summary+hang; sibling ports on the same "
+            "Host are omitted; not Findings; summary is enough to act — recorded valid "
+            "creds are the login path; get body via fact(op=get, id=…)). "
             "Primary work: expand untested surface and NEW ledger identities. "
-            "Open priors: interleaved re-verify with fresh proof → finding(confirm) "
+            "Open priors: index only — look up when approaching that surface "
             "(rediscovery merge; same asset+path/module ≠ second row). "
             "Honest counts: 重新验证 N = confirms this session only; 新发现 only for new "
             "identities. Never claim 全部重新验证 from list length. "
@@ -634,6 +820,10 @@ def build_case_context_payload(
     }
     if isinstance(scope_intel, dict) and scope_intel:
         payload["scope_intel"] = scope_intel
+    if isinstance(intel_summary, list) and intel_summary:
+        from app.services.owner_intel import inject_window_size
+
+        payload["intel_summary"] = intel_summary[: inject_window_size()]
     # Spec #311: thin Workset brief at assign boundary (not every mid-turn).
     if isinstance(workset, dict) and (workset.get("items") or workset.get("goal")):
         try:
@@ -788,20 +978,27 @@ async def _load_scope_intel(
             })
 
     asset_ids = [a.id for a in assets]
+    port_scope = case_intel_port_scope(
+        [(str(a.id), str(a.address or "")) for a in assets],
+        task,
+    )
+    scope_clause = vuln_scope_sql_clause(port_scope) if port_scope else None
     prior_counts: dict[str, Any] = {}
     high_sample: list[dict[str, Any]] = []
     surface_paths: list[str] = []
     if asset_ids and uid is not None:
         try:
+            from sqlalchemy import case as sql_case
+
+            owner_ok = or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None))
+            base = [Vulnerability.asset_id.in_(asset_ids), owner_ok]
+            if scope_clause is not None:
+                base.append(scope_clause)
+
             total = int(
                 (
                     await db.execute(
-                        select(func.count())
-                        .select_from(Vulnerability)
-                        .where(
-                            Vulnerability.asset_id.in_(asset_ids),
-                            or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
-                        )
+                        select(func.count()).select_from(Vulnerability).where(*base)
                     )
                 ).scalar_one()
                 or 0
@@ -810,10 +1007,7 @@ async def _load_scope_intel(
             sev_rows = (
                 await db.execute(
                     select(Vulnerability.severity, func.count())
-                    .where(
-                        Vulnerability.asset_id.in_(asset_ids),
-                        or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
-                    )
+                    .where(*base)
                     .group_by(Vulnerability.severity)
                 )
             ).all()
@@ -826,8 +1020,7 @@ async def _load_scope_intel(
                         select(func.count())
                         .select_from(Vulnerability)
                         .where(
-                            Vulnerability.asset_id.in_(asset_ids),
-                            or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                            *base,
                             func.lower(func.coalesce(Vulnerability.status, "")).in_(
                                 [
                                     "open",
@@ -849,21 +1042,24 @@ async def _load_scope_intel(
                 "by_severity": by_sev,
             }
 
-            # High/crit sample refs only (no PoC)
+            # Title + one-line summary index on Scope ports (no PoC). Not a work queue.
+            sev_rank = sql_case(
+                (func.lower(func.coalesce(Vulnerability.severity, "")) == "critical", 0),
+                (func.lower(func.coalesce(Vulnerability.severity, "")) == "high", 1),
+                (func.lower(func.coalesce(Vulnerability.severity, "")) == "medium", 2),
+                (func.lower(func.coalesce(Vulnerability.severity, "")) == "low", 3),
+                else_=4,
+            )
             high_q = (
                 select(Vulnerability)
-                .where(
-                    Vulnerability.asset_id.in_(asset_ids),
-                    or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
-                    func.lower(func.coalesce(Vulnerability.severity, "")).in_(
-                        ["critical", "high"]
-                    ),
-                )
-                .order_by(Vulnerability.updated_at.desc())
-                .limit(SCOPE_INTEL_HIGH_SAMPLE)
+                .where(*base)
+                .order_by(sev_rank, Vulnerability.updated_at.desc())
+                .limit(SCOPE_INTEL_PRIOR_FETCH)
             )
+            fetched: list[dict[str, Any]] = []
             for v in (await db.execute(high_q)).scalars().all():
-                high_sample.append({
+                desc = " ".join(str(getattr(v, "description", None) or "").split())
+                fetched.append({
                     "id": str(v.id),
                     "severity": _normalize_finding_severity(v.severity) or str(v.severity or ""),
                     "title": _clip(str(v.title or "Untitled"), 120),
@@ -875,16 +1071,19 @@ async def _load_scope_intel(
                         ),
                         120,
                     ),
+                    "port": str(v.port) if getattr(v, "port", None) else None,
                     "status": str(v.status or "")[:32],
                     "asset_id": str(v.asset_id) if v.asset_id else None,
+                    "vuln_type": getattr(v, "vuln_type", None),
+                    "summary": _clip(desc, SCOPE_INTEL_SUMMARY_CHARS) if desc else None,
                 })
+            high_sample = collapse_prior_index(fetched, limit=SCOPE_INTEL_PRIOR_INDEX)
 
             # Distinct known paths from prior findings (surface sketch)
             path_q = (
                 select(Vulnerability.location_key)
                 .where(
-                    Vulnerability.asset_id.in_(asset_ids),
-                    or_(Vulnerability.user_id == uid, Vulnerability.user_id.is_(None)),
+                    *base,
                     Vulnerability.location_key.isnot(None),
                     Vulnerability.location_key != "",
                 )
@@ -945,6 +1144,121 @@ async def _load_scope_intel(
         sample_urls=short_urls or None,
         this_case_surface_n=this_case_surface_n,
     )
+
+
+async def _scope_assets(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[tuple[str, str]]:
+    """(id, address) for Case Scope ∩ owner ledger (same match as scope_intel)."""
+    from sqlalchemy import or_, select
+
+    from app.models.asset import Asset
+
+    task = {}
+    if isinstance(conv_context, dict):
+        raw_task = conv_context.get("task")
+        if isinstance(raw_task, dict):
+            task = raw_task
+    host_keys = extract_hosts_from_task(task)
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(aid, address) -> None:
+        s = str(aid)
+        if s in seen:
+            return
+        seen.add(s)
+        rows.append((s, str(address or "")))
+
+    try:
+        if host_keys and uid is not None:
+            q = select(Asset.id, Asset.address).where(
+                or_(Asset.user_id == uid, Asset.user_id.is_(None)),
+                Asset.address.in_(host_keys),
+            )
+            for aid, address in (await db.execute(q)).all():
+                _add(aid, address)
+        sticky_q = select(Asset.id, Asset.address).where(Asset.conversation_id == cid)
+        if uid is not None:
+            sticky_q = sticky_q.where(or_(Asset.user_id == uid, Asset.user_id.is_(None)))
+        for aid, address in (await db.execute(sticky_q)).all():
+            _add(aid, address)
+    except Exception:
+        return rows
+    return rows
+
+
+async def _scope_asset_ids(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[str]:
+    """Host ids for Case Scope ∩ owner ledger (same match as scope_intel)."""
+    return [aid for aid, _addr in await _scope_assets(db, cid=cid, uid=uid, conv_context=conv_context)]
+
+
+def _task_from_conv_context(conv_context: dict | None) -> dict:
+    if isinstance(conv_context, dict):
+        raw_task = conv_context.get("task")
+        if isinstance(raw_task, dict):
+            return raw_task
+    return {}
+
+
+async def _scope_intel_port_map(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> dict[str, set[str] | None]:
+    assets = await _scope_assets(db, cid=cid, uid=uid, conv_context=conv_context)
+    return case_intel_port_scope(assets, _task_from_conv_context(conv_context))
+
+
+async def _load_living_intel_summary(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[dict[str, Any]] | None:
+    """Living notebook lines for Scope Host-level + matching Scope Services."""
+    from app.services.owner_intel import living_intel_for_assets
+
+    port_scope = await _scope_intel_port_map(db, cid=cid, uid=uid, conv_context=conv_context)
+    if not port_scope:
+        return None
+    task = _task_from_conv_context(conv_context)
+    task_id = str(task.get("task_id") or task.get("id") or "").strip() or None
+    rows = await living_intel_for_assets(
+        db,
+        user_id=uid,
+        asset_ids=list(port_scope.keys()),
+        port_scope=port_scope,
+        current_task_id=task_id,
+        conversation_id=str(cid),
+    )
+    if not rows:
+        return None
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        line = {
+            "id": r.get("id"),
+            "summary": r.get("summary"),
+            "kind": r.get("kind"),
+            "asset_id": r.get("asset_id"),
+            "port": r.get("port"),
+            "is_new": r.get("is_new"),
+        }
+        out.append({k: v for k, v in line.items() if v is not None and v != ""})
+    return out or None
 
 
 async def load_case_context_for_conversation(
@@ -1069,6 +1383,14 @@ async def load_case_context_for_conversation(
     except Exception:
         scope_intel = None
 
+    intel_summary = None
+    try:
+        intel_summary = await _load_living_intel_summary(
+            db, cid=cid, uid=uid, conv_context=conv_context
+        )
+    except Exception:
+        intel_summary = None
+
     return build_case_context_payload(
         messages=messages,
         findings=findings,
@@ -1079,4 +1401,5 @@ async def load_case_context_for_conversation(
         evidence_limit=evidence_limit,
         workset=workset_blob,
         scope_intel=scope_intel,
+        intel_summary=intel_summary,
     )
