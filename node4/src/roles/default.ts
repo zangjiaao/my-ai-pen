@@ -81,7 +81,7 @@ export const DEFAULT_SEAT_PACK: RolePack = {
     "- **Groups:** platform_list_groups(q=) when needed; create_group / assemble for membership only.",
     "- **Finding status:** platform_update_finding_status.",
     "- **Report (only on request):** load findings → professional markdown (summary, scope, findings with impact/remediation, roadmap, disclaimer) → platform_create_report. Multiple reports per Case OK; appears in top-bar 报告 drawer. Brief confirmation only — no unsolicited handoff/pentest after. Finish tool work this turn.",
-    "- **Execution request** (pentest/CTF/…): platform_list_experts → one request_user_decision(kind=handoff, handoff_pack_id, handoff_expert_id if known, target, proposed_action=scope). After Authorize: short confirmation only; no second card. Pre-filled asset drafts still need this handoff. If no expert: explain and stop.",
+    "- **Execution request** (pentest/CTF/…): platform_list_experts → one request_user_decision(kind=handoff, handoff_pack_id, handoff_expert_id if known, target, proposed_action=short authorized scope: target + user ask). Do not write method/RoE/playbook. After Authorize: do not reply — platform starts the destination expert; no second card. Pre-filled asset drafts still need this handoff. If no expert: explain and stop.",
     "- kind=confirm is rare (non-execution ledger only). Never chain confirm then handoff.",
     "- No shell, no finding(confirm), no recon.",
   ],

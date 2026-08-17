@@ -275,13 +275,36 @@ function parseIntelSummary(raw: unknown): CaseIntelLine[] | undefined {
   return out.length ? out : undefined;
 }
 
-/** Render case work-group block for LLM (budgeted). */
-export function formatCaseContextInjection(ctx: CaseContext | undefined | null): string {
+/** Render case work-group block for LLM (budgeted). Facts only — policy lives in Profession/Runtime. */
+export type FormatCaseContextOptions = {
+  /** Named engagement port from Target/Scope — labels the prior count and filters sample URLs. */
+  engagementPort?: string;
+};
+
+function urlMatchesEngagementPort(url: string, port: string): boolean {
+  const p = String(port || "").trim();
+  if (!p) return true;
+  const s = String(url || "").trim();
+  if (!s.includes("://")) return true;
+  try {
+    const u = new URL(s);
+    const up = u.port || (u.protocol === "https:" ? "443" : "80");
+    return up === p;
+  } catch {
+    return true;
+  }
+}
+
+export function formatCaseContextInjection(
+  ctx: CaseContext | undefined | null,
+  options?: FormatCaseContextOptions,
+): string {
   if (!ctx) return "";
   const lines: string[] = ["### Case"];
   if (ctx.conversation_id) {
     lines.push(`Case/conversation id: ${ctx.conversation_id}`);
   }
+  appendLivingNotebook(lines, ctx);
 
   const intel = ctx.scope_intel;
   if (intel && (intel.hosts?.length || intel.prior_findings || intel.high_priority_sample?.length)) {
@@ -320,9 +343,13 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
         .map(([k, v]) => `${k}=${v}`)
         .slice(0, 6)
         .join(" ");
+      const portBit = String(options?.engagementPort || "").trim()
+        ? ` on Scope port :${String(options?.engagementPort).trim()} (list without port= follows this port; all_ports=true is host-wide)`
+        : "";
       lines.push(
-        `- Prior findings on Scope Host(s): total=${pf.total ?? "?"} open/retest≈${pf.open_or_retest ?? "?"}` +
-          (sevBits ? ` (${sevBits})` : ""),
+        `- Prior findings: ${pf.total ?? "?"} total, ~${pf.open_or_retest ?? "?"} open` +
+          (sevBits ? ` (${sevBits})` : "") +
+          portBit,
       );
       lines.push(
         "  → samples below are refs only; use platform_list_vulnerabilities / get for details you need.",
@@ -344,7 +371,10 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       if (paths.length) {
         lines.push(`- Known path sketch (${paths.length}): ${paths.join(" · ")}`);
       }
-      const urls = (sk.sample_urls || []).slice(0, 6);
+      const port = String(options?.engagementPort || "").trim();
+      const urls = (sk.sample_urls || [])
+        .filter((u) => urlMatchesEngagementPort(String(u), port))
+        .slice(0, 6);
       if (urls.length) {
         lines.push(`- Sample URLs: ${urls.join(" · ")}`);
       }
@@ -353,8 +383,6 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       }
     }
   }
-
-  appendLivingNotebook(lines, ctx);
 
   const findings = (ctx.findings_summary || []).slice(0, MAX_FINDINGS);
   if (findings.length) {
@@ -377,23 +405,6 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       if (f.proof_excerpt) {
         lines.push(`  proof: ${String(f.proof_excerpt).replace(/\s+/g, " ").slice(0, 280)}`);
       }
-    }
-  }
-
-  const clues = ctx.intel_summary || [];
-  if (clues.length) {
-    lines.push(
-      "",
-      "### Living notebook (intel_summary)",
-      "Operational clues on Scope Hosts/Services — not Findings. " +
-        "Full body via platform_get_intel(id). Soft-forgotten / 遗忘区 are omitted.",
-    );
-    for (const c of clues) {
-      const hang = c.port ? `${c.asset_id || "?"}:${c.port}` : String(c.asset_id || "");
-      const kind = c.kind ? ` kind=${c.kind}` : "";
-      const hangBit = hang ? ` hang=${hang}` : "";
-      const id = c.id ? c.id : "?";
-      lines.push(`- ${id}${kind}${hangBit} — ${c.summary || "(no summary)"}`);
     }
   }
 

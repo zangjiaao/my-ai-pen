@@ -92,8 +92,9 @@ Ask one question; put the sentence in **exactly one** home.
 | True for every citizen on a Case (ledger honesty, priors = index, handoff / next_steps, no invent Hosts) | **Citizen** — duty is Base; string today prepends Profession (`mergePlatformCitizenMission`). Do not copy into `work.md` |
 | How *this seat* works (start order, proof bar, deadend, fact vs finding) | **Profession** `mission.md` (identity) / `work.md` (hard rules, keep slim) |
 | Procedure for one attack class or recon entry | **Skill body** — load on demand |
-| True only because of *this run* (Free vs Graph, tool list, skill ids, RoE flags, cold todo/booking reminder, chat-only “no target”) | **Runtime** |
+| True only because of *this run* (Free vs Graph, tool list, skill ids, RoE flags, cold todo/booking reminder, chat-only seat vs no-target) | **Runtime** |
 | True only for *this turn* (Case 活情报 / prior catalog, Target, Scope, Instruction, session title, process-fact index, goals) | **Task** |
+| Authorized handoff card body (`proposed_action`) | **Task `### Handoff`** — not the user turn; not Instruction |
 | What the human just said | **User turn** |
 | Lab outer continue / occupancy persist or checkpoint (not the operator) | **Harness** (`### Continue` / `### Context window` / `### Checkpoint rehydrate`) |
 | Unread Case group speech from other Sessions / the operator (not self, not this-turn user) | **Harness** `### Case speech` (delta after Session cursor) |

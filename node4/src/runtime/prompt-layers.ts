@@ -17,6 +17,7 @@ import {
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
+import { engagementPortFromTask } from "./attack-surface.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
@@ -154,6 +155,24 @@ export function promptTemplateVarsFromBase(input: BaseLayerInput): PromptTemplat
     pack_id: sanitizePromptLabel(input.packId, "runtime"),
     pack_label: sanitizeLanguageTemplateValue(input.packLabel || input.packId, "Assistant"),
   };
+}
+
+function isLedgerPackId(packId: string): boolean {
+  const p = String(packId || "").toLowerCase().trim();
+  return p === "default" || p === "consult" || p === "workspace";
+}
+
+function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
+  const named = Boolean(formatTargetLine(task.target) || engagementPortFromTask(task));
+  if (isLedgerPackId(packId)) {
+    return named
+      ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
+      : "This seat does not execute engagements. Ledger Q&A and handoff only.";
+  }
+  if (named) {
+    return "This turn is chat-only (no execution burst). Do not start recon, booking, or todo engagement maps.";
+  }
+  return "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.";
 }
 
 /** Convenience: build vars from full task + pack (Free / Stage captains). */
@@ -363,7 +382,9 @@ export function buildPromptLayers(
   const taskParts: string[] = [];
   const titleHint = formatSessionTitleHint(task);
   if (titleHint) taskParts.push(titleHint);
-  const caseBlock = formatCaseContextInjection(task.caseContext);
+  const caseBlock = formatCaseContextInjection(task.caseContext, {
+    engagementPort: engagementPortFromTask(task) || undefined,
+  });
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
   if (factBlock) taskParts.push(factBlock);
@@ -373,6 +394,12 @@ export function buildPromptLayers(
   );
   if (task.accounts !== undefined) {
     taskParts.push(`Accounts: ${JSON.stringify(task.accounts)}`);
+  }
+  const handoffNote = String(task.handoffSummary || "").trim();
+  if (handoffNote) {
+    taskParts.push(
+      ["### Handoff", "Authorized card body (not the operator utterance).", handoffNote].join("\n"),
+    );
   }
   taskParts.push(`Instruction: ${task.instruction}`);
   if (options?.goals) {

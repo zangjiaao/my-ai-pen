@@ -207,16 +207,16 @@ The X comment *「黑板架构是相对比较优的解法」* may use 「黑板�
 
 ### Black-cat (local frozen research tree)
 
-- `/mnt/d/Coding/my-ai-pen/research/Black-cat/README.md` — state machine vs pipeline; Engagement Tracker as runtime SOT; hypothesis-first.
-- `/mnt/d/Coding/my-ai-pen/research/Black-cat/skills/pentest-redteam/SKILL.md` — L2 attack state machine; engagement vs focused modes; technique routing.
-- `/mnt/d/Coding/my-ai-pen/research/Black-cat/skills/pentest-redteam/templates/engagement-tracker.md` — tracker sections (Active/Confirmed/Killed/…).
+- `research/Black-cat/README.md` — state machine vs pipeline; Engagement Tracker as runtime SOT; hypothesis-first.
+- `research/Black-cat/skills/pentest-redteam/SKILL.md` — L2 attack state machine; engagement vs focused modes; technique routing.
+- `research/Black-cat/skills/pentest-redteam/templates/engagement-tracker.md` — tracker sections (Active/Confirmed/Killed/…).
 
 ### Product (living)
 
-- `/mnt/d/Coding/my-ai-pen/CONTEXT.md` — Product state, Handoff, Runtime transcript, Graph × Pi, Feedback.
-- `/mnt/d/Coding/my-ai-pen/docs/specs/task-graph.md` — host settlement, Finding Store, surface ledger, stage continuity.
-- `/mnt/d/Coding/my-ai-pen/docs/specs/harness.md` — booking path, subagent handoff, Case-shared evidence.
-- `/mnt/d/Coding/my-ai-pen/docs/adr/0001-graph-x-pi-product-path.md` — Product state SOT; transcript subordinate.
+- `CONTEXT.md` — Product state, Handoff, Runtime transcript, Graph × Pi, Feedback.
+- `docs/specs/task-graph.md` — host settlement, Finding Store, surface ledger, stage continuity.
+- `docs/specs/harness.md` — booking path, subagent handoff, Case-shared evidence.
+- `docs/adr/0001-graph-x-pi-product-path.md` — Product state SOT; transcript subordinate.
 
 ### Context only (not architecture proof)
 

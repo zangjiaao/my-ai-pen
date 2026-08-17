@@ -112,4 +112,47 @@ assert.ok(onlyClues);
 assert.equal(onlyClues!.intel_summary?.[0]?.id, "i1");
 assert.match(formatCaseContextInjection(onlyClues), /Living notebook/);
 assert.match(formatCaseContextInjection(onlyClues), /admin:admin invalid/);
+assert.match(formatCaseContextInjection(onlyClues), /fact\(op=get/);
+assert.doesNotMatch(formatCaseContextInjection(onlyClues), /platform_get_intel/);
+
+// Living creds must outrank prior-finding dumps and non-login clues (ef6326fd: agent
+// saw gordonb/test123 but recovered hashes via RCE after default admin/password).
+const credsVsPriors = formatCaseContextInjection({
+  intel_summary: [
+    { id: "p1", summary: "instructions.php?doc= whitelist only", kind: "path_hint", asset_id: "a1", port: "8080" },
+    { id: "c1", summary: "DVWA 8080 登录凭据：gordonb/test123 有效", kind: "credential_status", asset_id: "a1", port: "8080" },
+  ],
+  scope_intel: {
+    hosts: [{ address: "host.docker.internal", on_ledger: true, ports: ["8080"] }],
+    prior_findings: { total: 298, open_or_retest: 298, by_severity: { critical: 67 } },
+    high_priority_sample: [{ id: "v1", severity: "critical", title: "Unauth RCE cmd_shell.php" }],
+  },
+});
+const credAt = credsVsPriors.indexOf("gordonb/test123");
+assert.ok(credAt >= 0, "credential summary must be injected");
+assert.ok(credAt < credsVsPriors.indexOf("Prior findings"), "living notebook before prior dump");
+assert.ok(credAt < credsVsPriors.indexOf("instructions.php"), "credential kind before path_hint");
+assert.match(credsVsPriors, /Use first \(try these creds/);
+
+{
+  const mixed = formatCaseContextInjection(
+    {
+      scope_intel: {
+        hosts: [{ address: "host.docker.internal", on_ledger: true, ports: ["3000", "8080"] }],
+        prior_findings: { total: 196, open_or_retest: 196 },
+        surface_sketch: {
+          known_paths: ["/rest/user"],
+          sample_urls: [
+            "http://host.docker.internal:3000/",
+            "http://host.docker.internal:8080/vulnerabilities/sqli/",
+          ],
+        },
+      },
+    },
+    { engagementPort: "3000" },
+  );
+  assert.match(mixed, /on Scope port :3000/);
+  assert.match(mixed, /:3000\//);
+  assert.doesNotMatch(mixed, /vulnerabilities\/sqli/);
+}
 console.log("case-context.test.ts ok");

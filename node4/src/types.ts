@@ -61,6 +61,11 @@ export type TaskEnvelope = {
   allowPostex?: boolean;
   /** Spec #139 NC-RoE-Destructive: lab may set true; product default false/undefined. */
   allowDestructive?: boolean;
+  /**
+   * Authorized handoff card body (Default proposed_action). This-turn
+   * `### Handoff` only — never the user-turn utterance (#455 / prompt-layers).
+   */
+  handoffSummary?: string;
   /** Optional test accounts / credentials provided by the customer (structured). */
   accounts?: unknown;
   scanMode?: string;

@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
+import { sessionWorkspaceRoot, toSandboxPath } from "./fs-tools.js";
 
 /**
  * Multi-step exploit path: write/read/run scripts under the task workspace.
@@ -15,7 +16,7 @@ export function createScriptTool(runtime: ToolRuntime): AgentTool<any> {
     name: "script",
     label: "Script",
     description: [
-      "Write/read/run Python or JS exploit scripts under task scripts/.",
+      "Write/read/run Python or JS exploit scripts under Session /workspace/scripts/ (same tree as shell cwd).",
       "Useful for multi-step chains, but product proof should still show the *observation* (response fragment / payload reflection) in stdout.",
       "For simple web proofs, prefer http/session so Case evidence is a clear request/response rather than a script path.",
     ].join(" "),
@@ -28,18 +29,20 @@ export function createScriptTool(runtime: ToolRuntime): AgentTool<any> {
     }),
     async execute(_id: string, params: any) {
       const action = String(params.action || "").toLowerCase();
-      const dir = join(runtime.taskDir, "scripts");
+      const dir = join(sessionWorkspaceRoot(runtime), "scripts");
       await mkdir(dir, { recursive: true });
       if (action === "list") {
         const { readdir } = await import("node:fs/promises");
         return jsonResult({ files: await readdir(dir).catch(() => []) });
       }
-      if (!params.filename) return textResult("error: filename required");
+      if (!params.filename) {
+        return textResult("error: filename required", { isError: true });
+      }
       const file = safePath(dir, String(params.filename));
       if (action === "write") {
         if (params.content == null) return textResult("error: content required");
         await writeFile(file, String(params.content), "utf8");
-        return jsonResult({ ok: true, path: file });
+        return jsonResult({ ok: true, path: toSandboxPath(`scripts/${params.filename}`) });
       }
       if (action === "read") {
         return textResult(await readFile(file, "utf8"));

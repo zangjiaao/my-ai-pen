@@ -96,6 +96,47 @@ assert.ok(String(payload.command || "").includes("id"), "book-time evidence keep
 assert.ok(String(payload.how_captured || "").length > 0, "how_captured label set");
 assert.equal(payload.observation, "uid=33(www-data) gid=33(www-data)");
 
+{
+  const early: RecentObservation = {
+    sourceTool: "shell",
+    summary: "shell exit=0 | [500 0B]",
+    excerpt: "===== GET /rest/user/authentication-details/1 =====\n[500  0B]",
+    path_or_url: "http://host.docker.internal:3000/rest/user/authentication-details/1",
+    capture: {
+      via: "shell",
+      command:
+        'for p in "/rest/country-mapping" "/rest/user/authentication-details/1"; do curl "$B$p"; done',
+    },
+    at: 1,
+  };
+  const later: RecentObservation = {
+    sourceTool: "shell",
+    summary: "shell exit=0",
+    excerpt:
+      'GET /rest/user/authentication-details/?email=nonexistent_xyz@nope.com → {"status":"success","data":[{"id":1,"email":"admin@juice-sh.op"}]}',
+    path_or_url: "http://host.docker.internal:3000/rest/user/authentication-details/?email=",
+    capture: {
+      via: "shell",
+      command:
+        "curl -s -H 'Authorization: Bearer x' 'http://host.docker.internal:3000/rest/user/authentication-details/?email=nonexistent_xyz@nope.com'",
+    },
+    at: 2,
+  };
+  const quoted =
+    "GET /rest/user/authentication-details/?email=nonexistent_xyz@nope.com → {\"status\":\"success\",\"data\":[{\"id\":1,\"email\":\"admin@juice-sh.op\"}]}";
+  const g = proofGroundedInRecentWork(quoted, [early, later], {
+    location: "/rest/user/authentication-details",
+  });
+  assert.ok(g.ok, "contiguous later excerpt grounds");
+  assert.ok(String(g.match?.capture?.command || "").includes("email=nonexistent"), "binds later probe not 500 batch");
+  const paraphrased = proofGroundedInRecentWork(
+    "认证用户可批量枚举全部用户（email=admin@juice-sh.op, deluxeToken leaked）",
+    [early, later],
+    { location: "/rest/user/authentication-details" },
+  );
+  assert.equal(paraphrased.ok, false, "short-token paraphrase is not grounded");
+}
+
 // Stored XSS pattern: write script → run → book proof from stdout → keep script body + result
 import { recordActObservation, enrichMatchWithScriptBody } from "./common.js";
 // (recordActObservation needs runtime — covered by integration smoke; unit-check enrich only)

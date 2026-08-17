@@ -385,6 +385,21 @@ function testShellHttpBestEffort() {
     extractUrlsFromShellCommand("curl -s 'http://h:3000/api' && curl 'https://h/x'"),
     ["http://h:3000/api", "https://h/x"],
   );
+  const loopCmd = [
+    "B=http://host.docker.internal:3000",
+    'for p in "/rest/country-mapping" "/rest/user/authentication-details"; do',
+    '  curl -s "$B$p"',
+    "done",
+  ].join("\n");
+  const loopUrls = extractUrlsFromShellCommand(loopCmd);
+  assert.ok(
+    loopUrls.includes("http://host.docker.internal:3000/rest/country-mapping"),
+    `loop expands country-mapping: ${loopUrls.join(",")}`,
+  );
+  assert.ok(
+    loopUrls.includes("http://host.docker.internal:3000/rest/user/authentication-details"),
+    "loop expands authentication-details",
+  );
   assert.equal(inferShellHttpMethod("curl -X POST -d '{}' http://h/a"), "POST");
   assert.equal(inferShellHttpMethod("curl -sI http://h/"), "HEAD");
 

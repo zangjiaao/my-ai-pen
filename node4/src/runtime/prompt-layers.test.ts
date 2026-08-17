@@ -514,4 +514,23 @@ const baseTask: TaskEnvelope = {
   );
 }
 
+{
+  const withHandoff: TaskEnvelope = {
+    ...baseTask,
+    instruction: "对目标：http://host.docker.internal:3000 再次进行渗透测试",
+    handoffSummary: "**任务**: 去对 196 条台账做索引避免撞车",
+  };
+  const prompt = buildSystemPrompt(withHandoff, PENTEST_ROLE_PACK);
+  ok(prompt.includes("### Handoff"), "authorized card body is This-turn ### Handoff");
+  ok(
+    prompt.includes("Authorized card body (not the operator utterance)"),
+    "Handoff block is labeled not-utterance",
+  );
+  ok(prompt.includes("196 条台账"), "Handoff keeps the authorized card body");
+  ok(
+    prompt.includes("对目标：http://host.docker.internal:3000 再次进行渗透测试"),
+    "operator utterance stays on the instruction line",
+  );
+}
+
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");

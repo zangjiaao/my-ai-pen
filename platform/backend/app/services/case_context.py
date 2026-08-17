@@ -374,21 +374,65 @@ def build_findings_summary(
     return out
 
 
+# Product Case/Session artifact identity — not host mount/drive letters.
+_ARTIFACT_PATH_NEEDLES = (
+    "HANDOFF",
+    "source_dump",
+    "workspace/",
+    "evidence/",
+    "findings/",
+    ".md",
+    "notes/",
+)
+_ARTIFACT_PATH_EXTS = (
+    ".md",
+    ".py",
+    ".js",
+    ".ts",
+    ".json",
+    ".txt",
+    ".log",
+    ".html",
+    ".java",
+    ".php",
+    ".c",
+    ".go",
+)
+
+
+def _looks_like_artifact_path(token: str) -> bool:
+    """True when the token is path- or filename-shaped — not a prose word."""
+    t = str(token or "").strip("`'\"()[].,;:")
+    if len(t) < 5 or len(t) >= 260:
+        return False
+    if "/" in t or "\\" in t:
+        return True
+    lower = t.lower()
+    return any(lower.endswith(ext) for ext in _ARTIFACT_PATH_EXTS)
+
+
 def extract_artifact_hints(thread: list[dict[str, str]], findings: list[dict]) -> list[str]:
-    """Light path/id hints from thread text (no full file bodies)."""
+    """Light path/id hints from thread text (no full file bodies).
+
+    Needles are Case/Session relative identity (notes/, workspace/, source_dump,
+    filename HANDOFF, .md, …) — not host mounts (/mnt/, D:\\). A token is kept
+    only when it is path-shaped; a bare word like status “Handoff” is not an artifact.
+    """
     hints: list[str] = []
     seen: set[str] = set()
-    needles = ("HANDOFF", "source_dump", "workspace/", "evidence/", "findings/", ".md", "/mnt/", "D:\\", "notes/")
     for line in thread:
         text = line.get("text") or ""
-        if not any(n.lower() in text.lower() for n in needles):
+        if not any(n.lower() in text.lower() for n in _ARTIFACT_PATH_NEEDLES):
             continue
         for token in text.replace(",", " ").split():
-            if any(n.lower() in token.lower() for n in needles) and len(token) > 4:
-                t = token.strip("`'\"()[]")
-                if t not in seen and len(t) < 260:
-                    seen.add(t)
-                    hints.append(t)
+            t = token.strip("`'\"()[].,;:")
+            if not _looks_like_artifact_path(t):
+                continue
+            if not any(n.lower() in t.lower() for n in _ARTIFACT_PATH_NEEDLES):
+                continue
+            if t not in seen:
+                seen.add(t)
+                hints.append(t)
             if len(hints) >= 12:
                 return hints
     for f in findings:

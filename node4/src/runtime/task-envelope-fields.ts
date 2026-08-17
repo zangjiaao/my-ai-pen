@@ -49,6 +49,18 @@ export function parseFocusFindingIds(message: Record<string, unknown>): string[]
   return parseStringIdList(message.focus_finding_ids ?? message.focusFindingIds);
 }
 
+/** Authorized handoff card body — This-turn note only, never the user utterance. */
+export function parseHandoffSummary(message: Record<string, unknown>): string | undefined {
+  const raw =
+    typeof message.handoff_summary === "string"
+      ? message.handoff_summary
+      : typeof message.handoffSummary === "string"
+        ? message.handoffSummary
+        : undefined;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function parseFocusNote(message: Record<string, unknown>): string | undefined {
   const raw =
     typeof message.focus_note === "string"

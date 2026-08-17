@@ -248,6 +248,28 @@ import {
 }
 
 {
+  const scoped = trafficSettleScopeFromTask({
+    target: { type: "url", value: "http://host.docker.internal:3000" },
+    scope: { allow: ["http://host.docker.internal:3000"] },
+  });
+  const origins = scoped.allowedOrigins as Set<string>;
+  assert.ok(origins.has("host.docker.internal:3000"), "explicit :3000 origin recorded");
+  const onPort = planTrafficSurfaceSettle(
+    { url: "http://host.docker.internal:3000/rest/user", method: "GET", phase: "completed" },
+    null,
+    scoped,
+  );
+  assert.equal(onPort.settle, true);
+  const sibling = planTrafficSurfaceSettle(
+    { url: "http://host.docker.internal:8080/", method: "GET", phase: "completed" },
+    null,
+    scoped,
+  );
+  assert.equal(sibling.settle, false);
+  if (!sibling.settle) assert.equal(sibling.reason, "out_of_scope");
+}
+
+{
   // Collapsed OS probe: traversal in raw URL + normalized OS path → skip
   assert.equal(
     isCollapsedOsProbePath("/etc/passwd", "https://t.example/foo/../../../etc/passwd"),

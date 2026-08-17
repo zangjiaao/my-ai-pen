@@ -920,7 +920,9 @@ export async function runNode4Task(
       }
     }
 
-    if (cancelled()) stopReason = "aborted";
+    if (cancelled()) {
+      stopReason = abortReasonIsHandoff(signal) ? "handed_off" : "aborted";
+    }
     // else keep stopReason from last decision (e.g. natural_stop_after_tools)
 
     const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
@@ -941,20 +943,24 @@ export async function runNode4Task(
     // Spec #333: resource dispose is in `finally` only (single authority).
 
     const booked = await loadConfirmedFindings(runtime.findingsDir);
+    const handedOff = stopReason === "handed_off";
     // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
+    // Authorized handoff supersede is a successful Default finish, not an abort.
     const harnessStatus = chatOnly
-      ? cancelled()
+      ? cancelled() && !handedOff
         ? "incomplete"
         : "completed"
       : resolveHarnessTerminalStatus({
           bookedFindingCount: booked.count,
-          aborted: cancelled(),
+          aborted: cancelled() && !handedOff,
           stopReason,
         });
     const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
     const endTime = new Date().toISOString();
 
-    panel.setMainTerminal(cancelled() ? "aborted" : emitStatus === "completed" ? "completed" : "failed");
+    panel.setMainTerminal(
+      cancelled() && !handedOff ? "aborted" : emitStatus === "completed" ? "completed" : "failed",
+    );
     obsCounters.phase = "finished";
 
     const llmUsage = usage.snapshot({
@@ -1090,6 +1096,12 @@ export async function runNode4Task(
       },
     });
   }
+}
+
+function abortReasonIsHandoff(signal?: AbortSignal): boolean {
+  if (!signal?.aborted) return false;
+  const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+  return reason === "authorized_handoff";
 }
 
 /**
