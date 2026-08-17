@@ -7,20 +7,27 @@ import uuid
 from app.api.intel import _user_id
 from app.services.owner_intel import (
     INTEL_KINDS,
+    INTEL_INJECT_WINDOW,
     MAX_INTEL_INJECT,
     SECRET_KINDS,
     agent_may_get,
     agent_may_list,
     agent_may_update,
+    FOLD_IDLE_CASES,
     apply_forget,
     default_sensitivity,
+    inject_window_size,
+    is_this_case_intel,
+    lifecycle_status,
     next_access_count,
+    next_idle_case_count,
     format_intel_inject_line,
     intel_matches_case_scope,
     intel_summary_lines,
     normalize_hang,
     normalize_kind,
     project_new,
+    select_intel_inject_window,
     status_from_forget_count,
     strip_agent_audit_fields,
 )
@@ -62,34 +69,59 @@ def test_sensitivity_defaults_from_kind():
     assert default_sensitivity("config") == "plain"
 
 
-def test_lifecycle_two_step_forget():
+def test_lifecycle_fold_and_hard_forget():
     assert status_from_forget_count(0) == "active"
     assert status_from_forget_count(1) == "forgotten"
-    assert status_from_forget_count(2) == "sealed"
-    assert status_from_forget_count(9) == "sealed"
-
+    assert lifecycle_status(forget_count=0, idle_case_count=0) == "active"
+    assert lifecycle_status(forget_count=0, idle_case_count=FOLD_IDLE_CASES) == "active"
+    assert lifecycle_status(forget_count=0, idle_case_count=FOLD_IDLE_CASES - 1) == "active"
+    assert lifecycle_status(forget_count=1, idle_case_count=9) == "forgotten"
     first = apply_forget(0)
     assert first == {"forget_count": 1, "status": "forgotten"}
-    second = apply_forget(1)
-    assert second == {"forget_count": 2, "status": "sealed"}
+    again = apply_forget(1)
+    assert again == {"forget_count": 1, "status": "forgotten"}
+
+
+def test_idle_case_count_one_increment_per_case():
+    idle, last = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id=None,
+        last_idle_conversation_id=None,
+        idle_case_count=0,
+    )
+    assert idle == 1 and last == "c1"
+    idle2, last2 = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id=None,
+        last_idle_conversation_id="c1",
+        idle_case_count=1,
+    )
+    assert idle2 == 1 and last2 == "c1"
+    reset, _ = next_idle_case_count(
+        conversation_id="c1",
+        last_used_conversation_id="c1",
+        last_idle_conversation_id="c0",
+        idle_case_count=2,
+    )
+    assert reset == 0
 
 
 def test_agent_surface_by_lifecycle():
-    living = {"forget_count": 0, "status": "active"}
-    soft = {"forget_count": 1, "status": "forgotten"}
-    sealed = {"forget_count": 2, "status": "sealed"}
+    living = {"forget_count": 0, "idle_case_count": 0}
+    folded = {"forget_count": 0, "idle_case_count": FOLD_IDLE_CASES}
+    forgotten = {"forget_count": 1, "forgotten_by": "agent"}
 
     assert agent_may_list(living) is True
-    assert agent_may_list(soft) is False
-    assert agent_may_list(sealed) is False
+    assert agent_may_list(folded) is True
+    assert agent_may_list(forgotten) is False
 
     assert agent_may_get(living) is True
-    assert agent_may_get(soft) is True
-    assert agent_may_get(sealed) is False
+    assert agent_may_get(folded) is True
+    assert agent_may_get(forgotten) is False
 
     assert agent_may_update(living) is True
-    assert agent_may_update(soft) is True
-    assert agent_may_update(sealed) is False
+    assert agent_may_update(folded) is True
+    assert agent_may_update(forgotten) is False
 
 
 def test_intel_matches_case_scope_host_level_and_named_ports():
@@ -164,6 +196,9 @@ def test_new_is_projection_from_created_task_id():
     assert project_new(row, current_task_id="task-a")["is_new"] is True
     assert project_new(row, current_task_id="task-b")["is_new"] is False
     assert project_new(row, current_task_id=None)["is_new"] is False
+    case_row = {"id": "i2", "created_conversation_id": "case-a", "created_task_id": "old-task"}
+    assert project_new(case_row, current_task_id="new-task", conversation_id="case-a")["is_new"] is True
+    assert project_new(case_row, current_task_id="new-task", conversation_id="case-b")["is_new"] is False
 
 
 def test_inject_living_only_cap_and_secret_pointer():
@@ -188,7 +223,8 @@ def test_inject_living_only_cap_and_secret_pointer():
         "body": "PHPSESSID=abc",
     }
     soft = {**living, "id": "i-soft", "forget_count": 1, "status": "forgotten"}
-    sealed = {**living, "id": "i-seal", "forget_count": 2, "status": "sealed"}
+    sealed = {**living, "id": "i-seal", "forget_count": 2, "status": "forgotten"}
+    folded = {**living, "id": "i-fold", "forget_count": 0, "idle_case_count": FOLD_IDLE_CASES, "status": "folded"}
 
     live_line = format_intel_inject_line(living)
     assert "i-live" in live_line
@@ -200,8 +236,95 @@ def test_inject_living_only_cap_and_secret_pointer():
     assert "PHPSESSID=abc" not in secret_line
     assert "session cookie" in secret_line
 
-    lines = intel_summary_lines([living, secret, soft, sealed] + [{**living, "id": f"x{n}"} for n in range(30)])
+    lines = intel_summary_lines(
+        [living, secret, soft, sealed, folded] + [{**living, "id": f"x{n}"} for n in range(30)]
+    )
     assert all("i-soft" not in ln and "i-seal" not in ln for ln in lines)
+    assert any("i-fold" in ln and "Folded unused" not in ln for ln in lines)
+    assert not any("Folded unused" in ln for ln in lines)
     assert len(lines) <= MAX_INTEL_INJECT
     assert any("i-live" in ln for ln in lines)
     assert any("i-sec" in ln for ln in lines)
+    assert INTEL_INJECT_WINDOW == 50
+    assert inject_window_size() == 50
+
+
+def test_inject_window_this_case_and_login_beat_frequency():
+    """New / this-Case / login kinds stay in the window ahead of hotter old path_hints."""
+    hot = [
+        {
+            "id": f"hot-{n}",
+            "kind": "path_hint",
+            "summary": f"old hot {n}",
+            "access_count": 100 + n,
+            "updated_at": "2026-01-01",
+            "forget_count": 0,
+        }
+        for n in range(60)
+    ]
+    fresh = {
+        "id": "fresh-1",
+        "kind": "path_hint",
+        "summary": "just wrote",
+        "created_task_id": "task-now",
+        "access_count": 0,
+        "updated_at": "2026-08-17",
+        "forget_count": 0,
+    }
+    used = {
+        "id": "used-1",
+        "kind": "config",
+        "summary": "opened this case",
+        "last_used_conversation_id": "case-now",
+        "access_count": 1,
+        "updated_at": "2026-08-16",
+        "forget_count": 0,
+    }
+    cred = {
+        "id": "cred-1",
+        "kind": "credential_status",
+        "summary": "gordonb/test123 valid",
+        "access_count": 0,
+        "updated_at": "2026-01-02",
+        "forget_count": 0,
+    }
+    forgotten = {
+        "id": "gone-1",
+        "kind": "path_hint",
+        "summary": "forgotten",
+        "created_task_id": "task-now",
+        "forget_count": 1,
+    }
+    chosen = select_intel_inject_window(
+        hot + [fresh, used, cred, forgotten],
+        conversation_id="case-now",
+        current_task_id="task-now",
+        limit=50,
+    )
+    ids = [str(r.get("id")) for r in chosen]
+    assert "fresh-1" in ids
+    assert "used-1" in ids
+    assert "cred-1" in ids
+    assert "gone-1" not in ids
+    assert ids[0] == "fresh-1"
+    assert len(chosen) == 50
+    assert is_this_case_intel(fresh, current_task_id="task-now") is True
+    assert is_this_case_intel(used, conversation_id="case-now") is True
+
+
+def test_inject_window_this_case_over_cap_keeps_newest():
+    rows = [
+        {
+            "id": f"n{n}",
+            "kind": "path_hint",
+            "created_task_id": "t",
+            "updated_at": f"2026-08-{(n % 28) + 1:02d}",
+            "access_count": 0,
+            "forget_count": 0,
+        }
+        for n in range(60)
+    ]
+    chosen = select_intel_inject_window(rows, current_task_id="t", limit=50)
+    assert len(chosen) == 50
+    stamps = [str(r["updated_at"]) for r in chosen]
+    assert stamps == sorted(stamps, reverse=True)

@@ -621,6 +621,7 @@ export default function RightPanel({
               <IntelList
                 rows={[...intel, ...intelForgotten, ...intelSealed]}
                 currentTaskId={currentTaskId}
+                conversationId={conversationId}
                 emptyCopy="还没有线索。Agent 笔记本会把值得记住的东西记在这里。"
                 showHang
               />

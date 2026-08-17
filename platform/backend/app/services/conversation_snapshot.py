@@ -403,6 +403,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
                 status="active",
                 audience="user",
                 current_task_id=task_id,
+                conversation_id=str(conversation.id),
                 limit=100,
                 include_body=False,
             )
@@ -413,6 +414,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
                 status="forgotten",
                 audience="user",
                 current_task_id=task_id,
+                conversation_id=str(conversation.id),
                 limit=100,
                 include_body=False,
             )
@@ -423,6 +425,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
                 status="sealed",
                 audience="user",
                 current_task_id=task_id,
+                conversation_id=str(conversation.id),
                 limit=100,
                 include_body=False,
             )

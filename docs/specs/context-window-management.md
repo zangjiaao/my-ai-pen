@@ -70,7 +70,7 @@ Default seat / ledger-assist turns are in scope only if they reuse a growing par
 |------|---------|--------|
 | **Window** | Catalog `Model.contextWindow` | `getBuiltinModel`. **Unknown** model only: `LLM_CONTEXT_WINDOW` (default `128000`, min 1024). |
 | **Trigger** | **80%** of that window | `NODE4_COMPACT_THRESHOLD` — fraction `0.50`–`0.95` (or percent `50`–`95`; Spec implementer picks one parse, clamp, disclose). |
-| **Keep-tail** | Current **Todo slice** | Not env-tuned. Slice = messages since the current `in_progress` item was started (that user turn + following assistant/tool). If no `in_progress`, keep the last user turn only. |
+| **Keep-tail** | Current **Todo slice** | Not env-tuned. Slice = messages since the current `in_progress` item was started (that **operator** user turn + following assistant/tool). If no `in_progress`, keep the last operator user turn only. Harness messages (`role=harness`: persist-pass, checkpoint, outer continue) are not operator turns. |
 | **Reserve** | Implied by 80% | Equivalent spirit to coding-agent `window - reserveTokens`; product default is the ratio, not a 16k constant. |
 
 Not a Case-user slider. Wrong window (env larger than the real model) must not be “fixed” by guessing; overflow still fail-closes (section 4).
@@ -91,7 +91,7 @@ system (unchanged layers)
     Surface coverage summary (thin)
     Findings board ≤20 lines
     Process-fact index ≤ ~40 (existing cap)
-    Living Intel (status=active) ≤20 lines
+    Living Intel (status=active) ≤50 lines (this-Case + login first; see owner-intel)
     Goal / hypothesis index if already injected today
 + keep-tail: current Todo slice (raw Agent messages)
 ```
@@ -123,7 +123,7 @@ Process death: park is memory-only. Reseed is mode-correct + Store / Todo / Inte
 
 **Forbidden dumps:** raw scanner stdout, every 404/retry, skill bodies, thinking text, restating the same fact in ten rows. Tool streams stay under `tool-output/` (existing governance).
 
-**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤20**; findings **≤20**; Todo = current product map.
+**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤50** (Scope Host-level + matching Scope Service ports; this-Case + login kinds first; see owner-intel); findings **≤20**; Todo = current product map.
 
 **Enforcement:** tool schemas and existing size/L0 gates. **Not** platform NLP scrape of chat (`AGENTS.md`). Agent chooses what to persist; host rejects oversized bodies (`MAX_SUMMARY` / `MAX_BODY` on facts already).
 
@@ -132,6 +132,7 @@ Process death: park is memory-only. Reseed is mode-correct + Store / Todo / Inte
 - **Mid-run:** Agent **may** `record_intel` / book / fact whenever it wants. **No** periodic nudge. Frequent mandatory writes are out.
 - **At threshold:** one **persist pass** — a single structured follow-up (not NLP): occupancy is high; persist living intel (and other Store rows it already knows how to write) that should survive the smaller view; then continue. Host does **not** scrape the transcript.
 - **If the pass writes nothing:** still shrink. Compact does not wait forever. Unwritten process is lost — that is acceptable.
+- **Settle persist** (wrap / next_steps) is a **separate** optional notebook write (owner-intel persist cadence). It does not replace this compact pass; both may run in one Session.
 
 ---
 
@@ -184,3 +185,5 @@ Optional later: Status chrome that occupancy shrink ran. **Not** Spec-blocking.
 | 2026-08-15 | First publish — map #461 / ticket #468. |
 | 2026-08-15 | Persist cadence: optional mid-run writes; one Agent persist pass at threshold; then shrink (#471). |
 | 2026-08-15 | Shipped: `NODE4_COMPACT_THRESHOLD` (default 0.8) + `transformContext` persist-then-checkpoint. |
+| 2026-08-15 | Settle persist called out as a separate optional pass (does not replace compact persist). |
+| 2026-08-15 | Living intel inject follows owner-intel Case hang filter (Host-level + Scope Service ports). |

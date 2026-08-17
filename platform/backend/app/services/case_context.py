@@ -821,7 +821,9 @@ def build_case_context_payload(
     if isinstance(scope_intel, dict) and scope_intel:
         payload["scope_intel"] = scope_intel
     if isinstance(intel_summary, list) and intel_summary:
-        payload["intel_summary"] = intel_summary[:20]
+        from app.services.owner_intel import inject_window_size
+
+        payload["intel_summary"] = intel_summary[: inject_window_size()]
     # Spec #311: thin Workset brief at assign boundary (not every mid-turn).
     if isinstance(workset, dict) and (workset.get("items") or workset.get("goal")):
         try:
@@ -1241,7 +1243,7 @@ async def _load_living_intel_summary(
         asset_ids=list(port_scope.keys()),
         port_scope=port_scope,
         current_task_id=task_id,
-        limit=20,
+        conversation_id=str(cid),
     )
     if not rows:
         return None

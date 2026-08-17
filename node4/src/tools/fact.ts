@@ -1,29 +1,38 @@
 /**
- * Process-fact tool — cognition vs finding booking (A2/A3/A5).
- * Never creates host assets.
- *
- * fact(op=surface) is a thin wrapper over the surface SQLite store (#370).
- * Prefer the dedicated `surface` tool for summary/list/get (upsert non-primary).
+ * Process-fact + Host notebook (Intel) — one Agent tool.
+ * Local taskDir/facts stays for Graph process keys. Durable clues hang on Host/Service.
+ * Attack surface is the `surface` tool; harness may mirror deposits into facts/.
  */
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
-import { depositSurfaceLocation } from "./surface.js";
+import {
+  forgetIntelRow,
+  getIntelRow,
+  listIntelRows,
+  recordIntelRow,
+  resolveIntelHang,
+} from "./platform-intel.js";
+
+const INTEL_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function hasPlatformApi(runtime: ToolRuntime): boolean {
+  return Boolean(runtime.platformApi?.baseUrl && runtime.platformApi?.nodeToken);
+}
 
 export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "fact",
     label: "Process fact",
     description: [
-      "Persist process cognition (ports, auth state, failed probes, surface notes) under the task workspace.",
-      "Ops: list | get | upsert | surface.",
-      "list returns short index (key+summary). get returns full body. upsert writes/overwrites one fact_key.",
-      "surface: thin wrapper — optional one-location deposit into the surface SQLite ledger (prefer surface summary/list/get; normal fill is Traffic settle + seed).",
-      "Separate from finding(confirm): facts are working memory; product vulns need finding + grounded proof.",
-      "Does NOT create platform host IP/domain assets (user-created only).",
-      "Write-as-you-go: upsert when you confirm a cognition — do not wait for session end.",
-      "Do not invent detail from list summaries alone — get the body.",
+      "Notebook + this-task process memory. Write-as-you-go when you confirm a cognition — do not wait.",
+      "Ops: list | get | upsert | forget.",
+      "upsert: this-task fact_key plus Host/Service 线索 when hang is known (asset_id, or the single Scope Host). kind=credential_status|secret|token|flag|path_hint|account|config.",
+      "Auth, creds, dead-end lessons that the next Session must not forget → upsert (that is the 情报 tab / Findings 线索). Do not invent a Host to hang a clue.",
+      "Correct a living clue with upsert on that id (one call). Inject shows this-Case writes and login kinds first, then frequently opened clues. forget(id, reason) is a hard drop (已忘记); reason required.",
+      "Attack surface: use the surface tool. Separate from finding(confirm).",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
@@ -31,10 +40,11 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       summary: Type.Optional(Type.String()),
       body: Type.Optional(Type.String()),
       category: Type.Optional(Type.String()),
-      /** Surface ledger location (op=surface). */
-      location: Type.Optional(Type.String()),
       kind: Type.Optional(Type.String()),
-      auth: Type.Optional(Type.String()),
+      asset_id: Type.Optional(Type.String({ description: "Host asset id to hang the notebook row" })),
+      port: Type.Optional(Type.String({ description: "Service port; omit to hang on the Host" })),
+      id: Type.Optional(Type.String({ description: "Intel id for get/update/forget" })),
+      reason: Type.Optional(Type.String({ description: "Required when forget: why this clue is discarded" })),
     }),
     async execute(_id: string, params: any) {
       const store = runtime.processFacts;
@@ -43,88 +53,111 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
 
       if (op === "list") {
         const entries = await store.list();
+        let intel: unknown[] = [];
+        if (hasPlatformApi(runtime)) {
+          const res = await listIntelRows(runtime, {
+            asset_id: String(params.asset_id || "").trim() || undefined,
+            port: String(params.port || "").trim() || undefined,
+          });
+          if (res.ok && res.data && typeof res.data === "object") {
+            const rows = (res.data as { intel?: unknown[] }).intel;
+            if (Array.isArray(rows)) intel = rows;
+          }
+        }
         return jsonResult({
           ok: true,
           op: "list",
           count: entries.length,
           facts: entries,
+          intel,
           guidance:
-            "Index only. fact(op=get, fact_key=...) for body. Book vulns with finding(confirm), not fact.",
+            "intel = living Host/Service notebook (Findings 线索). facts = this-task process index. " +
+            "get body via fact(op=get, id=…) or fact_key. Book vulns with finding(confirm), not fact.",
         });
       }
 
       if (op === "get") {
-        const key = String(params.fact_key || "").trim();
-        if (!key) return textResult("error: fact_key required for get");
+        const intelId = String(params.id || "").trim();
+        const key = String(params.fact_key || intelId || "").trim();
+        if (!key && !intelId) return textResult("error: id or fact_key required for get");
+        if (hasPlatformApi(runtime) && INTEL_ID_RE.test(intelId || key)) {
+          const res = await getIntelRow(runtime, intelId || key);
+          return jsonResult(res.data, { isError: !res.ok });
+        }
         const result = await store.get(key);
         if ("error" in result) return textResult(`error: ${result.error}`);
         return jsonResult({ ok: true, op: "get", fact: result });
       }
 
+      if (op === "forget") {
+        const intelId = String(params.id || params.fact_key || "").trim();
+        const reason = String(params.reason || "").trim();
+        if (!intelId) return textResult("error: id required for forget", { isError: true });
+        if (reason.length < 2) {
+          return textResult("error: reason required for forget", { isError: true });
+        }
+        if (!hasPlatformApi(runtime)) {
+          return textResult("error: platform API not configured — cannot forget Host notebook", { isError: true });
+        }
+        const res = await forgetIntelRow(runtime, intelId, reason);
+        return jsonResult(res.data, { isError: !res.ok });
+      }
+
       if (op === "upsert") {
+        const kindHint = String(params.kind || params.category || "config").trim() || "config";
         const result = await store.upsert({
-          fact_key: String(params.fact_key || ""),
+          fact_key: String(params.fact_key || "").trim() || `notebook/${kindHint}`,
           summary: String(params.summary || ""),
           body: String(params.body || ""),
           category: params.category != null ? String(params.category) : undefined,
         });
         if ("error" in result) return textResult(`error: ${result.error}`);
+        let intel: unknown = null;
+        let intelError: string | undefined;
+        const hang = resolveIntelHang(params, runtime.task.caseContext?.scope_intel?.hosts);
+        if (hasPlatformApi(runtime) && hang) {
+          const res = await recordIntelRow(runtime, {
+            asset_id: hang.asset_id,
+            port: hang.port,
+            kind: params.kind || params.category,
+            summary: result.summary,
+            body: String(params.body || result.summary),
+            id: String(params.id || "").trim() || undefined,
+          });
+          if (res.ok) {
+            intel = res.data && typeof res.data === "object" ? (res.data as { intel?: unknown }).intel : res.data;
+          } else {
+            intelError =
+              typeof res.data === "object" && res.data && "detail" in res.data
+                ? String((res.data as { detail?: unknown }).detail)
+                : `intel persist failed (${res.status})`;
+          }
+        }
         return jsonResult({
-          ok: true,
+          ok: !intelError,
           op: "upsert",
           fact_key: result.fact_key,
           summary: result.summary,
           updated_at: result.updated_at,
-          guidance:
-            "Fact stored under task facts/. Still book product issues with finding(confirm)+proof when ready.",
-        });
+          intel,
+          intel_error: intelError,
+          hung: Boolean(hang && intel && !intelError),
+          guidance: intelError
+            ? "This-task fact saved; Host notebook persist failed — retry upsert."
+            : hang && hasPlatformApi(runtime)
+              ? "This-task fact + Host notebook (情报/线索) saved. Still book product issues with finding(confirm)+proof."
+              : "This-task fact saved. Pass asset_id of an existing Host to also write the 情报 notebook (do not invent a Host).",
+        }, { isError: Boolean(intelError) });
       }
 
-      // Spec #125 / #370: serial surface deposit — thin wrapper over surface SQLite store.
       if (op === "surface") {
-        const location = String(params.location || params.body || "").trim();
-        if (!location || location.length < 2) {
-          return textResult("error: fact(op=surface) requires location (observed URL/path)");
-        }
-        const kind = String(params.kind || "").trim() || undefined;
-        const auth = String(params.auth || "").trim() || undefined;
-        const note = String(params.summary || params.body || "").trim() || undefined;
-        const deposited = await depositSurfaceLocation(runtime, {
-          location,
-          kind,
-          auth,
-          note,
-          source_agent_id:
-            (runtime.lifecycle.subagentDepth || 0) >= 1
-              ? runtime.lifecycle.workerAudit?.agentId || "worker"
-              : "main_serial",
-        });
-        if (!deposited.ok) {
-          return textResult(`error: ${deposited.error}`);
-        }
-        // Mirror as process fact for captain continuity.
-        await store
-          .upsert({
-            fact_key: `surface:${location}`.slice(0, 120),
-            summary: note || `surface ${location}`,
-            body: JSON.stringify({ location, kind, auth }),
-            category: "surface",
-          })
-          .catch(() => ({}));
-        return jsonResult({
-          ok: true,
-          op: "surface",
-          location,
-          added: deposited.created,
-          updated: deposited.updated,
-          total: deposited.total,
-          platform_sync: deposited.platform_sync,
-          guidance:
-            "Optional surface deposit ok. Prefer surface(summary|list|get); normal fill is Traffic settle + TARGET seed. Do not write result.json for handoff.",
-        });
+        return textResult(
+          "error: use the surface tool (summary|list|get|upsert). fact no longer deposits surfaces.",
+          { isError: true },
+        );
       }
 
-      return textResult("error: op must be list|get|upsert|surface");
+      return textResult("error: op must be list|get|upsert|forget");
     },
   };
 }

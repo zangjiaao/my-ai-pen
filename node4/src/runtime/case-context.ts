@@ -344,7 +344,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
     }
   }
 
-  const clues = (ctx.intel_summary || []).slice(0, 20);
+  const clues = ctx.intel_summary || [];
   if (clues.length) {
     lines.push(
       "",
