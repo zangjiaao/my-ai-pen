@@ -29,6 +29,8 @@ import type { StageExecutorInput } from "./hard-graph-runner.js";
 import { isHypothesisWorkModeOn } from "./hypothesis-store.js";
 import { formatSubagentReturnContractPrompt } from "./subagent-result.js";
 import { formatSessionTitleHint } from "./session-title.js";
+import { eagerTodoInjection } from "./todo-harness.js";
+import { eagerBookingInjection } from "./booking-harness.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -69,6 +71,12 @@ export type BuildSystemPromptOptions = {
   workModeInjection?: string;
   /** When Graph mode resolves RoE, override allow_postex. */
   allowPostexOverride?: boolean;
+  /** Cold Free: todo reminder lives in Runtime, not the user turn. */
+  eagerTodo?: boolean;
+  /** Cold Free finding-pack: booking reminder in Runtime. */
+  eagerBooking?: boolean;
+  /** No execution burst — Runtime chat-only line instead of a fat user turn. */
+  chatOnly?: boolean;
 };
 
 /**
@@ -163,7 +171,7 @@ function isLedgerPackId(packId: string): boolean {
 }
 
 function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
-  const named = Boolean(formatTargetLine(task.target) || engagementPortFromTask(task));
+  const named = Boolean(engagementPortFromTask(task));
   if (isLedgerPackId(packId)) {
     return named
       ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
@@ -374,6 +382,15 @@ export function buildPromptLayers(
     runtimeParts.push(
       `Recipes (non-answer templates): ${recipePath} — copy into task scripts/ or follow session examples.`,
     );
+  }
+  if (options?.chatOnly) {
+    runtimeParts.push(chatOnlyRuntimeLine(pack.id, task));
+  }
+  if (options?.eagerTodo) {
+    runtimeParts.push(eagerTodoInjection({ forced: true }));
+  }
+  if (options?.eagerBooking) {
+    runtimeParts.push(eagerBookingInjection());
   }
   runtimeParts.push("Stay in authorized scope.", formatRoeInjection(roe));
   const runtime = joinNonEmptyPromptParts(runtimeParts);

@@ -533,4 +533,27 @@ const baseTask: TaskEnvelope = {
   );
 }
 
+{
+  const plain = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK);
+  ok(
+    !/todo\(init\)/i.test(plain),
+    "eager todo is not in system unless the session asks for it",
+  );
+  const withReminders = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, {
+    eagerTodo: true,
+    eagerBooking: true,
+  });
+  ok(/todo\(init\)/i.test(withReminders), "eager todo reminder lives in Runtime when opted in");
+  ok(withReminders.includes("### This-run todo"), "eager todo uses Runtime markdown heading");
+  const chat = buildSystemPrompt(
+    { ...baseTask, target: {}, scope: {} },
+    PENTEST_ROLE_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    /no authorized engagement target/i.test(chat),
+    "chat-only Runtime forbids recon without a target",
+  );
+}
+
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");

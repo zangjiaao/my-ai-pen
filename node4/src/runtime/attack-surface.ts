@@ -47,7 +47,7 @@ const FILE_EXT_LAST_LABEL = new Set([
   "wasm",
 ]);
 
-function parseHostPort(raw: string): { host: string; port?: string } {
+export function parseHostPort(raw: string): { host: string; port?: string } {
   const s = String(raw || "").trim();
   if (!s) return { host: "" };
   // Path / location prose — do not scan "login.php" out of "/login.php (...)".

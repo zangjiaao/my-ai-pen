@@ -23,6 +23,8 @@ import {
   textResult,
 } from "./common.js";
 import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import { parseHostPort } from "../runtime/attack-surface.js";
+export { parseHostPort } from "../runtime/attack-surface.js";
 import { resolveBookSeverity } from "../runtime/finding-severity.js";
 
 export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
@@ -760,39 +762,6 @@ export function resolveAffectedHostPort(
     }
   }
   return { host: "", source: "none" };
-}
-
-export function parseHostPort(raw: string): { host: string; port?: string } {
-  const s = String(raw || "").trim();
-  if (!s) return { host: "" };
-  if (s.startsWith("/")) return { host: "" };
-  try {
-    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : s.startsWith("//") ? `http:${s}` : "";
-    if (withScheme || s.includes("://")) {
-      const u = new URL(withScheme || s);
-      const host = (u.hostname || "").toLowerCase();
-      const port = u.port || undefined;
-      if (host) return { host, port };
-    }
-  } catch {
-    // fall through
-  }
-  // host:port bare
-  const m = s.match(
-    /^(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|localhost|host\.docker\.internal|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?/i,
-  );
-  if (!m) return { host: "" };
-  const host = m[1]!.toLowerCase();
-  const last = host.split(".").pop() || "";
-  // login.php / cmd.png are paths, not hosts.
-  if (
-    /^(php|png|jpg|jpeg|gif|html|htm|js|css|json|xml|txt|pdf|svg|asp|aspx|jsp)$/i.test(
-      last,
-    )
-  ) {
-    return { host: "" };
-  }
-  return { host, port: m[2] };
 }
 
 async function finalizeFinding(
