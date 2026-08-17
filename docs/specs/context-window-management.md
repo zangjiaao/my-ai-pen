@@ -91,7 +91,7 @@ system (unchanged layers)
     Surface coverage summary (thin)
     Findings board ≤20 lines
     Process-fact index ≤ ~40 (existing cap)
-    Living Intel (status=active) ≤20 lines
+    Living Intel (status=active) ≤50 lines (this-Case + login first; see owner-intel)
     Goal / hypothesis index if already injected today
 + keep-tail: current Todo slice (raw Agent messages)
 ```
@@ -123,7 +123,7 @@ Process death: park is memory-only. Reseed is mode-correct + Store / Todo / Inte
 
 **Forbidden dumps:** raw scanner stdout, every 404/retry, skill bodies, thinking text, restating the same fact in ten rows. Tool streams stay under `tool-output/` (existing governance).
 
-**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤20** (Scope Host-level + matching Scope Service ports; see owner-intel); findings **≤20**; Todo = current product map.
+**Inject caps** (compact / cold rehydrate): fact index ~40 (existing); living intel **≤50** (Scope Host-level + matching Scope Service ports; this-Case + login kinds first; see owner-intel); findings **≤20**; Todo = current product map.
 
 **Enforcement:** tool schemas and existing size/L0 gates. **Not** platform NLP scrape of chat (`AGENTS.md`). Agent chooses what to persist; host rejects oversized bodies (`MAX_SUMMARY` / `MAX_BODY` on facts already).
 

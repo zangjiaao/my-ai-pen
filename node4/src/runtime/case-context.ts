@@ -151,7 +151,7 @@ export function sortIntelSummaryForInject(clues: CaseIntelLine[]): CaseIntelLine
 }
 
 function appendLivingNotebook(lines: string[], ctx: CaseContext): void {
-  const clues = (ctx.intel_summary || []).slice(0, 20);
+  const clues = ctx.intel_summary || [];
   if (!clues.length) return;
   const ordered = sortIntelSummaryForInject(clues);
   const creds = ordered.filter((c) => LOGIN_INTEL_KINDS.has(String(c.kind || "")));

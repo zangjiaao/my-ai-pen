@@ -6,7 +6,7 @@
 
 **Product path:** Owner ledger (Group × Host × Service) + Case projection.  
 **Amends:** `docs/specs/owner-ledger.md` — Intel wave was reserved (“not this wave”). This Spec **is** that wave.  
-**Consumed by:** `docs/specs/context-window-management.md` (compact injects **living** intel ≤20 lines after a persist pass).
+**Consumed by:** `docs/specs/context-window-management.md` (compact injects **living** intel ≤50 lines after a persist pass; this-Case + login first).
 
 **Does not amend:** Finding identity / book-path L0 (#275); Case Surface (#368); intent NLP ban; Default seat never-Graph.
 
@@ -46,12 +46,12 @@ Prompt framing (pack / Runtime): this is your notebook. Write what you need to k
 | `source` | `agent` \| `user` from who invoked the tool — not a tool argument. |
 | `created_task_id` | Task package id at create (for **New**). |
 | `forget_count` | 0 not hard-forgotten; ≥1 **已忘记**. |
-| `idle_case_count` | Harness: unused scoped Cases since last get/upsert. ≥`FOLD_IDLE_CASES` (3) → **遗忘区**. |
+| `idle_case_count` | **Retired.** No longer drives UI or inject. Column may remain; harness must **not** increment for product fold. |
 | `forgotten_by` / `forget_reason` | Hard forget only. `agent` must pass `reason`; `user` optional. |
 | `access_count` | Incremented on **get(id)** (operator open / Agent `fact(get)`). List and compact inject do **not** increment. |
-| `status` | Derived: `active` / `folded` / `forgotten`. |
+| `status` | Derived: `active` / `forgotten`. Unused-fold / `folded` is retired. |
 | `sensitivity` | Default from kind. |
-| **New** | Projection, not a stored Agent flag: `created_task_id` = current Task (or first seen this Case burst). Same spirit as Finding **New**. |
+| **New** | Projection, not a stored Agent flag: written on **this Case** (`created_conversation_id`) or same Task package (`created_task_id`). Same spirit as Finding **New**. |
 
 Agent **must not** pass `id` on create (omit = create; pass `id` = update). Agent **must not** pass timestamps, `source`, or `new`.
 
@@ -77,15 +77,14 @@ Later kinds: **Spec amendment**, not an open string. Agent must not invent kinds
 
 ## 2. Lifecycle (notebook ≈ working memory)
 
-Harness owns unused fold. Agent does not maintain a two-step chore.
+No unused-fold. Creating other Cases must **not** hide this Host’s notes.
 
 | State | After | Agent | Operator right panel |
 |-------|--------|-------|----------------------|
-| **在用** `active` | create / upsert or get this Case | list, get, upsert, forget | **线索** |
-| **遗忘区** `folded` | harness: **3** scoped Cases without get/upsert | list, get, upsert (get/upsert **activates**). Inject is a thin id index, not full lines. | **遗忘区** — not on 线索 |
+| **在用** `active` | create / upsert; not hard-forgotten | list, get, upsert, forget | **线索** (full Scope list) |
 | **已忘记** `forgotten` | Agent `forget(id, reason)` or user 忘记 | Not in list / inject / get / upsert | **已忘记** — restore or delete; shows who + reason |
 
-**Used this Case** = Agent `get` or `upsert` on that id (or create). Same Case is not counted twice. Creating Case does not fold.
+**This-Case** = `created_task_id` = current Task, or `last_used_conversation_id` = this Case (get / upsert / create). Used for inject always-include and operator pin — **not** a third status.
 
 **Correct a clue:** `fact(upsert)` **on the same id**. `forget` is a hard drop and requires `reason`.
 
@@ -158,8 +157,8 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## 8. UI
 
-- **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **已遗忘** filter for archived. Group tab stays empty/honest; **no Group writes in v1**.  
-- **Case right panel:** **线索** = `active`; **遗忘区** = unused fold; **已忘记** = hard forget (who + reason; restore / delete). Sort by `access_count` descending. Scope filter unchanged.  
+- **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **已忘记** filter for archived. Group tab stays empty/honest; **no Group writes in v1**.  
+- **Case right panel:** **线索** = all Scope ∩ not-hard-forgotten (no 50-cut; no 遗忘区). **已忘记** = hard forget (who + reason; restore / delete). Sort: this-Case new/used first, then `access_count` descending, then `updated_at`. Scope filter unchanged.  
 
 - Access count is an **eye + number** on the row and on the Finding-style detail dialog. Not a second tab.
 - Cards in chat must **not** invent a second list (same law as Findings projection).
@@ -168,10 +167,12 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## 9. Inject
 
-- Cold `task_assign` / compact checkpoint: `intel_summary` = up to **20** **living** lines (id + summary + hang). Forgotten **excluded**.  
+- Cold `task_assign` / compact checkpoint: `intel_summary` = **Scope ∩ living**, then an **Agent window** of **N=50** (override `MYAIPEN_INTEL_INJECT_WINDOW`, clamp 1–200). Forgotten **excluded**. Operator 线索 is **not** windowed.  
 - Hang filter (inject and Case 线索 share it): **Host-level** (no port) **+ Scope Service ports** from structured `target` / `scope.allow` (explicit `:port` or `port` field — no invented 80/443). If Scope names a Host with **no** port, that Host is whole-Host (all Service intel). `fact(list)` / asset 情报 tabs are **not** this filter — Agent can still open a sibling-port id.  
-
-- Render **before** prior-finding dumps (`scope_intel` / this-Case findings board). Login kinds (`credential_status` / `secret` / `token` / `account`) first. Summary is enough to act — recorded valid creds are the login path (do not recover via defaults / hash dump / booked RCE). Body via `fact(get)`, not `platform_get_intel` (that tool is not on the Expert pack).  
+- Window is **Scope-local**, never a global popularity contest across other Hosts.  
+- **Lane A (always, newest first if over cap):** this-Case new/used + login kinds (`credential_status` / `secret` / `token` / `account`).  
+- **Lane B:** remaining by `access_count` desc, then `updated_at`. Fill until N.  
+- Render **before** prior-finding dumps (`scope_intel` / this-Case findings board). Summary is enough to act — recorded valid creds are the login path (do not recover via defaults / hash dump / booked RCE). Body via `fact(get)`, not `platform_get_intel` (that tool is not on the Expert pack).  
 - Secret kinds: summary/pointer only.  
 - Distinct from existing `case_context.scope_intel` (that remains a **prior-finding index**: path/module-folded title + one-line summary on Scope ports — not a retest queue). Do not overload that field.
 
@@ -203,3 +204,5 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 | 2026-08-16 | Right-panel 线索 / 已遗忘 lists sort by `access_count` descending. |
 | 2026-08-16 | Unused fold (3 Cases, harness) vs hard forget (agent reason / user). Panel: 线索 / 遗忘区 / 已忘记. |
 | 2026-08-15 | Intel ≠ Evidence: Evidence supports Findings only; Intel is in-test operational notes. No restating booked proof into the notebook. |
+| 2026-08-17 | Unused-fold / 遗忘区 retired. Agent inject = two-lane window (this-Case + login, then frequency, N=50). Operator 线索 = full Scope list, same sort. |
+| 2026-08-17 | New + pin = this Case (`created_conversation_id`), not only current Task package. Snapshot stamps `is_new` with Case id. |

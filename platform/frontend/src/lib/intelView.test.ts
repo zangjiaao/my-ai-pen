@@ -9,6 +9,7 @@ import {
   hangLabel,
   intelStatus,
   isIntelNew,
+  isThisCaseIntel,
   mergeIntelSnapshot,
   sortIntelRowsByAccess,
   statusFromForgetCount,
@@ -18,12 +19,24 @@ import {
 assert.equal(statusFromForgetCount(0), "active");
 assert.equal(statusFromForgetCount(1), "forgotten");
 assert.equal(statusFromForgetCount(2), "forgotten");
-assert.equal(intelStatus({ idle_case_count: 3 }), "folded");
+assert.equal(intelStatus({ idle_case_count: 3 }), "active");
 assert.equal(intelStatus({ idle_case_count: 2 }), "active");
+assert.equal(intelStatus({ status: "folded", idle_case_count: 9 }), "active");
 assert.equal(intelStatus({ forget_count: 1, idle_case_count: 9 }), "forgotten");
+assert.equal(isThisCaseIntel({ created_task_id: "t1" }, { currentTaskId: "t1" }), true);
+assert.equal(
+  isThisCaseIntel({ last_used_conversation_id: "c1" }, { conversationId: "c1" }),
+  true,
+);
+assert.equal(
+  isThisCaseIntel({ last_used_conversation_id: "c1" }, { conversationId: "c2" }),
+  false,
+);
 
 assert.equal(isIntelNew({ created_task_id: "t1" }, "t1"), true);
 assert.equal(isIntelNew({ created_task_id: "t1" }, "t2"), false);
+assert.equal(isIntelNew({ created_conversation_id: "c1" }, "t-other", "c1"), true);
+assert.equal(isIntelNew({ created_conversation_id: "c1" }, "t-other", "c2"), false);
 assert.equal(isIntelNew({ is_new: true }, "other"), true);
 assert.equal(isIntelNew({ is_new: false, created_task_id: "t1" }, "t1"), true, "task match beats stale is_new false");
 assert.equal(isIntelNew({ is_new: false, created_task_id: "t1" }, "t2"), false);
@@ -80,6 +93,28 @@ assert.deepEqual(
     { a: 9 },
   ).map((r) => r.id),
   ["a", "b"],
+);
+assert.deepEqual(
+  sortIntelRowsByAccess(
+    [
+      { id: "hot", access_count: 99 },
+      { id: "fresh", access_count: 0, created_task_id: "t-now" },
+    ],
+    undefined,
+    { currentTaskId: "t-now" },
+  ).map((r) => r.id),
+  ["fresh", "hot"],
+);
+assert.deepEqual(
+  sortIntelRowsByAccess(
+    [
+      { id: "hot", access_count: 99 },
+      { id: "case-new", access_count: 0, created_conversation_id: "case-a" },
+    ],
+    undefined,
+    { conversationId: "case-a" },
+  ).map((r) => r.id),
+  ["case-new", "hot"],
 );
 
 console.log("intelView.test.ts: all ok");

@@ -13,11 +13,12 @@ import {
   type IntelStatus,
 } from "../lib/intelView";
 
-type Filter = "active" | "folded" | "forgotten";
+type Filter = "active" | "forgotten";
 
 export function IntelList({
   rows,
   currentTaskId,
+  conversationId,
   emptyCopy,
   showHang = false,
   showArchive = true,
@@ -25,6 +26,7 @@ export function IntelList({
 }: {
   rows: IntelRow[];
   currentTaskId?: string | null;
+  conversationId?: string | null;
   emptyCopy: string;
   showHang?: boolean;
   showArchive?: boolean;
@@ -34,12 +36,11 @@ export function IntelList({
   const [opened, setOpened] = useState<IntelRow | null>(null);
   const [accessById, setAccessById] = useState<Record<string, number>>({});
   const living = useMemo(() => filterIntelRows(rows, "active"), [rows]);
-  const folded = useMemo(() => filterIntelRows(rows, "folded"), [rows]);
   const forgotten = useMemo(() => filterIntelRows(rows, "forgotten"), [rows]);
   const visible = useMemo(() => {
-    const list = filter === "active" ? living : filter === "folded" ? folded : forgotten;
-    return sortIntelRowsByAccess(list, accessById);
-  }, [filter, living, folded, forgotten, accessById]);
+    const list = filter === "active" ? living : forgotten;
+    return sortIntelRowsByAccess(list, accessById, { currentTaskId, conversationId });
+  }, [filter, living, forgotten, accessById, currentTaskId, conversationId]);
 
   return (
     <div className="space-y-3" data-testid="intel-list">
@@ -55,14 +56,6 @@ export function IntelList({
           </button>
           <button
             type="button"
-            data-testid="intel-filter-folded"
-            onClick={() => setFilter("folded")}
-            className={`rounded-md px-2 py-1 text-[11px] ${filter === "folded" ? "bg-canvas-inset text-ink" : "text-ink-muted hover:text-ink"}`}
-          >
-            遗忘区 ({folded.length})
-          </button>
-          <button
-            type="button"
             data-testid="intel-filter-forgotten"
             onClick={() => setFilter("forgotten")}
             className={`rounded-md px-2 py-1 text-[11px] ${filter === "forgotten" ? "bg-canvas-inset text-ink" : "text-ink-muted hover:text-ink"}`}
@@ -73,11 +66,7 @@ export function IntelList({
       ) : null}
       {!visible.length ? (
         <p className="text-sm text-ink-muted" data-testid="intel-empty">
-          {filter === "folded"
-            ? "遗忘区是空的。"
-            : filter === "forgotten"
-              ? "没有已忘记的线索。"
-              : emptyCopy}
+          {filter === "forgotten" ? "没有已忘记的线索。" : emptyCopy}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -91,7 +80,7 @@ export function IntelList({
               >
                 <span className="min-w-0">
                   <span className="flex items-center gap-1.5">
-                    {isIntelNew(row, currentTaskId) && filter === "active" ? (
+                    {isIntelNew(row, currentTaskId, conversationId) && filter === "active" ? (
                       <span className="inline-block shrink-0 rounded-md bg-status-success/15 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-status-success">
                         New
                       </span>
@@ -118,6 +107,7 @@ export function IntelList({
         <IntelDetailDialog
           row={opened}
           currentTaskId={currentTaskId}
+          conversationId={conversationId}
           accessCountOverride={accessById[String(opened.id || "")]}
           onAccessed={(next) => {
             const id = String(next.id || opened.id || "").trim();
@@ -159,7 +149,6 @@ const KIND_CHIP: Record<string, string> = {
 
 const STATUS_STEPS: Array<{ id: IntelStatus; label: string }> = [
   { id: "active", label: "在用" },
-  { id: "folded", label: "遗忘区" },
   { id: "forgotten", label: "已忘记" },
 ];
 
@@ -206,6 +195,7 @@ function IntelAccessMark({ count, className = "" }: { count: number; className?:
 function IntelDetailDialog({
   row,
   currentTaskId,
+  conversationId,
   accessCountOverride,
   onAccessed,
   onRowChange,
@@ -213,6 +203,7 @@ function IntelDetailDialog({
 }: {
   row: IntelRow;
   currentTaskId?: string | null;
+  conversationId?: string | null;
   accessCountOverride?: number;
   onAccessed?: (row: IntelRow) => void;
   onRowChange?: (row: IntelRow, action: "upsert" | "delete") => void;
@@ -269,7 +260,8 @@ function IntelDetailDialog({
   const secret = isSecretKind(kind);
   const stamp = formatIntelTime(full.updated_at || full.created_at || row.updated_at || row.created_at);
   const recordId = String(full.id || row.id || "").trim();
-  const isNew = isIntelNew(full, currentTaskId) || isIntelNew(row, currentTaskId);
+  const isNew =
+    isIntelNew(full, currentTaskId, conversationId) || isIntelNew(row, currentTaskId, conversationId);
 
   // Body portal: RightPanel keeps a transform from enter animation, which would
   // otherwise trap position:fixed inside the panel.
@@ -392,35 +384,12 @@ function IntelDetailDialog({
                 <input
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder={status === "folded" ? "可选" : "手动遗忘时填写"}
+                  placeholder="手动遗忘时填写"
                   className="w-full rounded-md border border-hairline px-2 py-1.5 text-sm"
                 />
               </label>
             ) : null}
             <div className="flex flex-wrap gap-2">
-              {status === "folded" ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
-                  onClick={() => {
-                    setBusy(true);
-                    authFetch<{ intel?: IntelRow }>(`/api/intel/${encodeURIComponent(recordId)}/restore`, {
-                      method: "POST",
-                    })
-                      .then((data) => {
-                        if (data.intel) {
-                          setFull(data.intel);
-                          onRowChange?.(data.intel, "upsert");
-                        }
-                      })
-                      .catch((err) => setError(err instanceof Error ? err.message : "激活失败"))
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  激活
-                </button>
-              ) : null}
               {status !== "forgotten" ? (
                 <button
                   type="button"

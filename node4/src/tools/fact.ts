@@ -31,7 +31,7 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       "Ops: list | get | upsert | forget.",
       "upsert: this-task fact_key plus Host/Service 线索 when hang is known (asset_id, or the single Scope Host). kind=credential_status|secret|token|flag|path_hint|account|config.",
       "Auth, creds, dead-end lessons that the next Session must not forget → upsert (that is the 情报 tab / Findings 线索). Do not invent a Host to hang a clue.",
-      "Correct a living clue with upsert on that id (one call). Unused clues may fold off the 线索 panel after 3 Cases without get/upsert — list still sees them; get/upsert activates. forget(id, reason) is a hard drop (已忘记); reason required.",
+      "Correct a living clue with upsert on that id (one call). Inject shows this-Case writes and login kinds first, then frequently opened clues. forget(id, reason) is a hard drop (已忘记); reason required.",
       "Attack surface: use the surface tool. Separate from finding(confirm).",
     ].join(" "),
     parameters: Type.Object({

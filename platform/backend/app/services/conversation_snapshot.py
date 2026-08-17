@@ -423,6 +423,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
                     status=status,
                     audience="user",
                     current_task_id=task_id,
+                    conversation_id=str(conversation.id),
                     limit=100,
                     include_body=False,
                 )
@@ -439,6 +440,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
                     status="all",
                     audience="user",
                     current_task_id=task_id,
+                    conversation_id=str(conversation.id),
                     limit=100,
                     include_body=False,
                 )

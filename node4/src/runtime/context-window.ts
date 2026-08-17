@@ -192,7 +192,7 @@ export function buildCheckpointMessages(
   }
   if (rehydrate.intelLines?.length) {
     lines.push("", "#### Living intel");
-    for (const line of rehydrate.intelLines.slice(0, 20)) lines.push(line);
+    for (const line of rehydrate.intelLines.slice(0, 50)) lines.push(line);
   }
   if (rehydrate.goalText) {
     lines.push("", rehydrate.goalText);
@@ -271,7 +271,7 @@ export async function collectCheckpointRehydrate(runtime: ToolRuntime | undefine
   } else {
     const intel = runtime.task.caseContext?.intel_summary || [];
     if (intel.length) {
-      out.intelLines = sortIntelSummaryForInject(intel.slice(0, 20)).map(formatIntelInjectLine);
+      out.intelLines = sortIntelSummaryForInject(intel.slice(0, 50)).map(formatIntelInjectLine);
     }
   }
   try {

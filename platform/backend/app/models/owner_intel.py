@@ -34,6 +34,7 @@ class AssetIntel(Base):
     idle_case_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_idle_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_used_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     forgotten_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
     forget_reason: Mapped[str | None] = mapped_column(String(400), nullable=True)
     sensitivity: Mapped[str] = mapped_column(String(16), nullable=False, default="plain")

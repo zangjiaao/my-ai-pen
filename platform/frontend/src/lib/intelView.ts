@@ -2,6 +2,7 @@
 
 export type IntelStatus = "active" | "folded" | "forgotten" | "sealed";
 
+/** Fold retired — kept so old rows with idle_case_count do not change type shape. */
 export const FOLD_IDLE_CASES = 3;
 
 export type IntelRow = {
@@ -19,6 +20,8 @@ export type IntelRow = {
   forget_reason?: string | null;
   is_new?: boolean;
   created_task_id?: string | null;
+  created_conversation_id?: string | null;
+  last_used_conversation_id?: string | null;
   source?: string;
   created_at?: string | null;
   updated_at?: string | null;
@@ -35,15 +38,29 @@ export function intelStatus(row: IntelRow): IntelStatus {
   if (raw === "forgotten" || raw === "sealed" || Number(row.forget_count || 0) >= 1 || String(row.forgotten_by || "").trim()) {
     return "forgotten";
   }
-  if (raw === "folded" || Number(row.idle_case_count || 0) >= FOLD_IDLE_CASES) {
-    return "folded";
-  }
-  if (raw === "active") return "active";
-  return statusFromForgetCount(row.forget_count);
+  // Unused-fold retired: idle / status=folded rows are living 线索.
+  return "active";
 }
 
-export function isIntelNew(row: IntelRow, currentTaskId?: string | null): boolean {
+export function isThisCaseIntel(
+  row: IntelRow,
+  opts?: { currentTaskId?: string | null; conversationId?: string | null },
+): boolean {
+  if (isIntelNew(row, opts?.currentTaskId, opts?.conversationId)) return true;
+  const cid = String(opts?.conversationId || "").trim();
+  const lastUsed = String(row.last_used_conversation_id || "").trim();
+  return Boolean(cid && lastUsed && cid === lastUsed);
+}
+
+export function isIntelNew(
+  row: IntelRow,
+  currentTaskId?: string | null,
+  conversationId?: string | null,
+): boolean {
   if (row.is_new === true) return true;
+  const cid = String(conversationId || "").trim();
+  const createdCase = String(row.created_conversation_id || "").trim();
+  if (cid && createdCase && cid === createdCase) return true;
   const cur = String(currentTaskId || "").trim();
   const created = String(row.created_task_id || "").trim();
   if (cur && created && cur === created) return true;
@@ -70,13 +87,17 @@ export function filterIntelRows(rows: IntelRow[] | undefined | null, view: Intel
   return list.filter((row) => intelStatus(row) === view);
 }
 
-/** Most-viewed first. `accessById` overrides row stamps after a local get. */
+/** This-Case new/used first, then most-viewed. `accessById` overrides after a local get. */
 export function sortIntelRowsByAccess(
   rows: IntelRow[] | undefined | null,
   accessById?: Record<string, number>,
+  opts?: { currentTaskId?: string | null; conversationId?: string | null },
 ): IntelRow[] {
   const list = Array.isArray(rows) ? [...rows] : [];
   return list.sort((a, b) => {
+    const aPin = isThisCaseIntel(a, opts) ? 0 : 1;
+    const bPin = isThisCaseIntel(b, opts) ? 0 : 1;
+    if (aPin !== bPin) return aPin - bPin;
     const aid = String(a.id || "");
     const bid = String(b.id || "");
     const ac =
