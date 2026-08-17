@@ -22,6 +22,21 @@ export type WorkBurstProjection = {
   >;
 };
 
+export type ScopedWorkBurst = {
+  conversationId: string;
+  projection: WorkBurstProjection;
+} | null;
+
+/** Return a work-burst only to the Case that owns the projection. */
+export function workBurstForConversation(
+  scoped: ScopedWorkBurst,
+  conversationId: string | null | undefined,
+): WorkBurstProjection | null {
+  const activeId = String(conversationId || "").trim();
+  if (!scoped || !activeId || scoped.conversationId !== activeId) return null;
+  return scoped.projection;
+}
+
 /** Format busy-union seconds as compact mm:ss or h:mm:ss (composer live timer). */
 export function formatWorkSeconds(seconds: unknown): string {
   const n = Math.max(0, Math.floor(Number(seconds) || 0));

@@ -25,6 +25,51 @@ export type ComposerRestore = {
   goalMode: boolean;
 };
 
+export type ComposerSnapshotAction =
+  | "ignore"
+  | "state_only"
+  | "state_and_restore"
+  | "keep_restore_pending"
+  | "clear_case";
+
+/**
+ * Coordinate async Case snapshot results without letting an older request mutate
+ * the current Case or letting heartbeat overwrite an already-restored composer.
+ */
+export function decideComposerSnapshotAction(input: {
+  requestedCaseId: string;
+  currentCaseId: string | null | undefined;
+  outcome: "success" | "failure" | "not_found";
+  restoredCaseId: string | null | undefined;
+}): ComposerSnapshotAction {
+  if (input.currentCaseId !== input.requestedCaseId) return "ignore";
+  if (input.outcome === "not_found") return "clear_case";
+  if (input.outcome === "failure") return "keep_restore_pending";
+  return input.restoredCaseId === input.requestedCaseId
+    ? "state_only"
+    : "state_and_restore";
+}
+
+export function shouldPollConversationSnapshot(input: {
+  activeCaseId: string | null;
+  running: boolean;
+  snapshotLoaded: boolean;
+}): boolean {
+  return Boolean(input.activeCaseId && (input.running || !input.snapshotLoaded));
+}
+
+export function shouldShowCaseLoadingSkeleton(input: {
+  activeCaseId: string | null;
+  openingCaseId: string | null;
+  messagesLoading: boolean;
+}): boolean {
+  if (!input.activeCaseId) return false;
+  return (
+    input.openingCaseId === input.activeCaseId
+    || input.messagesLoading
+  );
+}
+
 /**
  * New-chat / fallback partner (Spec #299: only online / schedulable seats):
  * 1) expert.is_default from 专家管理 (if online)

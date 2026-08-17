@@ -3,11 +3,15 @@
  * Run: npx tsx src/lib/composerCaseRestore.test.ts
  */
 import assert from "node:assert/strict";
-import type { MentionTarget } from "../components/ChatComposer";
+import {
+  resolveActiveComposerPartner,
+  type MentionTarget,
+} from "../components/ChatComposer";
 import {
   engagementTemplateFromGraphId,
   pickDefaultMentionTarget,
   restoreComposerFromCaseSnapshot,
+  shouldShowCaseLoadingSkeleton,
 } from "./composerCaseRestore";
 
 function target(partial: Partial<MentionTarget> & { name: string; expertId: string }): MentionTarget {
@@ -41,6 +45,52 @@ const experts = [
 ];
 
 const catalog = [assistant, pentest, otherPentest, offlinePentest];
+
+{
+  assert.equal(
+    resolveActiveComposerPartner(null),
+    null,
+    "composer must not invent the first expert while Case restore is pending",
+  );
+  assert.equal(resolveActiveComposerPartner(assistant), assistant);
+  assert.equal(resolveActiveComposerPartner(offlinePentest), null);
+}
+
+{
+  assert.equal(
+    shouldShowCaseLoadingSkeleton({
+      activeCaseId: "case-b",
+      openingCaseId: "case-b",
+      messagesLoading: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldShowCaseLoadingSkeleton({
+      activeCaseId: "case-b",
+      openingCaseId: null,
+      messagesLoading: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldShowCaseLoadingSkeleton({
+      activeCaseId: "case-b",
+      openingCaseId: "case-a",
+      messagesLoading: false,
+    }),
+    false,
+    "a stale Case A request cannot keep Case B's skeleton open",
+  );
+  assert.equal(
+    shouldShowCaseLoadingSkeleton({
+      activeCaseId: "case-b",
+      openingCaseId: null,
+      messagesLoading: false,
+    }),
+    false,
+  );
+}
 
 {
   const out = restoreComposerFromCaseSnapshot(
@@ -94,6 +144,20 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
   assert.equal(out.partner?.expertId, "e-default", "offline expert → #299 default");
   assert.equal(out.engagementTemplate, null);
   assert.equal(out.goalMode, false);
+}
+
+{
+  const out = restoreComposerFromCaseSnapshot(
+    {
+      task_context: { expert_id: "e-offline", goal_mode: true },
+      sessions: { "e-offline": { work_mode: "graph", graph_id: "app_assessment" } },
+    },
+    [otherPentest],
+    [{ id: "e-pen-2", is_default: true, enabled: true }],
+  );
+  assert.equal(out.partner?.expertId, "e-pen-2", "fallback may select another pentest Expert");
+  assert.equal(out.engagementTemplate, null, "fallback must not inherit the old Expert Graph");
+  assert.equal(out.goalMode, false, "fallback must not inherit the old Expert Goal");
 }
 
 {

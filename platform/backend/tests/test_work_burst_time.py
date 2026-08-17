@@ -6,11 +6,13 @@ B1 finalized persistence / reload.
 from app.services.work_burst_time import (
     apply_authorize_pause,
     apply_worker_transition,
+    authorize_pause_request_matches,
     ensure_burst,
     finalize_burst,
     get_ledger,
     live_work_seconds,
     projection,
+    reconcile_terminal_work_burst,
     set_ledger,
     union_length_seconds,
     worker_busy_end,
@@ -326,6 +328,75 @@ def test_h1_force_idle_does_not_finalize_while_authorize_paused():
     assert ledger["bursts"][bid]["status"] == "finalized"
     assert ledger["active_burst_id"] is None
     assert work_seconds_for_burst(ledger, bid) == 50
+
+
+def test_h1_authorize_request_survives_restart_and_rejects_stale_decision():
+    """A restarted platform can resolve only the request that paused this burst."""
+    ctx = apply_worker_transition(
+        {},
+        worker_key="node-a",
+        working=True,
+        task_id="t1",
+        now=0.0,
+    )
+    ctx = apply_authorize_pause(ctx, paused=True, request_id="request-current", now=50.0)
+    ctx = apply_authorize_pause(ctx, paused=True, request_id="request-secondary", now=55.0)
+    persisted = dict(ctx)
+
+    assert authorize_pause_request_matches(
+        get_ledger(persisted),
+        "request-current",
+    ) is True
+    assert authorize_pause_request_matches(
+        get_ledger(persisted),
+        "request-secondary",
+    ) is True
+    assert authorize_pause_request_matches(
+        get_ledger(persisted),
+        "request-stale",
+    ) is False
+
+
+def test_terminal_idle_reconciles_orphaned_authorize_pause():
+    """Completed + no workers cannot retain an open authorize-paused burst."""
+    ctx = apply_worker_transition(
+        {},
+        worker_key="node-a",
+        working=True,
+        task_id="t1",
+        now=0.0,
+    )
+    ctx = apply_authorize_pause(ctx, paused=True, request_id="request-1", now=50.0)
+    ctx = apply_worker_transition(
+        ctx,
+        worker_key="node-a",
+        working=False,
+        task_id="t1",
+        now=60.0,
+    )
+
+    paused_ctx, paused_changed = reconcile_terminal_work_burst(
+        ctx,
+        conversation_status="paused",
+        workers={},
+        now=100.0,
+    )
+    assert paused_changed is False
+    assert get_ledger(paused_ctx)["active_burst_id"] is not None
+
+    healed_ctx, healed_changed = reconcile_terminal_work_burst(
+        ctx,
+        conversation_status="completed",
+        workers={},
+        now=100.0,
+    )
+    healed = get_ledger(healed_ctx)
+    assert healed_changed is True
+    assert healed["active_burst_id"] is None
+    row = next(iter(healed["bursts"].values()))
+    assert row["status"] == "finalized"
+    assert row["authorize_paused"] is False
+    assert row["work_seconds"] == 50
 
 
 def test_b1_pick_result_anchor_skips_status_and_closeout():

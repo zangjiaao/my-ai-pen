@@ -11,6 +11,8 @@ import {
   formatWorkSeconds,
   resultAnchorWorkSeconds,
   selectResultAnchorMessageIds,
+  workBurstForConversation,
+  type ScopedWorkBurst,
   type WorkBurstProjection,
 } from "./workBurstTime.ts";
 
@@ -25,6 +27,28 @@ import {
   assert.equal(formatAgentDurationLabel(65), "耗时：1m 5s");
   assert.equal(formatAgentDurationLabel(3600 + 65), "耗时：1h 1m 5s");
   console.log("ok: formatAgentDurationLabel");
+}
+
+{
+  const scoped: ScopedWorkBurst = {
+    conversationId: "case-a",
+    projection: {
+      active_burst_id: "wb-a",
+      live_work_seconds: 12,
+      accruing: true,
+    },
+  };
+  assert.equal(
+    workBurstForConversation(scoped, "case-a")?.active_burst_id,
+    "wb-a",
+    "the owning Case can render its work burst",
+  );
+  assert.equal(
+    workBurstForConversation(scoped, "case-b"),
+    null,
+    "Case B must never render Case A work-burst chrome while loading",
+  );
+  assert.equal(workBurstForConversation(scoped, null), null);
 }
 
 {

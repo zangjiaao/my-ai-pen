@@ -1,50 +1,94 @@
 /**
- * Spec #474 S2: Case-open restore adapter (source contract).
+ * Spec #474 S2: Case snapshot result coordination.
  * Run: npx tsx src/pages/ConversationPage.composerRestore.test.ts
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  decideComposerSnapshotAction,
+  shouldPollConversationSnapshot,
+} from "../lib/composerCaseRestore";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const pageSrc = readFileSync(join(here, "ConversationPage.tsx"), "utf8");
-
-assert.match(
-  pageSrc,
-  /from "\.\.\/lib\/composerCaseRestore"/,
-  "ConversationPage must use the S1 restore helper",
-);
-assert.match(
-  pageSrc,
-  /applyComposerRestoreFromSnapshot\(id, state\)/,
-  "Case load must restore composer from the snapshot",
-);
-assert.match(
-  pageSrc,
-  /resetComposerChips\(\)/,
-  "Case open / blank home must reset composer chips before restore",
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-b",
+    outcome: "not_found",
+    restoredCaseId: undefined,
+  }),
+  "ignore",
+  "a stale Case A 404 must not clear the current Case B",
 );
 
-const refreshFn = pageSrc.slice(
-  pageSrc.indexOf("const refreshConversationState"),
-  pageSrc.indexOf("const setConversationMessageData"),
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "failure",
+    restoredCaseId: undefined,
+  }),
+  "keep_restore_pending",
+  "a transient initial snapshot failure must not complete composer restore",
+);
+
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "success",
+    restoredCaseId: undefined,
+  }),
+  "state_and_restore",
+  "the first later successful snapshot completes pending restore",
+);
+
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "success",
+    restoredCaseId: "case-a",
+  }),
+  "state_only",
+  "heartbeat must not overwrite an already-restored composer",
+);
+
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "not_found",
+    restoredCaseId: undefined,
+  }),
+  "clear_case",
+  "a current Case 404 still clears the missing Case",
+);
+
+assert.equal(
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: false,
+    snapshotLoaded: false,
+  }),
+  true,
+  "an idle Case with a failed initial snapshot must retry until restore can complete",
 );
 assert.equal(
-  /restoreComposerFromCaseSnapshot|applyComposerRestoreFromSnapshot/.test(refreshFn),
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: false,
+    snapshotLoaded: true,
+  }),
   false,
-  "heartbeat refreshConversationState must not restore composer (#474 L6 / #278 D3)",
+  "an idle Case stops polling after its snapshot loads",
 );
-
-assert.match(
-  pageSrc,
-  /composerRestoreCaseIdRef\.current = convId/,
-  "first-send mint must keep send-time chips (do not S1-overwrite empty new Case)",
-);
-assert.match(
-  pageSrc,
-  /if \(activeId && composerRestoreCaseIdRef\.current !== activeId\) return;/,
-  "#299 default must wait while Case restore is pending",
+assert.equal(
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: true,
+    snapshotLoaded: true,
+  }),
+  true,
+  "a running Case keeps the existing heartbeat",
 );
 
 console.log("ok: ConversationPage.composerRestore.test.ts");

@@ -48,6 +48,10 @@ export type SessionLifecycleHandlers = {
   busy?: boolean;
 };
 
+const AGENT_LIST_CLASS = "space-y-1";
+const AGENT_CHILDREN_CLASS = "mt-1 space-y-1 pl-[18px]";
+const AGENT_ROW_CLASS = "min-w-0 rounded-md py-[5px] pr-2 pl-[9px]";
+
 export function StrixAgentList({
   agents,
   onWorkerClick,
@@ -166,7 +170,7 @@ export function StrixAgentList({
         {children.length > 0 && (
           /* pl-[18px]: child elbow vertical (-left-1.5) near parent spine at left-3.
            * mt-1 + space-y-1: breathing room so Sub hover does not cover Main bottom edge. */
-          <div className={`${open ? "block" : "hidden"} mt-1 space-y-1 pl-[18px]`}>
+          <div className={`${open ? "block" : "hidden"} ${AGENT_CHILDREN_CLASS}`}>
             {children.map((child, index) =>
               renderAgentNode(child, false, nextTrail, index === children.length - 1),
             )}
@@ -176,8 +180,62 @@ export function StrixAgentList({
     );
   };
   return (
-    <div className="space-y-1" data-testid="strix-agent-status">
+    <div className={AGENT_LIST_CLASS} data-testid="strix-agent-status">
       {rootAgents.map((agent) => renderAgentNode(agent, true))}
+    </div>
+  );
+}
+
+export function StrixAgentListSkeleton() {
+  return (
+    <div aria-hidden="true" className={AGENT_LIST_CLASS} data-testid="strix-agent-status-skeleton">
+      <div className="relative min-w-0">
+        <div className="relative">
+          <span className="pointer-events-none absolute bottom-0 left-3 top-[19px] w-px bg-hairline" />
+          <AgentRowSkeleton primary />
+        </div>
+        <div className={AGENT_CHILDREN_CLASS}>
+          <div className="relative min-w-0">
+            <svg
+              viewBox="0 0 26 22"
+              className="pointer-events-none absolute -left-1.5 top-0 h-[22px] w-[26px] text-hairline"
+              fill="none"
+            >
+              <path d="M0 0 V10 Q0 16 6 16 H16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <AgentRowSkeleton />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentRowSkeleton({ primary = false }: { primary?: boolean }) {
+  return (
+    <div className={`${AGENT_ROW_CLASS} bg-surface-default`}>
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-canvas-inset" />
+        <div className="min-w-0 flex-1">
+          <div className="flex h-5 min-w-0 items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <div className="h-5 w-5 shrink-0 rounded bg-canvas-inset" />
+              <div className={`${primary ? "w-24" : "w-20"} h-3 rounded-full bg-canvas-inset`} />
+              <div className="h-4 w-10 shrink-0 rounded-sm bg-canvas-inset" />
+            </div>
+            {primary ? (
+              <div className="flex shrink-0 items-center">
+                <div className="h-6 w-6 rounded-md bg-canvas-inset" />
+                <div className="h-6 w-6 rounded-md bg-canvas-inset" />
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-0.5 flex h-4 min-w-0 items-center justify-between gap-2">
+            <div className={`${primary ? "w-32" : "w-24"} h-3 rounded-full bg-canvas-inset`} />
+            {primary ? <div className="h-3 w-16 rounded-full bg-canvas-inset" /> : null}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -229,8 +287,6 @@ function AgentRow({
     handleRowActivate();
   };
   const highlighted = Boolean(agent.highlighted) && primary;
-  // Same vertical pad for Main/Sub so status-dot centers share one light column with spine/elbows.
-  const padY = "py-[5px]";
   // Sub: skill chips sit beside the title; Main keeps them in AgentMeta below.
   const titleSkills =
     secondary && Array.isArray(agent.skills) ? agent.skills.slice(0, 5) : [];
@@ -257,7 +313,7 @@ function AgentRow({
 
   return (
     <div
-      className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-surface-default"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`${AGENT_ROW_CLASS} ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-surface-default"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? handleRowActivate : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}

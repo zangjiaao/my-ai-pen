@@ -882,6 +882,8 @@ async def _set_work_burst_authorize_paused(
     *,
     paused: bool,
     resume_status: str | None = None,
+    request_id: object = None,
+    allow_legacy_request: bool = False,
 ) -> dict | None:
     """Spec #325 H1: pending user authorize does not accrue busy work-seconds.
 
@@ -900,14 +902,44 @@ async def _set_work_burst_authorize_paused(
             normalize_conversation_status,
             transition_conversation,
         )
-        from app.services.work_burst_time import apply_authorize_pause, get_ledger, projection as work_burst_projection
+        from app.services.work_burst_time import (
+            apply_authorize_pause,
+            authorize_pause_request_matches,
+            get_ledger,
+            projection as work_burst_projection,
+        )
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(cid)))
             c = r.scalar_one_or_none()
             if not c:
                 return None
-            context = apply_authorize_pause(dict(c.context or {}), paused=paused)
+            context = dict(c.context or {})
+            ledger_before = get_ledger(context)
+            rid = str(request_id or "").strip()
+            if not paused and rid:
+                active_id = str(ledger_before.get("active_burst_id") or "").strip()
+                active_row = (ledger_before.get("bursts") or {}).get(active_id)
+                stored_request_ids: set[str] = set()
+                if isinstance(active_row, dict):
+                    stored_request_ids = {
+                        str(value).strip()
+                        for value in (active_row.get("authorize_request_ids") or [])
+                        if str(value or "").strip()
+                    }
+                    legacy_rid = str(active_row.get("authorize_request_id") or "").strip()
+                    if legacy_rid:
+                        stored_request_ids.add(legacy_rid)
+                if stored_request_ids:
+                    if not authorize_pause_request_matches(ledger_before, rid):
+                        return None
+                elif not allow_legacy_request:
+                    return None
+            context = apply_authorize_pause(
+                context,
+                paused=paused,
+                request_id=rid or None,
+            )
             ledger = get_ledger(context)
             # R1: if resume settled an idle burst, drop stored umk so next turn is fresh.
             if not paused and not ledger.get("active_burst_id"):
@@ -1692,7 +1724,11 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             }
         # Spec #325 H1: authorize wait is not busy — pause work-burst accrual.
         if conv_id:
-            await _set_work_burst_authorize_paused(conv_id, paused=True)
+            await _set_work_burst_authorize_paused(
+                conv_id,
+                paused=True,
+                request_id=request_id,
+            )
             if len(choice_card_snapshots) > 500:
                 # Drop oldest half (dict insertion order).
                 for drop_id in list(choice_card_snapshots.keys())[:250]:
@@ -4120,6 +4156,34 @@ def _choice_card_snap_for_request(request_id: str | None) -> dict | None:
         return approval
     snap = choice_card_snapshots.get(rid)
     return snap if isinstance(snap, dict) else None
+
+
+async def _latest_persisted_confirm_matches(conv_id: str, request_id: object) -> bool:
+    """Legacy fallback for paused bursts created before request ids were ledger-bound."""
+    cid = str(conv_id or "").strip()
+    rid = str(request_id or "").strip()
+    if not cid or not rid:
+        return False
+    try:
+        from app.db.base import async_session
+        from app.models.message import Message
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Message)
+                .where(
+                    Message.conversation_id == uuid.UUID(cid),
+                    Message.msg_type == "confirm_card",
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+        content = row.content if row and isinstance(row.content, dict) else {}
+        return str(content.get("request_id") or "").strip() == rid
+    except Exception as exc:
+        print(f"[WS] latest persisted confirm lookup error: {exc}")
+        return False
 
 
 def _grant_todo_replace(conv_id: str | None) -> None:
@@ -7119,20 +7183,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     had_live_pending = bool(isinstance(approval, dict) and approval)
                     # Spec #325 H1: leave authorize wait — resume busy accrual if workers still busy.
                     # paused → running on authorize/confirm; paused → canceled on cancel.
-                    if had_live_pending:
-                        dec = str(decision or "").strip().lower()
-                        if dec in {"authorize", "confirm_options", "confirm", "allow", "yes"}:
-                            await _set_work_burst_authorize_paused(
-                                conv_id, paused=False, resume_status="running"
-                            )
-                        elif dec in {"cancel", "deny", "reject", "no"}:
-                            await _set_work_burst_authorize_paused(
-                                conv_id, paused=False, resume_status="canceled"
-                            )
-                        else:
-                            await _set_work_burst_authorize_paused(
-                                conv_id, paused=False, resume_status="running"
-                            )
+                    # Restart-safe: new ledgers bind the request id; legacy ledgers may
+                    # resolve only from the latest persisted confirm card for this Case.
+                    allow_legacy_request = had_live_pending
+                    if not allow_legacy_request:
+                        allow_legacy_request = await _latest_persisted_confirm_matches(
+                            conv_id,
+                            request_id,
+                        )
+                    dec = str(decision or "").strip().lower()
+                    resume_status = (
+                        "canceled"
+                        if dec in {"cancel", "deny", "reject", "no"}
+                        else "running"
+                    )
+                    if str(request_id or "").strip():
+                        await _set_work_burst_authorize_paused(
+                            conv_id,
+                            paused=False,
+                            resume_status=resume_status,
+                            request_id=request_id,
+                            allow_legacy_request=allow_legacy_request,
+                        )
                     # Spec #313 L10: fall back to durable option snapshot when pending already gone.
                     card_source = (
                         approval
