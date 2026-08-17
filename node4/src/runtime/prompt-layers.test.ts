@@ -554,6 +554,48 @@ const baseTask: TaskEnvelope = {
     /no authorized engagement target/i.test(chat),
     "chat-only Runtime forbids recon without a target",
   );
+
+  const ledgerHostOnly = buildSystemPrompt(
+    {
+      ...baseTask,
+      target: { type: "url", value: "http://example.test" },
+      scope: { allow: ["example.test"] },
+    },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerHostOnly.includes("Target/Scope in This turn are for handoff"),
+    "ledger chat-only with host-only target names Target/Scope for handoff",
+  );
+  ok(
+    !ledgerHostOnly.includes("Ledger Q&A and handoff only."),
+    "host-only target is not the empty-engagement ledger line",
+  );
+
+  const ledgerDefaultPort = buildSystemPrompt(
+    {
+      ...baseTask,
+      target: { type: "url", value: "https://example.test:443" },
+      scope: { allow: ["https://example.test:443"] },
+    },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerDefaultPort.includes("Target/Scope in This turn are for handoff"),
+    "ledger chat-only with :443 still treats the engagement as named",
+  );
+
+  const ledgerEmpty = buildSystemPrompt(
+    { ...baseTask, target: {}, scope: {} },
+    DEFAULT_SEAT_PACK,
+    { chatOnly: true },
+  );
+  ok(
+    ledgerEmpty.includes("Ledger Q&A and handoff only."),
+    "ledger chat-only without target stays Q&A/handoff",
+  );
 }
 
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");

@@ -25,6 +25,7 @@ import {
   normalizeProductStopReason,
 } from "./loop-policy.js";
 import { selectNewUntestedSurfaces } from "./surface-harness.js";
+import { hasNamedEngagement } from "./attack-surface.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { SubagentHost } from "./subagent.js";
@@ -1020,23 +1021,7 @@ function abortReasonIsHandoff(signal?: AbortSignal): boolean {
 export function isChatOnlyTask(task: TaskEnvelope, packId?: string): boolean {
   const pack = String(packId || task.engagement || task.role || "").toLowerCase().trim();
   if (pack === "default" || pack === "consult" || pack === "workspace") return true;
-  const target = task.target && typeof task.target === "object" ? task.target : {};
-  const value = String(
-    (target as { value?: unknown }).value
-      ?? (target as { url?: unknown }).url
-      ?? (target as { host?: unknown }).host
-      ?? "",
-  ).trim();
-  if (value) return false;
-  const allow = task.scope && typeof task.scope === "object"
-    ? (task.scope as { allow?: unknown }).allow
-    : undefined;
-  if (Array.isArray(allow)) {
-    for (const item of allow) {
-      if (String(item || "").trim()) return false;
-    }
-  }
-  return true;
+  return !hasNamedEngagement(task);
 }
 
 /** Built-in workspace seats: conversation + ledger/report tools, not recon execution. */

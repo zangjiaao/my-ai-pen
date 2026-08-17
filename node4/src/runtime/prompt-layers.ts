@@ -17,7 +17,7 @@ import {
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
-import { engagementPortFromTask } from "./attack-surface.js";
+import { engagementPortFromTask, hasNamedEngagement } from "./attack-surface.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
   promptQuotedLabel,
@@ -171,7 +171,7 @@ function isLedgerPackId(packId: string): boolean {
 }
 
 function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
-  const named = Boolean(engagementPortFromTask(task));
+  const named = hasNamedEngagement(task);
   if (isLedgerPackId(packId)) {
     return named
       ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."

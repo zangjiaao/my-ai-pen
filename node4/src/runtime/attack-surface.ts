@@ -125,6 +125,31 @@ export function engagementPortFromTask(task?: {
   return "";
 }
 
+/** True when TARGET / scope.allow carry structured content. Port is not required. */
+export function hasNamedEngagement(task?: {
+  target?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+} | null): boolean {
+  if (!task) return false;
+  const target = task.target && typeof task.target === "object" ? task.target : {};
+  const value = String(
+    (target as { value?: unknown }).value
+      ?? (target as { url?: unknown }).url
+      ?? (target as { host?: unknown }).host
+      ?? "",
+  ).trim();
+  if (value) return true;
+  const allow = task.scope && typeof task.scope === "object"
+    ? (task.scope as { allow?: unknown }).allow
+    : undefined;
+  if (Array.isArray(allow)) {
+    for (const item of allow) {
+      if (String(item || "").trim()) return true;
+    }
+  }
+  return false;
+}
+
 /** Explicit host:port pairs from TARGET / scope.allow when a port is named. */
 export function scopeOriginsFromTask(task: {
   target?: Record<string, unknown>;
