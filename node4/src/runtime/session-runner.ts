@@ -1075,7 +1075,10 @@ export async function runNode4Task(
     // Spec #283 I0.9 + #354: shared captain end policy (package settle/interrupt → park;
     // Session delete / Case close pending → dispose via applyCaptainEndDisposition).
     applyCaptainEndDisposition({
-      decision: decideParkOnEnd({ aborted: cancelled() }),
+      decision: decideParkOnEnd({
+        aborted: cancelled(),
+        expertTransfer: abortReasonIsHandoff(signal),
+      }),
       entry: {
         conversationId: task.conversationId,
         expertId: String(task.expertId || pack.id || ""),
