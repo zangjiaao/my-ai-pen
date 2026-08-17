@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -205,6 +206,12 @@ async def update_expert(
     db: AsyncSession = Depends(get_db),
 ):
     eid = _parse_uuid(expert_id)
+    if body.is_default is True:
+        # Serialize global default selection in a stable row order. The partial
+        # unique index remains the final invariant for writers outside this API.
+        await db.execute(
+            select(Expert.id).order_by(Expert.id).with_for_update()
+        )
     expert = await db.get(Expert, eid)
     if not expert:
         raise HTTPException(404, "Expert not found")
@@ -303,7 +310,16 @@ async def update_expert(
             status="success",
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        if body.is_default is True:
+            raise HTTPException(
+                409,
+                "Default conversation partner changed concurrently; refresh and retry",
+            ) from e
+        raise
     await db.refresh(expert)
     return expert_to_dict(
         expert,

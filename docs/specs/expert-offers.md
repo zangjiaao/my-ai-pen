@@ -105,8 +105,10 @@ Rules:
 - `pack_id` must be on the bound node’s **platform offers** (offers gate). Offline node may still hold offers as **queued** intent — create/edit Expert remains allowed as **configuration**.
 - Create/edit does **not** require the bound node to be online; product UI must show **offline / not schedulable** when `node_status !== online`.
 - Cannot bind a product Expert to a non-worker / retired “platform agent” node id (if any legacy id remains during migration).
+- At most one Expert may have `is_default=true`. Setting a new default is serialized in the API and protected by a database partial unique index; concurrent requests resolve to one committed default.
+- A default Expert must be enabled and bound to an online Node. The backend rejects ineligible or conflicting default updates.
 - Audit: `expert.create` / `expert.update` / `expert.delete`.
-- **`default` is not** a row in `experts` (built-in seat; not user-created).
+- The built-in `default` pack is not an installable offer. A configured default conversation partner is still an Expert row marked with `is_default=true`.
 
 ## Offline Node & pack honesty
 
