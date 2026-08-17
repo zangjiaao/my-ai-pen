@@ -168,6 +168,72 @@ function hostCreatedMs(h: TreeHost): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+const ASSET_COLUMNS_CLASS = "flex items-start gap-3";
+const ASSET_COLUMN_CLASS = "flex min-w-0 flex-1 flex-col gap-3";
+const ASSET_HOST_CARD_CLASS = "flex flex-col rounded-lg border px-5 py-4";
+
+function AssetPageSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="正在加载资产"
+      data-testid="assets-loading-skeleton"
+      className="flex min-h-0 flex-1 flex-col animate-pulse"
+    >
+      <div className="shrink-0 px-6 pt-6">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="h-10 min-w-[12rem] rounded-md border border-hairline bg-surface" />
+          <div className="h-10 w-28 rounded-md border border-hairline bg-surface" />
+          <div className="h-10 w-36 rounded-md border border-hairline bg-surface" />
+          <div className="ml-auto h-10 w-24 rounded-md bg-canvas-inset" />
+        </div>
+        <div className="flex h-10 items-end gap-5 border-b border-hairline">
+          {[52, 72, 64].map((width, index) => (
+            <div
+              key={width}
+              className={`h-7 border-b-2 ${index === 0 ? "border-ink/20" : "border-transparent"}`}
+              style={{ width: `${width}px` }}
+            >
+              <div className="h-3 w-full rounded-full bg-canvas-inset" />
+            </div>
+          ))}
+          <div className="ml-auto mb-2 h-7 w-16 rounded-md border border-hairline bg-surface" />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
+        <div className={ASSET_COLUMNS_CLASS}>
+          {[0, 1].map((column) => (
+            <div key={column} className={ASSET_COLUMN_CLASS}>
+              {[88, 72].map((width, index) => (
+                <div
+                  key={`${column}-${index}`}
+                  className={`${ASSET_HOST_CARD_CLASS} min-h-[9rem] border-hairline bg-canvas`}
+                >
+                  <div className="flex h-6 items-center justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <div className="h-4 w-4 rounded bg-canvas-inset" />
+                      <div
+                        className="h-4 rounded-full bg-canvas-inset"
+                        style={{ width: `${width}px` }}
+                      />
+                    </div>
+                    <div className="h-5 w-12 rounded-md bg-canvas-inset" />
+                  </div>
+                  <div className="mt-3 h-3 w-32 rounded-full bg-canvas-inset" />
+                  <div className="mt-auto flex gap-2 pt-4">
+                    <div className="h-5 w-16 rounded-full bg-canvas-inset" />
+                    <div className="h-5 w-20 rounded-full bg-canvas-inset" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function sortHosts(hosts: TreeHost[], key: HostSortKey): TreeHost[] {
   const list = [...hosts];
   list.sort((a, b) => {
@@ -211,6 +277,7 @@ export default function AssetPage() {
   const [allTags, setAllTags] = useState<string[]>([]);
   const [allGroups, setAllGroups] = useState<{ id: string; name: string }[]>([]);
   const [groupRows, setGroupRows] = useState<AssetGroup[]>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -282,6 +349,8 @@ export default function AssetPage() {
       setActiveSectionId((prev) => (navIds.includes(prev) ? prev : ALL_SECTION));
     } catch (err) {
       setError(err instanceof Error ? err.message : "资产加载失败");
+    } finally {
+      setInitialLoading(false);
     }
   };
 
@@ -783,6 +852,10 @@ export default function AssetPage() {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {initialLoading ? (
+            <AssetPageSkeleton />
+          ) : (
+            <>
           <div className="shrink-0 px-6 pt-6" ref={filterBarRef}>
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
@@ -1022,9 +1095,9 @@ export default function AssetPage() {
                     : "这一组还没有主机。添加主机时选进这个组即可。"}
               </p>
             ) : (
-              <div className="flex items-start gap-3">
+              <div className={ASSET_COLUMNS_CLASS}>
                 {hostColumns.map((column, colIdx) => (
-                  <div key={colIdx} className="flex min-w-0 flex-1 flex-col gap-3">
+                  <div key={colIdx} className={ASSET_COLUMN_CLASS}>
                 {column.map((host) => {
                   const catalog = assetById.get(host.id);
                   const aliases = host.aliases?.length ? host.aliases : aliasesFromAsset(catalog);
@@ -1040,7 +1113,7 @@ export default function AssetPage() {
                     <article
                       key={host.id}
                       onClick={() => toggleSelected(host.id)}
-                      className={`flex cursor-pointer flex-col rounded-lg border px-5 py-4 ${
+                      className={`${ASSET_HOST_CARD_CLASS} cursor-pointer ${
                         selected ? "border-ink bg-surface" : "border-hairline bg-canvas hover:bg-surface"
                       }`}
                     >
@@ -1281,6 +1354,8 @@ export default function AssetPage() {
               </div>
             )}
           </div>
+            </>
+          )}
         </main>
       </div>
 

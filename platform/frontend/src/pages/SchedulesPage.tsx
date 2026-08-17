@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import PageToolbarSkeleton from "../components/PageToolbarSkeleton";
 import { authFetch } from "../lib/api";
 import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -64,11 +65,45 @@ const EMPTY_FORM = {
   fire_immediately: false,
 };
 
+const SCHEDULES_TABLE_CONTAINER_CLASS =
+  "overflow-x-auto rounded-md border border-hairline-soft bg-surface-raised";
+const SCHEDULES_TABLE_CLASS = "w-full min-w-[900px] table-fixed";
+const SCHEDULES_ROW_CLASS =
+  "border-b border-hairline-soft last:border-0";
+
+function SchedulesTableSkeletonRows() {
+  return (
+    <>
+      {[82, 64, 76, 58, 88].map((targetWidth, index) => (
+        <tr key={index} aria-hidden="true" className={`${SCHEDULES_ROW_CLASS} h-[3.25rem]`}>
+          <td className="px-3 py-2.5">
+            <div className="space-y-2">
+              <div
+                className="h-3 rounded-full bg-canvas-inset"
+                style={{ width: `${targetWidth}%` }}
+              />
+              <div className="h-2.5 w-32 rounded-full bg-canvas-inset" />
+            </div>
+          </td>
+          <td className="px-3 py-2.5"><div className="h-3 w-14 rounded-full bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-3 w-12 rounded-full bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-3 w-20 rounded-full bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-3 w-24 rounded-full bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-3 w-24 rounded-full bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-5 w-10 rounded bg-canvas-inset" /></td>
+          <td className="px-3 py-2.5"><div className="h-3 w-16 rounded-full bg-canvas-inset" /></td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
 export default function SchedulesPage() {
   useRenderAudit("SchedulesPage");
   const [items, setItems] = useState<Schedule[]>([]);
   const [nodes, setNodes] = useState<NodeOpt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
@@ -89,6 +124,7 @@ export default function SchedulesPage() {
       setError(e instanceof Error ? e.message : "加载失败");
     } finally {
       setLoading(false);
+      setInitialLoading(false);
     }
   }, []);
 
@@ -220,6 +256,14 @@ export default function SchedulesPage() {
         <TopBar title="任务计划" />
         <div className="flex flex-1 overflow-hidden">
           <main className="flex-1 overflow-y-auto p-6">
+            {initialLoading ? (
+              <PageToolbarSkeleton
+                controls={[192, 136]}
+                trailingWidth={96}
+                label="正在加载任务计划操作栏"
+                testId="schedules-toolbar-loading-skeleton"
+              />
+            ) : (
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 value={search}
@@ -245,6 +289,7 @@ export default function SchedulesPage() {
                 新建计划
               </button>
             </div>
+            )}
 
             {error && (
               <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
@@ -257,8 +302,13 @@ export default function SchedulesPage() {
               </div>
             )}
 
-            <div className="overflow-x-auto rounded-md border border-hairline-soft bg-surface-raised">
-              <table className="w-full min-w-[900px] table-fixed">
+            <div
+              className={`${SCHEDULES_TABLE_CONTAINER_CLASS} ${loading && items.length === 0 ? "animate-pulse" : ""}`}
+              data-testid={loading && items.length === 0 ? "schedules-loading-skeleton" : undefined}
+              role={loading && items.length === 0 ? "status" : undefined}
+              aria-label={loading && items.length === 0 ? "正在加载任务计划" : undefined}
+            >
+              <table className={SCHEDULES_TABLE_CLASS}>
                 <thead>
                   <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
                     <th className="min-w-0 px-3 py-2.5">目标</th>
@@ -272,12 +322,8 @@ export default function SchedulesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={8} className="px-3 py-10 text-center text-sm text-ink-muted">
-                        加载中…
-                      </td>
-                    </tr>
+                  {loading && items.length === 0 ? (
+                    <SchedulesTableSkeletonRows />
                   ) : filtered.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-3 py-10 text-center text-sm text-ink-muted">
@@ -290,7 +336,7 @@ export default function SchedulesPage() {
                     filtered.map((s) => (
                       <tr
                         key={s.id}
-                        className="border-b border-hairline-soft last:border-0 hover:bg-canvas-inset/50"
+                        className={`${SCHEDULES_ROW_CLASS} hover:bg-canvas-inset/50`}
                       >
                         <td className="min-w-0 px-3 py-2.5">
                           <p className="truncate font-mono text-xs text-ink" title={s.target}>

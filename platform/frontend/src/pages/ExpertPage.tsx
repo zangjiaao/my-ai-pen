@@ -7,6 +7,7 @@ import { Link } from "react-router-dom";
 import { Plus, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import PageToolbarSkeleton from "../components/PageToolbarSkeleton";
 import { ApiError, authFetch } from "../lib/api";
 import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
@@ -46,11 +47,51 @@ type ExpertRow = {
   created_at?: string | null;
 };
 
+const EXPERT_GRID_CLASS = "grid grid-cols-1 gap-4 md:grid-cols-2";
+const EXPERT_CARD_CLASS =
+  "group flex flex-col rounded-lg border border-hairline bg-canvas p-4 text-left";
+
+function ExpertGridSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="正在加载专家"
+      data-testid="experts-loading-skeleton"
+      className={`${EXPERT_GRID_CLASS} animate-pulse`}
+    >
+      {[0, 1, 2, 3].map((index) => (
+        <div key={index} aria-hidden="true" className={`${EXPERT_CARD_CLASS} min-h-[10rem]`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex h-6 items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-canvas-inset" />
+                <div className="h-4 w-24 rounded-full bg-canvas-inset" />
+                <div className="h-5 w-12 rounded-full bg-canvas-inset" />
+              </div>
+              <div className="mt-0.5 h-3.5 w-32 rounded-full bg-canvas-inset" />
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-12 rounded-full bg-canvas-inset" />
+              <div className="h-5 w-20 rounded-full bg-canvas-inset" />
+              <div className="h-2.5 w-12 rounded-full bg-canvas-inset" />
+            </div>
+            <div className="h-3 w-40 rounded-full bg-canvas-inset" />
+            <div className="h-3 w-24 rounded-full bg-canvas-inset" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ExpertPage() {
   useRenderAudit("ExpertPage");
   const [experts, setExperts] = useState<ExpertRow[]>([]);
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [packFilter, setPackFilter] = useState<string>("全部");
@@ -78,6 +119,7 @@ export default function ExpertPage() {
       setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "加载失败");
     } finally {
       setLoading(false);
+      setInitialLoading(false);
     }
   }, []);
 
@@ -125,6 +167,14 @@ export default function ExpertPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title="专家管理" />
         <div className="flex-1 overflow-y-auto p-6">
+          {initialLoading ? (
+            <PageToolbarSkeleton
+              controls={[192, 120, 76]}
+              trailingWidth={96}
+              label="正在加载专家操作栏"
+              testId="experts-toolbar-loading-skeleton"
+            />
+          ) : (
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <input
               value={search}
@@ -161,11 +211,12 @@ export default function ExpertPage() {
               创建专家
             </button>
           </div>
+          )}
 
           {error && <p className="mb-3 text-sm text-severity-critical">{error}</p>}
 
-          {loading ? (
-            <p className="text-sm text-ink-muted">加载中…</p>
+          {loading && experts.length === 0 ? (
+            <ExpertGridSkeleton />
           ) : filtered.length === 0 ? (
             <p className="text-sm text-ink-muted">
               {experts.length === 0
@@ -173,7 +224,7 @@ export default function ExpertPage() {
                 : "没有匹配的专家，请调整搜索或筛选。"}
             </p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className={EXPERT_GRID_CLASS}>
               {filtered.map((e) => {
                 const online = e.node_status === "online";
                 const schedulable = online && e.enabled !== false;
@@ -184,7 +235,7 @@ export default function ExpertPage() {
                     key={e.id}
                     type="button"
                     onClick={() => setSelected(e)}
-                    className="group flex flex-col rounded-lg border border-hairline bg-canvas p-4 text-left transition-colors hover:bg-surface-default"
+                    className={`${EXPERT_CARD_CLASS} transition-colors hover:bg-surface-default`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
