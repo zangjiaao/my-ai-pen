@@ -77,7 +77,7 @@ Next send still follows existing wire law: explicit composer Graph is permission
 | **L10** | No platform NLP / keyword table inventing partner, Graph, or Goal from chat text. |
 | **L11** | Text draft in the input box is **out of this Spec** as Case SOT (may stay component-local). |
 | **L12** | Do not “fix” remount by keep-alive-mounting the conversation page across `/experts` etc. Restore from Case/Session fields. |
-| **L13** | Case-switch loading is explicit UI state shared by the conversation, composer, and open right panel. Do not show empty-Case chrome or a first-catalog Expert while B is still loading. |
+| **L13** | Case-switch loading is explicit UI state shared by the conversation, composer, and open right panel. Do not show empty-Case chrome or a first-catalog Expert while B is still loading. Only the latest Case-open generation may drop that skeleton; a transient `/state` failure keeps it until the first successful snapshot. Chip edits while restore is still pending must not mark the Case restored. |
 
 ---
 
@@ -102,7 +102,7 @@ Prefer **one primary pure seam**. Do not add a second persist store.
 | Seam | Behavior |
 |---|---|
 | **S1 Composer restore resolver (primary, pure)** | `(snapshot, mentionTargets) → { partner, engagementTemplate, goalMode }`. Partner from `task_context.expert_id` matched to a schedulable mention; Graph from that expert’s Session (`sessions[expert_id]` or already-projected AgentRow `work_mode` / `graph_id` on the snapshot); Goal from `task_context.goal_mode` iff pentest partner. Missing/offline expert → #299 default + 不指定 + Goal off. Session Free + Case sticky Graph → 不指定. |
-| **S2 Case-open apply (thin adapter)** | Conversation page calls S1 **once** when Case id + snapshot + mention catalog are ready. Switching Case or opening blank home resets then reapplies (or #299). Heartbeat / `refreshConversationState` must **not overwrite** after that once-on-open. A non-404 open `/state` failure must **not** restore from empty message archaeology (no `task_context` / `sessions`) or mark the Case restored; the first successful `/state` is the open restore. |
+| **S2 Case-open apply (thin adapter)** | Conversation page calls S1 **once** when Case id + snapshot + mention catalog are ready. Switching Case or opening blank home resets then reapplies (or #299). Heartbeat / `refreshConversationState` must **not overwrite** after that once-on-open. A non-404 open `/state` failure must **not** restore from empty message archaeology (no `task_context` / `sessions`) or mark the Case restored; keep the Case-switch skeleton and wait for the first successful `/state`. Only the latest open-generation may clear that skeleton (an older overlapping same-Case load must not). Chip edits while restore is pending must not complete once-on-open. |
 | **S3 Snapshot fields (only if S1 cannot see Session mode)** | Prefer existing `/state` fields (`task_context`, `strix_agents` / participants already lifting Session `work_mode`). Add a thin `sessions` / composer-restore projection **only** if those fields are absent for idle Cases. Do not invent a new SOT. |
 | **S4 Blank-home draft (optional)** | Isolated `sessionStorage` key for `/` with no Case. Discard on first Case id. Never read when `/:caseId` is open. |
 

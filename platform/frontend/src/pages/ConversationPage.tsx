@@ -19,10 +19,13 @@ import {
   engagementTemplateFromGraphId,
   pickDefaultMentionTarget,
   restoreComposerFromCaseSnapshot,
+  shouldAcceptComposerChipOverride,
   shouldPollConversationSnapshot,
+  shouldReleaseCaseLoadingSkeleton,
   shouldShowCaseLoadingSkeleton,
   shouldShowComposerLoadingSkeleton,
   type ComposerRestoreSnapshot,
+  type ComposerSnapshotAction,
 } from "../lib/composerCaseRestore";
 import MessageRenderer, {
   AgentPendingCard,
@@ -316,6 +319,7 @@ export default function ConversationPage() {
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const stateRefreshSeqRef = useRef(0);
+  const caseOpenSeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
@@ -1041,6 +1045,7 @@ export default function ConversationPage() {
       if (action === "state_and_restore") {
         applyComposerRestoreFromSnapshot(id, state);
       }
+      setOpeningCaseId((current) => current === id ? null : current);
       // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
@@ -2097,8 +2102,10 @@ export default function ConversationPage() {
   }, []);
 
   const loadConversation = useCallback(async (id: string | null) => {
+    const requestSeq = ++caseOpenSeqRef.current;
     stateRefreshSeqRef.current += 1;
     setOpeningCaseId(id);
+    let snapshotAction: ComposerSnapshotAction | null = null;
     setLiveStreams(clearLiveStreams());
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "clear" }));
     if (!id) {
@@ -2140,27 +2147,27 @@ export default function ConversationPage() {
 
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
-      const action = decideComposerSnapshotAction({
+      snapshotAction = decideComposerSnapshotAction({
         requestedCaseId: id,
         currentCaseId: caseRouteLoadedRef.current,
         outcome: "success",
         restoredCaseId: composerRestoreCaseIdRef.current,
       });
-      if (action === "ignore") return;
+      if (snapshotAction === "ignore") return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
-      if (action === "state_and_restore") {
+      if (snapshotAction === "state_and_restore") {
         applyComposerRestoreFromSnapshot(id, state);
       }
     } catch (error) {
-      const action = decideComposerSnapshotAction({
+      snapshotAction = decideComposerSnapshotAction({
         requestedCaseId: id,
         currentCaseId: caseRouteLoadedRef.current,
         outcome: error instanceof ApiError && error.status === 404 ? "not_found" : "failure",
         restoredCaseId: composerRestoreCaseIdRef.current,
       });
-      if (action === "ignore") return;
-      if (action === "clear_case") {
+      if (snapshotAction === "ignore") return;
+      if (snapshotAction === "clear_case") {
         caseRouteLoadedRef.current = null;
         localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
@@ -2183,7 +2190,13 @@ export default function ConversationPage() {
       // Empty archaeology has no task_context / sessions — do not #299-and-mark
       // restored. First successful /state (heartbeat or WS refresh) is the open restore.
     } finally {
-      setOpeningCaseId((current) => current === id ? null : current);
+      if (shouldReleaseCaseLoadingSkeleton({
+        requestSeq,
+        latestSeq: caseOpenSeqRef.current,
+        snapshotAction,
+      })) {
+        setOpeningCaseId((current) => current === id ? null : current);
+      }
     }
   }, [
     applyComposerRestoreFromSnapshot,
@@ -2490,6 +2503,10 @@ export default function ConversationPage() {
   );
 
   const markComposerRestoreHandled = useCallback(() => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
     if (!activeId) return;
     composerRestoreCaseIdRef.current = activeId;
     pendingRestoreSnapshotRef.current = null;
@@ -2498,6 +2515,10 @@ export default function ConversationPage() {
   const handleSelectPartner = useCallback((target: MentionTarget) => {
     // Spec #299: offline-bound Expert is not a conversation partner.
     if (target.selectable === false) return;
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
     markComposerRestoreHandled();
     selectedMentionRef.current = target;
     setSelectedMention(target);
@@ -2505,17 +2526,25 @@ export default function ConversationPage() {
       setGoalModeEnabled(false);
       setEngagementTemplate(null);
     }
-  }, [markComposerRestoreHandled]);
+  }, [activeId, markComposerRestoreHandled]);
 
   const handleEngagementTemplate = useCallback((value: EngagementTemplateId | null) => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
     markComposerRestoreHandled();
     setEngagementTemplate(value);
-  }, [markComposerRestoreHandled]);
+  }, [activeId, markComposerRestoreHandled]);
 
   const handleGoalMode = useCallback((enabled: boolean) => {
+    if (!shouldAcceptComposerChipOverride({
+      activeCaseId: activeId,
+      restoredCaseId: composerRestoreCaseIdRef.current,
+    })) return;
     markComposerRestoreHandled();
     setGoalModeEnabled(enabled);
-  }, [markComposerRestoreHandled]);
+  }, [activeId, markComposerRestoreHandled]);
 
   const handleImportReport = useCallback(async (file: File | null) => {
     if (!file) return;

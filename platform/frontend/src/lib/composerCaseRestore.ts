@@ -58,6 +58,31 @@ export function shouldPollConversationSnapshot(input: {
   return Boolean(input.activeCaseId && (input.running || !input.snapshotLoaded));
 }
 
+/**
+ * Only the latest Case-open generation may drop the switch skeleton.
+ * A transient `/state` failure keeps it up so the first successful snapshot
+ * can still finish once-on-open restore.
+ */
+export function shouldReleaseCaseLoadingSkeleton(input: {
+  requestSeq: number;
+  latestSeq: number;
+  snapshotAction: ComposerSnapshotAction | null;
+}): boolean {
+  if (input.requestSeq !== input.latestSeq) return false;
+  if (input.snapshotAction === "keep_restore_pending") return false;
+  if (input.snapshotAction === "ignore") return false;
+  return true;
+}
+
+/** Chip edits must not complete restore while the Case snapshot is still pending. */
+export function shouldAcceptComposerChipOverride(input: {
+  activeCaseId: string | null;
+  restoredCaseId: string | null | undefined;
+}): boolean {
+  if (!input.activeCaseId) return true;
+  return input.restoredCaseId === input.activeCaseId;
+}
+
 export function shouldShowCaseLoadingSkeleton(input: {
   activeCaseId: string | null;
   openingCaseId: string | null;
