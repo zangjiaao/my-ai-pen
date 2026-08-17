@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
+import { engagementPortFromTask } from "../runtime/attack-surface.js";
 
 /**
  * Pure policy: enrich path must not create Hosts.
@@ -115,6 +116,20 @@ export function createPlatformGetAssetTool(runtime: ToolRuntime): AgentTool<any>
   };
 }
 
+/** Structured port for list_vulnerabilities: explicit > task Target/Scope > none. */
+export function resolveListVulnerabilitiesPort(input: {
+  port?: unknown;
+  allPorts?: boolean;
+  task?: { target?: Record<string, unknown>; scope?: Record<string, unknown> };
+}): { port: string; appliedDefault: boolean } {
+  if (input.allPorts) return { port: "", appliedDefault: false };
+  const explicit = String(input.port ?? "").trim();
+  if (explicit) return { port: explicit, appliedDefault: false };
+  const fromTask = engagementPortFromTask(input.task);
+  if (fromTask) return { port: fromTask, appliedDefault: true };
+  return { port: "", appliedDefault: false };
+}
+
 export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_list_vulnerabilities",
@@ -123,6 +138,8 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       "List findings from the **owner ledger** (same DB as 漏洞台账). " +
       "When Scope Host is known, **pass asset_id** (from platform_list_assets / scope_intel). " +
       "Look up when you approach a path/module — pass **port** and/or **q** (title/path). " +
+      "When port is omitted, the tool uses this-turn Target/Scope port if one is named. " +
+      "Pass all_ports=true only to list the whole Host (capped index; not a kickoff dump). " +
       "Do not dump the host ledger at kickoff. Priors are an index, not a retest queue. " +
       "Response: count=this page, total=match size, has_more. Default limit 50 (max 200). " +
       "multiple_discoveries=true means rediscovered before. Read-only.",
@@ -142,6 +159,11 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       q: Type.Optional(
         Type.String({ description: "Title / location / description needle for the surface you are about to test" }),
       ),
+      all_ports: Type.Optional(
+        Type.Boolean({
+          description: "If true, do not apply this-turn Target port — host-wide index (capped without q)",
+        }),
+      ),
     }),
     async execute(_id: string, params: any) {
       const limit = Math.min(200, Math.max(1, Number(params.limit || 50) || 50));
@@ -151,7 +173,12 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       const assetIds = Array.isArray(params.asset_ids)
         ? params.asset_ids.map(String).map((s) => s.trim()).filter(Boolean)
         : [];
-      const port = String(params.port || "").trim();
+      const resolved = resolveListVulnerabilitiesPort({
+        port: params.port,
+        allPorts: params.all_ports === true || params.allPorts === true,
+        task: runtime.task,
+      });
+      const port = resolved.port;
       const q = String(params.q || params.search || "").trim();
       const unscoped = !port && !q;
       const effectiveLimit = unscoped ? Math.min(limit, 12) : limit;
@@ -167,17 +194,18 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Age
       if (port) path += `&port=${encodeURIComponent(port)}`;
       if (q) path += `&q=${encodeURIComponent(q)}`;
       const res = await platformLedgerFetch(runtime, "GET", path);
+      const extra: Record<string, unknown> = {};
+      if (unscoped) {
+        extra.guidance =
+          "Unscoped list is an index only (capped). Pass port= and/or q= for the surface you are testing. Do not treat this page as the host's full set or a kickoff retest queue.";
+      } else if (resolved.appliedDefault) {
+        extra.applied_port = port;
+        extra.guidance =
+          `Applied this-turn Target/Scope port=${port}. Pass all_ports=true for a host-wide index (capped). This page is not a kickoff retest queue.`;
+      }
       const data =
         res.data && typeof res.data === "object" && !Array.isArray(res.data)
-          ? {
-              ...(res.data as Record<string, unknown>),
-              ...(unscoped
-                ? {
-                    guidance:
-                      "Unscoped list is an index only (capped). Pass port= and/or q= for the surface you are testing. Do not treat this page as the host's full set or a kickoff retest queue.",
-                  }
-                : {}),
-            }
+          ? { ...(res.data as Record<string, unknown>), ...extra }
           : res.data;
       return jsonResult(data, { isError: !res.ok });
     },

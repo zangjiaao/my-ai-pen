@@ -39,6 +39,8 @@ export type RecentObservation = {
 /** Keep enough act history so book-time proof can still find the shell/script that produced it. */
 export const RECENT_OBS_CAP = 80;
 const MIN_GROUND_NEEDLE = 24;
+/** Proof must share a contiguous span with act stdout — short tokens (emails) are not enough. */
+const MIN_CONTIGUOUS_PROOF = 48;
 
 export type EmitEvidenceOptions = {
   /** Override evidence type stored on Case (default from kind). */
@@ -225,6 +227,39 @@ function observationMatchesProof(r: RecentObservation, needles: string[]): boole
   return needles.some((n) => hay.includes(n));
 }
 
+function excerptHaystack(r: RecentObservation): string {
+  return normalizeForMatch(String(r.excerpt || ""));
+}
+
+/** Longest contiguous proof span that appears in the observation excerpt. */
+export function contiguousProofHit(proof: string, excerpt: string): number {
+  const p = normalizeForMatch(proof);
+  const hay = normalizeForMatch(excerpt);
+  if (!p || !hay) return 0;
+  if (p.length < MIN_CONTIGUOUS_PROOF) {
+    return hay.includes(p) ? p.length : 0;
+  }
+  const max = Math.min(p.length, 160);
+  for (let len = max; len >= MIN_CONTIGUOUS_PROOF; len -= 1) {
+    for (let i = 0; i + len <= p.length; i += 1) {
+      if (hay.includes(p.slice(i, i + len))) return len;
+    }
+  }
+  return 0;
+}
+
+function locationOverlapScore(r: RecentObservation, location?: string): number {
+  const loc = normalizeForMatch(location || "");
+  if (!loc) return 0;
+  const hay = normalizeForMatch(
+    `${r.path_or_url || ""} ${r.excerpt || ""} ${r.summary || ""} ${r.capture?.url || ""} ${r.capture?.command || ""}`,
+  );
+  if (hay.includes(loc)) return 2;
+  const pathOnly = loc.replace(/^https?:\/\/[^/]+/i, "");
+  if (pathOnly.length >= 8 && hay.includes(pathOnly)) return 1;
+  return 0;
+}
+
 /** Prefer matches that still carry the command/script that produced the result. */
 function captureRichness(r: RecentObservation): number {
   const c = r.capture;
@@ -342,6 +377,7 @@ function preferRicherCapture(
 export function proofGroundedInRecentWork(
   proof: string,
   recent: RecentObservation[] | undefined,
+  opts?: { location?: string },
 ): { ok: boolean; reason?: string; match?: RecentObservation } {
   const p = normalizeForMatch(proof);
   if (p.length < MIN_GROUND_NEEDLE) {
@@ -361,24 +397,31 @@ export function proofGroundedInRecentWork(
   const matches: RecentObservation[] = [];
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const r = list[i]!;
-    if (observationMatchesProof(r, needles)) matches.push(r);
+    if (contiguousProofHit(proof, excerptHaystack(r)) < MIN_CONTIGUOUS_PROOF && p.length >= MIN_CONTIGUOUS_PROOF) {
+      continue;
+    }
+    if (observationMatchesProof(r, needles) || contiguousProofHit(proof, excerptHaystack(r)) >= MIN_CONTIGUOUS_PROOF) {
+      matches.push(r);
+    }
   }
   if (!matches.length) {
     return {
       ok: false,
       reason:
-        "proof not found in recent tool outputs — re-run one short act (shell/session/http) that shows the effect, then finding(confirm) with proof= an exact substring from that output (response body / stdout / reflection), not a paraphrased guess",
+        "proof not found as a contiguous excerpt in recent tool outputs — re-run one short act (shell/session/http) that shows the effect, then finding(confirm) with proof= an exact substring (≥48 chars) from that output, not a paraphrased guess",
     };
   }
 
-  // Prefer the match that still has the command/script (not a thin later echo).
+  const loc = String(opts?.location || "").trim();
   matches.sort((a, b) => {
-    const dr = captureRichness(b) - captureRichness(a);
-    if (dr !== 0) return dr;
+    const ld = locationOverlapScore(b, loc) - locationOverlapScore(a, loc);
+    if (ld !== 0) return ld;
     return b.at - a.at;
   });
   let match = matches[0]!;
-  match = preferRicherCapture(match, list, needles);
+  if (captureRichness(match) < 4) {
+    match = preferRicherCapture(match, list, needles);
+  }
   match = enrichMatchWithScriptBody(match, list);
   return { ok: true, match };
 }

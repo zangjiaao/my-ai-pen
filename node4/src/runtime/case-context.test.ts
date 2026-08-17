@@ -141,4 +141,27 @@ assert.ok(credAt >= 0, "credential summary must be injected");
 assert.ok(credAt < credsVsPriors.indexOf("Prior findings"), "living notebook before prior dump");
 assert.ok(credAt < credsVsPriors.indexOf("instructions.php"), "credential kind before path_hint");
 assert.match(credsVsPriors, /Use first \(try these creds/);
+
+{
+  const mixed = formatCaseContextInjection(
+    {
+      scope_intel: {
+        hosts: [{ address: "host.docker.internal", on_ledger: true, ports: ["3000", "8080"] }],
+        prior_findings: { total: 196, open_or_retest: 196 },
+        surface_sketch: {
+          known_paths: ["/rest/user"],
+          sample_urls: [
+            "http://host.docker.internal:3000/",
+            "http://host.docker.internal:8080/vulnerabilities/sqli/",
+          ],
+        },
+      },
+    },
+    { engagementPort: "3000" },
+  );
+  assert.match(mixed, /on Scope port :3000/);
+  assert.match(mixed, /:3000\//);
+  assert.doesNotMatch(mixed, /vulnerabilities\/sqli/);
+}
+
 console.log("case-context.test.ts ok");

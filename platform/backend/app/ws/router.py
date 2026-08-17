@@ -3881,6 +3881,7 @@ async def _remember_conversation_task(
     asset_id: str | None = None,
     work_mode: str | None = None,
     workset_item_id: str | None = None,
+    handoff_summary: str | None = None,
 ):
     try:
         from app.db.base import async_session
@@ -3904,6 +3905,11 @@ async def _remember_conversation_task(
             aid = str(asset_id or prev_task.get("asset_id") or "").strip()
             if aid:
                 task_blob["asset_id"] = aid
+            hs = str(handoff_summary or "").strip()
+            if hs:
+                task_blob["handoff_summary"] = hs
+            elif prev_task.get("handoff_summary"):
+                task_blob["handoff_summary"] = prev_task.get("handoff_summary")
             go = str(goal_objective or "").strip() or str(prev_task.get("goal_objective") or "").strip()
             if go:
                 task_blob["goal_objective"] = go
@@ -4849,6 +4855,43 @@ async def _apply_authorized_graph_mode(conv_id: str | None, approval: dict) -> N
     asyncio.create_task(_graph_mode_dispatch_when_ready())
 
 
+async def _handoff_operator_texts(conv_id: str) -> tuple[str, str]:
+    """Sticky Default instruction + last human chat text (not authorize placeholders)."""
+    from app.services.handoff_dialogue import is_operator_utterance
+
+    sticky = ""
+    last_user = ""
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.models.message import Message
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if c:
+                ctx = dict(c.context or {})
+                task_blob = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+                sticky = str(task_blob.get("instruction") or "").strip()
+            rows = (
+                await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == uuid.UUID(conv_id), Message.role == "user")
+                    .order_by(Message.created_at.desc())
+                    .limit(20)
+                )
+            ).scalars().all()
+            for row in rows:
+                content = row.content if isinstance(row.content, dict) else {}
+                text = str(content.get("text") or "").strip()
+                if is_operator_utterance(text, msg_type=str(getattr(row, "msg_type", "") or "")):
+                    last_user = text
+                    break
+    except Exception as exc:
+        print(f"[WS] handoff operator text lookup: {exc}")
+    return sticky, last_user
+
+
 async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:
     """When user Authorizes a handoff card, switch sticky expert + notify UI partner chip.
 
@@ -4952,7 +4995,18 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
 
     proposed = str(approval.get("proposed_action") or "").strip()
     question = str(approval.get("question") or "").strip()
-    instruction = proposed or question or f"Continue authorized {pack} assessment."
+    from app.services.handoff_dialogue import resolve_handoff_dialogue
+
+    sticky_instruction, last_user_text = await _handoff_operator_texts(conv_id)
+    dialogue = resolve_handoff_dialogue(
+        sticky_instruction=sticky_instruction,
+        last_user_text=last_user_text,
+        proposed_action=proposed,
+        question=question,
+        pack=pack,
+    )
+    instruction = str(dialogue["instruction"] or "")
+    handoff_summary = dialogue.get("handoff_summary")
     scope = {"allow": [target["value"]], "deny": []} if target.get("value") else {"allow": [], "deny": []}
 
     # Scope main host: user-authorized open-task may register ledger asset (default yes).
@@ -5008,6 +5062,7 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
         expert_id=eid,
         expert_name=ename,
         asset_id=asset_id_str,
+        handoff_summary=str(handoff_summary) if handoff_summary else None,
     )
 
     try:
@@ -5051,6 +5106,8 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
         "scope": scope,
         "agent_node_id": node_id,
     }
+    if handoff_summary:
+        dispatch_msg["handoff_summary"] = handoff_summary
 
     import asyncio
 
@@ -6210,6 +6267,9 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         out["todo_replace_permission"] = True
     if msg.get("todo_replace_allowed") is True or msg.get("todoReplaceAllowed") is True:
         out["todo_replace_allowed"] = True
+    handoff_summary = str(msg.get("handoff_summary") or msg.get("handoffSummary") or "").strip()
+    if handoff_summary:
+        out["handoff_summary"] = handoff_summary
     return out
 
 

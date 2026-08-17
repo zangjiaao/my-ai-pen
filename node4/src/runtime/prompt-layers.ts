@@ -18,6 +18,7 @@ import {
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { eagerBookingInjection } from "./booking-harness.js";
 import { formatCaseContextInjection, LOGIN_INTEL_KINDS } from "./case-context.js";
+import { engagementPortFromTask } from "./attack-surface.js";
 import { eagerTodoInjection } from "./todo-harness.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import {
@@ -258,6 +259,24 @@ export function promptTemplateVarsFromBase(input: BaseLayerInput): PromptTemplat
   };
 }
 
+function isLedgerPackId(packId: string): boolean {
+  const p = String(packId || "").toLowerCase().trim();
+  return p === "default" || p === "consult" || p === "workspace";
+}
+
+function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
+  const named = Boolean(formatTargetLine(task.target) || engagementPortFromTask(task));
+  if (isLedgerPackId(packId)) {
+    return named
+      ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
+      : "This seat does not execute engagements. Ledger Q&A and handoff only.";
+  }
+  if (named) {
+    return "This turn is chat-only (no execution burst). Do not start recon, booking, or todo engagement maps.";
+  }
+  return "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.";
+}
+
 /** Convenience: build vars from full task + pack (Free / Stage captains). */
 export function promptTemplateVars(task: TaskEnvelope, pack: RolePack): PromptTemplateVars {
   return promptTemplateVarsFromBase(baseLayerInputFrom(task, pack));
@@ -457,9 +476,7 @@ export function buildPromptLayers(
     );
   }
   if (options?.chatOnly) {
-    runtimeParts.push(
-      "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.",
-    );
+    runtimeParts.push(chatOnlyRuntimeLine(pack.id, task));
   }
   if (options?.eagerTodo) {
     runtimeParts.push(eagerTodoInjection({ forced: true }));
@@ -467,14 +484,23 @@ export function buildPromptLayers(
   if (options?.eagerBooking) {
     runtimeParts.push(eagerBookingInjection());
   }
-  runtimeParts.push("Stay in authorized scope.", formatRoeInjection(roe));
+  if (isLedgerPackId(pack.id)) {
+    runtimeParts.push(
+      "Stay in authorized scope.",
+      `allow_postex: ${roe.allowPostex === true}\nallow_destructive: ${roe.allowDestructive === true}`,
+    );
+  } else {
+    runtimeParts.push("Stay in authorized scope.", formatRoeInjection(roe));
+  }
   const runtime = joinNonEmptyPromptParts(runtimeParts);
 
   // --- Task: this-turn facts only ---
   const taskParts: string[] = [];
   const titleHint = formatSessionTitleHint(task);
   if (titleHint) taskParts.push(titleHint);
-  const caseBlock = formatCaseContextInjection(task.caseContext);
+  const caseBlock = formatCaseContextInjection(task.caseContext, {
+    engagementPort: engagementPortFromTask(task) || undefined,
+  });
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
   if (factBlock) taskParts.push(factBlock);
@@ -486,6 +512,12 @@ export function buildPromptLayers(
       instruction: task.instruction,
     }),
   );
+  const handoffNote = String(task.handoffSummary || "").trim();
+  if (handoffNote) {
+    taskParts.push(
+      ["### Handoff", "Authorized card body (not the operator utterance).", handoffNote].join("\n"),
+    );
+  }
   if (options?.goals) {
     taskParts.push(options.goals.formatForPrompt());
   }

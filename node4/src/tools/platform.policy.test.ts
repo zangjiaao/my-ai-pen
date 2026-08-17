@@ -2,7 +2,7 @@
  * Policy unit tests for platform ledger tools (host create denial + chat-only helpers).
  */
 import assert from "node:assert/strict";
-import { isDefaultConversationTitle, isHostCreateAttempt } from "./platform.js";
+import { isDefaultConversationTitle, isHostCreateAttempt, resolveListVulnerabilitiesPort } from "./platform.js";
 import { isChatOnlyTask, isLedgerAssistSeat } from "../runtime/session-runner.js";
 import { resolveRolePack } from "../roles/index.js";
 import { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } from "../roles/default.js";
@@ -77,6 +77,22 @@ assert.ok(
   toolNamesForPack(DEFAULT_SEAT_PACK).includes("fact"),
   "default seat notebook is fact (Intel hang)",
 );
+
+{
+  const task = {
+    target: { type: "url", value: "http://host.docker.internal:3000" },
+    scope: { allow: ["http://host.docker.internal:3000"] },
+  };
+  assert.deepEqual(resolveListVulnerabilitiesPort({ task }), { port: "3000", appliedDefault: true });
+  assert.deepEqual(resolveListVulnerabilitiesPort({ port: "8080", task }), {
+    port: "8080",
+    appliedDefault: false,
+  });
+  assert.deepEqual(resolveListVulnerabilitiesPort({ allPorts: true, task }), {
+    port: "",
+    appliedDefault: false,
+  });
+}
 assert.ok(
   !toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_record_intel"),
   "platform_record_intel is not a second Agent surface",

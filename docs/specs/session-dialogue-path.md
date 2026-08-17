@@ -50,7 +50,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 | **L7** | Free Tasks / Todo integrity (#313) unchanged: no silent init wipe on continue. |
 | **L8** | Graph package boundary retained: Free continue ≠ incomplete Graph resume semantics; mode continuity stays #277 / #282. |
 | **L9** | No platform free-text keyword table inventing engagement / mode / Task book content (AGENTS.md). Sticky restore uses structured snapshot fields only. |
-| **L10** | Handoff / first open-engagement may still use a full structured cold envelope; this Spec targets **continue on an existing Session**, not first open. |
+| **L10** | Handoff / first open-engagement may still use a full structured cold **system** envelope (This turn Case / Target / Scope + optional `### Handoff` card body). **User turn stays the operator utterance.** `proposed_action` is never `initial_instruction`. |
 
 ---
 

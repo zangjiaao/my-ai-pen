@@ -57,6 +57,20 @@ def test_s1_resume_preserves_goal_without_prior_instruction_body():
     assert "User continuation:" not in resumed["text"]
 
 
+def test_handoff_summary_is_not_initial_instruction():
+    msg = {
+        "text": "对目标：http://lab.example/ 再测一次",
+        "initial_instruction": "对目标：http://lab.example/ 再测一次",
+        "handoff_summary": "**任务**: 去对 196 条台账避免撞车",
+        "target": {"type": "url", "value": "http://lab.example/"},
+        "engagement": "pentest",
+    }
+    task = _task_assign_from_user_message("conv-h", msg, "task-h")
+    assert task["initial_instruction"] == "对目标：http://lab.example/ 再测一次"
+    assert task["handoff_summary"] == "**任务**: 去对 196 条台账避免撞车"
+    assert "196" not in task["initial_instruction"]
+
+
 def test_s1_task_assign_maps_utterance_not_composite():
     resume_context = {
         "task": {

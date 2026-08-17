@@ -530,12 +530,16 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
             `error: proof too short (≥${MIN_PROOF_LEN} chars) — paste the proving observation from tool output, or pass candidate_index / matching location from last subagent ready_to_book`,
           );
         }
-        let grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations);
+        let grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations, {
+          location,
+        });
         if (!grounded.ok) {
           // Auto-swap to candidate verbatim if agent paraphrased
           const fb = fallbackProofFromInjectedCandidates(runtime, { title, location });
           if (fb && fb.proof !== proofText) {
-            const g2 = proofGroundedInRecentWork(fb.proof, runtime.lifecycle.recentObservations);
+            const g2 = proofGroundedInRecentWork(fb.proof, runtime.lifecycle.recentObservations, {
+              location,
+            });
             if (g2.ok) {
               proofText = fb.proof;
               if (!pocDemonstratesIssue(poc).ok && fb.poc) poc = fb.poc;

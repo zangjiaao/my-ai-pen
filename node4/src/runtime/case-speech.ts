@@ -46,6 +46,10 @@ function isSelf(line: CaseSpeechLine, options: CaseSpeechSelectOptions): boolean
   return false;
 }
 
+function isAuthorizePlaceholder(text: string): boolean {
+  return norm(text).toLowerCase().startsWith("authorization decision:");
+}
+
 function isThisTurnUser(line: CaseSpeechLine, thisTurnText: string): boolean {
   if (!thisTurnText) return false;
   const speaker = norm(line.speaker).toLowerCase();
@@ -68,6 +72,7 @@ export function selectCaseSpeechDelta(
   const thisTurn = norm(options.thisTurnText);
   const lines = all.slice(start).filter((line) => {
     if (!norm(line.text) || !norm(line.id)) return false;
+    if (isAuthorizePlaceholder(line.text)) return false;
     if (isSelf(line, options)) return false;
     if (isThisTurnUser(line, thisTurn)) return false;
     return true;

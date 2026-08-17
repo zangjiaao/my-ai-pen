@@ -588,11 +588,40 @@ const baseTask: TaskEnvelope = {
     !/fact: write confirmed cognition/i.test(plain),
     "Runtime does not restate fact doctrine (Profession owns it)",
   );
-  const chat = buildSystemPrompt(baseTask, PENTEST_ROLE_PACK, { chatOnly: true });
+  const chat = buildSystemPrompt(
+    { ...baseTask, target: {}, scope: {} },
+    PENTEST_ROLE_PACK,
+    { chatOnly: true },
+  );
   ok(
     /no authorized engagement target/i.test(chat),
-    "chat-only Runtime forbids recon without a target",
+    "chat-only Expert without target forbids recon",
   );
+  const defaultChat = buildSystemPrompt(baseTask, DEFAULT_SEAT_PACK, { chatOnly: true });
+  ok(/does not execute engagements/i.test(defaultChat), "Default chatOnly is seat-not-execute");
+  ok(
+    !/until the user names an authorized host/i.test(defaultChat),
+    "Default with Target does not claim there is no host",
+  );
+  ok(!/### Rules of engagement/i.test(defaultChat), "Default does not get full recon RoE");
+}
+
+{
+  const withHandoff: TaskEnvelope = {
+    ...baseTask,
+    instruction: "对目标：http://host.docker.internal:3000 再次进行渗透测试",
+    handoffSummary: "**任务**: 去对 196 条台账做索引避免撞车",
+  };
+  const prompt = buildSystemPrompt(withHandoff, PENTEST_ROLE_PACK);
+  ok(prompt.includes("### Handoff"), "authorized card body is This-turn ### Handoff");
+  ok(
+    prompt.includes("Authorized card body (not the operator utterance)"),
+    "Handoff block is labeled not-utterance",
+  );
+  ok(prompt.includes("196 条台账"), "Handoff keeps the authorized card body");
+  const engagementIdx = prompt.indexOf("### Engagement");
+  const handoffIdx = prompt.indexOf("### Handoff");
+  ok(engagementIdx >= 0 && handoffIdx > engagementIdx, "Handoff follows Engagement in This turn");
 }
 
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");

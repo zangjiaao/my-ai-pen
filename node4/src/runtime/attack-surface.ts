@@ -98,6 +98,64 @@ export function scopeHostsFromTask(task: {
   return out;
 }
 
+/** Named engagement port from TARGET / first scope.allow URL (structured only). */
+export function engagementPortFromTask(task?: {
+  target?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+} | null): string {
+  if (!task) return "";
+  const target = task.target && typeof task.target === "object" ? task.target : {};
+  const tval = String(
+    (target as { value?: unknown }).value
+      ?? (target as { url?: unknown }).url
+      ?? (target as { host?: unknown }).host
+      ?? "",
+  ).trim();
+  const fromTarget = parseHostPort(tval).port;
+  if (fromTarget) return fromTarget;
+  const allow = task.scope && typeof task.scope === "object"
+    ? (task.scope as { allow?: unknown }).allow
+    : undefined;
+  if (Array.isArray(allow)) {
+    for (const item of allow) {
+      const p = parseHostPort(String(item || "")).port;
+      if (p) return p;
+    }
+  }
+  return "";
+}
+
+/** Explicit host:port pairs from TARGET / scope.allow when a port is named. */
+export function scopeOriginsFromTask(task: {
+  target?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+}): Set<string> {
+  const out = new Set<string>();
+  const values: string[] = [];
+  const target = task.target && typeof task.target === "object" ? task.target : {};
+  const tval = String(
+    (target as { value?: unknown }).value
+      ?? (target as { url?: unknown }).url
+      ?? (target as { host?: unknown }).host
+      ?? "",
+  ).trim();
+  if (tval) values.push(tval);
+  const allow = task.scope && typeof task.scope === "object"
+    ? (task.scope as { allow?: unknown }).allow
+    : undefined;
+  if (Array.isArray(allow)) {
+    for (const item of allow) {
+      const s = String(item || "").trim();
+      if (s) values.push(s);
+    }
+  }
+  for (const raw of values) {
+    const { host, port } = parseHostPort(raw);
+    if (host && port) out.add(`${host}:${port}`);
+  }
+  return out;
+}
+
 /**
  * Build candidate list from finding locations / URLs seen this burst.
  * Hosts already in Scope are marked in_scope=true (UI may filter them out).

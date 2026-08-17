@@ -78,4 +78,15 @@ const skipThisTurn = selectCaseSpeechDelta(
 );
 assert.deepEqual(skipThisTurn.lines.map((l) => l.id), ["d"]);
 
+const skipAuthz = selectCaseSpeechDelta(
+  {
+    speech: [
+      { id: "a", speaker: "user", text: "Authorization decision: authorize", expert_id: "" },
+      { id: "u", speaker: "user", text: "对目标：http://lab 再测", expert_id: "" },
+    ],
+  },
+  { cursor: "", selfExpertId: "exp-1", thisTurnText: "对目标：http://lab 再测" },
+);
+assert.deepEqual(skipAuthz.lines.map((l) => l.id), [], "authorize placeholder is not Case speech");
+
 console.log("case-speech.test.ts: ok");

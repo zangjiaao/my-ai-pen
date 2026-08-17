@@ -271,21 +271,21 @@ Sources: `CONTEXT.md` Product seats; `docs/prd.md` §§1–5; `docs/specs/harnes
 
 | Path | Use in this research |
 |------|----------------------|
-| `/mnt/d/Coding/my-ai-pen/CONTEXT.md` | SOT, Handoff Truth/Next/Delivery, Feedback L0/L1, honest partial, seats |
-| `/mnt/d/Coding/my-ai-pen/docs/adr/0001-graph-x-pi-product-path.md` | Product path lock; Product state vs Runtime |
-| `/mnt/d/Coding/my-ai-pen/docs/specs/task-graph.md` | Hard Graph continuity, Store, ledger, close-out, modes |
-| `/mnt/d/Coding/my-ai-pen/docs/specs/harness.md` | Tools, booking, free vs Graph, subagent contract |
-| `/mnt/d/Coding/my-ai-pen/docs/prd.md` | Platform vs Node, seats, ledger ownership |
-| `/mnt/d/Coding/my-ai-pen/experts/pentest/graphs/hard/app_assessment.json` | Stage order, intents, tool profiles, class_probe success text |
-| `/mnt/d/Coding/my-ai-pen/experts/pentest/graphs/hard/redteam_deep.json` | Deep stages + postex RoE |
-| `/mnt/d/Coding/my-ai-pen/experts/pentest/work.md` | Hypothesis in-loop, packages, proof bar, Graph process rules |
-| `/mnt/d/Coding/my-ai-pen/experts/pentest/mission.md` | Hypothesis-driven mission line |
-| `/mnt/d/Coding/my-ai-pen/node4/src/runtime/finding-store.ts` | Store statuses / SoT |
-| `/mnt/d/Coding/my-ai-pen/node4/src/tools/finding.ts` | upsert / list / confirm / invent-without-id |
-| `/mnt/d/Coding/my-ai-pen/node4/src/runtime/engagement-closeout.ts` | Close-out dual storage |
-| `/mnt/d/Coding/my-ai-pen/node4/src/runtime/hard-graph-runner.ts` | Stage order, booking-only tail, blocked path |
-| `/mnt/d/Coding/my-ai-pen/node4/src/runtime/case-context.ts` | Delivery-adjacent case_context shape |
-| `/mnt/d/Coding/my-ai-pen/docs/wayfinder/research-stage-intent-boundaries.md` | Stage intent inventory (surface vs class_probe) |
+| `CONTEXT.md` | SOT, Handoff Truth/Next/Delivery, Feedback L0/L1, honest partial, seats |
+| `docs/adr/0001-graph-x-pi-product-path.md` | Product path lock; Product state vs Runtime |
+| `docs/specs/task-graph.md` | Hard Graph continuity, Store, ledger, close-out, modes |
+| `docs/specs/harness.md` | Tools, booking, free vs Graph, subagent contract |
+| `docs/prd.md` | Platform vs Node, seats, ledger ownership |
+| `experts/pentest/graphs/hard/app_assessment.json` | Stage order, intents, tool profiles, class_probe success text |
+| `experts/pentest/graphs/hard/redteam_deep.json` | Deep stages + postex RoE |
+| `experts/pentest/work.md` | Hypothesis in-loop, packages, proof bar, Graph process rules |
+| `experts/pentest/mission.md` | Hypothesis-driven mission line |
+| `node4/src/runtime/finding-store.ts` | Store statuses / SoT |
+| `node4/src/tools/finding.ts` | upsert / list / confirm / invent-without-id |
+| `node4/src/runtime/engagement-closeout.ts` | Close-out dual storage |
+| `node4/src/runtime/hard-graph-runner.ts` | Stage order, booking-only tail, blocked path |
+| `node4/src/runtime/case-context.ts` | Delivery-adjacent case_context shape |
+| `docs/wayfinder/research-stage-intent-boundaries.md` | Stage intent inventory (surface vs class_probe) |
 
 ---
 

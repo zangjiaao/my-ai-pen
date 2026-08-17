@@ -280,7 +280,29 @@ function parseIntelSummary(raw: unknown): CaseIntelLine[] | undefined {
 }
 
 /** Render case work-group block for LLM (budgeted). Facts only — policy lives in Profession/Runtime. */
-export function formatCaseContextInjection(ctx: CaseContext | undefined | null): string {
+export type FormatCaseContextOptions = {
+  /** Named engagement port from Target/Scope — labels the prior count and filters sample URLs. */
+  engagementPort?: string;
+};
+
+function urlMatchesEngagementPort(url: string, port: string): boolean {
+  const p = String(port || "").trim();
+  if (!p) return true;
+  const s = String(url || "").trim();
+  if (!s.includes("://")) return true;
+  try {
+    const u = new URL(s);
+    const up = u.port || (u.protocol === "https:" ? "443" : "80");
+    return up === p;
+  } catch {
+    return true;
+  }
+}
+
+export function formatCaseContextInjection(
+  ctx: CaseContext | undefined | null,
+  options?: FormatCaseContextOptions,
+): string {
   if (!ctx) return "";
   const lines: string[] = ["### Case"];
   if (ctx.conversation_id) {
@@ -320,9 +342,13 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
         .map(([k, v]) => `${k}=${v}`)
         .slice(0, 6)
         .join(" ");
+      const portBit = String(options?.engagementPort || "").trim()
+        ? ` on Scope port :${String(options?.engagementPort).trim()} (list without port= follows this port; all_ports=true is host-wide)`
+        : "";
       lines.push(
         `- Prior findings: ${pf.total ?? "?"} total, ~${pf.open_or_retest ?? "?"} open` +
-          (sevBits ? ` (${sevBits})` : ""),
+          (sevBits ? ` (${sevBits})` : "") +
+          portBit,
       );
     }
     const samples = (intel.high_priority_sample || []).slice(0, 24);
@@ -348,7 +374,10 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       if (paths.length) {
         lines.push("", "### Paths seen", `- ${paths.join(" · ")}`);
       }
-      const urls = (sk.sample_urls || []).slice(0, 6);
+      const port = String(options?.engagementPort || "").trim();
+      const urls = (sk.sample_urls || [])
+        .filter((u) => urlMatchesEngagementPort(String(u), port))
+        .slice(0, 6);
       if (urls.length) {
         lines.push(`- URLs: ${urls.join(" · ")}`);
       }

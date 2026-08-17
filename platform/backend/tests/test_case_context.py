@@ -11,6 +11,7 @@ from app.services.case_context import (
     collapse_prior_index,
     excerpt_from_properties,
     evidence_role,
+    extract_artifact_hints,
     extract_hosts_from_task,
     extract_scope_ports_from_task,
     path_or_url_from_properties,
@@ -229,7 +230,7 @@ def test_payload_has_version_and_evidence_snippets():
             "role": "user",
             "msg_type": "text",
             "content": {
-                "text": "Source is at /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump and HANDOFF_FROM_PENTEST.md"
+                "text": "Source is at notes/source_dump and HANDOFF_FROM_PENTEST.md"
             },
             "created_at": "t0",
         }
@@ -275,6 +276,40 @@ def test_payload_has_version_and_evidence_snippets():
     assert payload["evidence_snippets"][0]["id"] == "ev_src"
     assert "source_dump" in (payload["evidence_snippets"][0].get("path_or_url") or "")
     assert any("source_dump" in h or "HANDOFF" in h for h in payload["artifact_hints"])
+    assert any("/" in h or h.endswith(".md") for h in payload["artifact_hints"] if "source_dump" in h or "HANDOFF" in h)
+
+
+def test_artifact_hints_are_path_shaped_not_prose_words():
+    """Needles stay, but only path-like tokens are hints (not status/prose 'Handoff')."""
+    thread = [
+        {"text": "Handoff authorized — starting destination expert."},
+        {"text": "kind=handoff handoff_pack_id=pentest Cross-pack handoff"},
+        {
+            "text": (
+                "Read notes/source_dump/app.py and HANDOFF_FROM_PENTEST.md "
+                "plus /workspace/scripts/x.py and /opt/app/notes/foo.md"
+            )
+        },
+    ]
+    hints = extract_artifact_hints(thread, [])
+    assert "Handoff" not in hints
+    assert not any(h.lower() == "handoff" for h in hints)
+    assert not any("handoff_pack_id" in h.lower() for h in hints)
+    assert not any(h.lower() == "kind=handoff" for h in hints)
+    assert any("notes/source_dump" in h for h in hints)
+    assert any("HANDOFF_FROM_PENTEST.md" in h for h in hints)
+    assert any("/workspace/scripts/x.py" in h for h in hints)
+    assert any("/opt/app/notes/foo.md" in h for h in hints)
+
+
+def test_artifact_hints_ignore_host_drive_needles():
+    """Lab mount/drive letters are not product needles."""
+    thread = [
+        {"text": "see /mnt/d/Coding/foo/bar.txt and D:\\Coding\\secret.log on this box"},
+    ]
+    hints = extract_artifact_hints(thread, [])
+    assert hints == []
+    assert not any("/mnt/" in h or "D:\\" in h or "D:/" in h for h in hints)
 
 
 def test_this_turn_task_overlays_empty_sticky_context():

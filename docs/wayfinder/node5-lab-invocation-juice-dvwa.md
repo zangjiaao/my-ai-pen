@@ -332,7 +332,7 @@ Workspace is gitignored; paths below are **on-disk lab inventory** at research t
 
 | Dir | Role | Notes |
 |-----|------|-------|
-| `/mnt/d/Coding/my-ai-pen/node5/workspace/juice-v11-depth-20260722T014530Z/` | **README-cited depth re-eval** | `EVAL.md`, full harvest; target :3000; 13 findings; coverage attempt_rate 1.0; stages include `coverage_probe` |
+| `node5/workspace/juice-v11-depth-20260722T014530Z/` | **README-cited depth re-eval** | `EVAL.md`, full harvest; target :3000; 13 findings; coverage attempt_rate 1.0; stages include `coverage_probe` |
 | `…/juice-v10-coverage-20260722T002725Z/` | coverage Feedback series | EVAL + harvest |
 | `…/juice-v12-pro-` … `juice-v16-chain-dom-` | later depth/pro/sandbox/chain | process_metrics appear from ~v12; v16 EVAL + browser_ok tooling_health |
 | `…/juice-v1-` … `juice-v9-` | earlier evolution | mix of cli.log / console.log |
@@ -342,7 +342,7 @@ Workspace is gitignored; paths below are **on-disk lab inventory** at research t
 
 | Dir | Role | Notes |
 |-----|------|-------|
-| `/mnt/d/Coding/my-ai-pen/node5/workspace/dvwa-v6-salvage-20260721T151017Z/` | latest complete DVWA series + EVAL | target :8080; 13 findings; surface salvage narrative |
+| `node5/workspace/dvwa-v6-salvage-20260721T151017Z/` | latest complete DVWA series + EVAL | target :8080; 13 findings; surface salvage narrative |
 | `…/dvwa-v5-p0-*`, `dvwa-v4-dedupe-*`, `dvwa-v3-*`, `dvwa-v2-*`, `dvwa-live-*` | prior iterations | most have EVAL except some partial live |
 
 ### 4.3 Canonical machine files on a complete run

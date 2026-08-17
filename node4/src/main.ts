@@ -16,6 +16,7 @@ import {
   parseAllowDestructive,
   parseAllowPostex,
   parseFocusFields,
+  parseHandoffSummary,
 } from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
@@ -79,7 +80,7 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
     const prev = aborts.get(task.conversationId);
     if (prev) {
       cancelApprovalsForConversation(task.conversationId);
-      prev.abort();
+      prev.abort("authorized_handoff");
       for (let i = 0; i < 40 && busy.has(task.conversationId); i += 1) {
         await new Promise((r) => setTimeout(r, 50));
       }
@@ -413,14 +414,20 @@ client.on("user_interrupt", async (message) => {
   const action = String(message.action || "cancel").toLowerCase();
   const abort = aborts.get(conversationId);
   if (abort) {
-    abort.abort();
+    const interruptReason = String(message.reason || "").trim();
+    const handedOff = interruptReason === "authorized_handoff";
+    abort.abort(handedOff ? "authorized_handoff" : undefined);
     // work_status(working=false) is emitted in runAssignedTask finally after settle.
     await client.send({
       type: "status_update",
       conversation_id: conversationId,
-      message: action === "pause" ? "Paused by user." : "Interrupted by user — stopping this work burst.",
-      status: action === "pause" ? "paused" : "canceled",
-      agent_phase: "aborted",
+      message: handedOff
+        ? "Handoff authorized — starting destination expert."
+        : action === "pause"
+          ? "Paused by user."
+          : "Interrupted by user — stopping this work burst.",
+      status: handedOff ? "handed_off" : action === "pause" ? "paused" : "canceled",
+      agent_phase: handedOff ? "finished" : "aborted",
       working: true, // still winding down until finally
     });
     return;
@@ -512,6 +519,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         : undefined;
   const graphExecution = parseGraphExecution(message);
   const focus = parseFocusFields(message);
+  const handoffSummary = parseHandoffSummary(message);
   const allowPostex = parseAllowPostex(message);
   const allowDestructive = parseAllowDestructive(message);
 
@@ -552,6 +560,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     graphExecution,
     focusFindingIds: focus.focusFindingIds,
     focusNote: focus.focusNote,
+    handoffSummary,
     allowPostex,
     allowDestructive,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
