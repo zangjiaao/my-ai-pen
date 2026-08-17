@@ -105,6 +105,18 @@ def validate_pack_for_node(node_config: object, pack_id: object) -> str:
     return pack
 
 
+def validate_default_expert_eligibility(
+    *,
+    enabled: bool,
+    node_status: object,
+) -> None:
+    """Reject a default partner that cannot be selected for a new conversation."""
+    if not enabled:
+        raise ValueError("Cannot set a disabled expert as the default conversation partner")
+    if str(node_status or "").strip().lower() != "online":
+        raise ValueError("Cannot set an expert on an offline node as the default conversation partner")
+
+
 def expert_to_dict(
     expert: Any,
     *,

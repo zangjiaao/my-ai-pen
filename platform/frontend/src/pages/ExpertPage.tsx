@@ -11,6 +11,7 @@ import PageToolbarSkeleton from "../components/PageToolbarSkeleton";
 import { ApiError, authFetch } from "../lib/api";
 import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
+  canSetExpertAsDefault,
   EXPERT_PACKS,
   EXPERT_COLOR_PRESETS,
   expertCreatePackOptions,
@@ -539,6 +540,9 @@ function ExpertDetailDialog({
 
   const caps = packCapabilities(packId);
   const online = expert.node_status === "online";
+  const selectedNodeStatus =
+    selectedNode?.status ?? (nodeId === expert.node_id ? expert.node_status : null);
+  const defaultEligible = canSetExpertAsDefault(enabled, selectedNodeStatus);
 
   const detailTabs: { key: DetailTab; label: string; count?: number }[] = [
     { key: "config", label: "配置" },
@@ -576,19 +580,27 @@ function ExpertDetailDialog({
   };
 
   const save = async () => {
+    const defaultChanged = isDefault !== Boolean(expert.is_default);
+    const nodeChanged = nodeId !== expert.node_id;
+    if (isDefault && !defaultEligible && (defaultChanged || nodeChanged)) {
+      setSaveError("绑定节点离线，专家上线后才能设为默认对话角色");
+      setSaveOk(false);
+      return;
+    }
     setSaving(true);
     setSaveError("");
     setSaveOk(false);
     try {
+      const body: Record<string, unknown> = {
+        node_id: nodeId,
+        pack_id: packId,
+        color,
+        enabled,
+      };
+      if (defaultChanged) body.is_default = isDefault;
       await authFetch(`/api/experts/${expert.id}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          node_id: nodeId,
-          pack_id: packId,
-          color,
-          enabled,
-          is_default: isDefault,
-        }),
+        body: JSON.stringify(body),
       });
       setSaveOk(true);
       await onSaved();
@@ -837,13 +849,13 @@ function ExpertDetailDialog({
                 </label>
                 <label
                   className={`mt-3 flex cursor-pointer items-center gap-2 text-sm ${
-                    enabled ? "text-ink-secondary" : "text-ink-muted"
+                    defaultEligible || isDefault ? "text-ink-secondary" : "text-ink-muted"
                   }`}
                 >
                   <input
                     type="checkbox"
                     checked={isDefault}
-                    disabled={!enabled}
+                    disabled={!defaultEligible && !isDefault}
                     onChange={(e) => {
                       setIsDefault(e.target.checked);
                       setSaveOk(false);
@@ -853,7 +865,11 @@ function ExpertDetailDialog({
                   设为默认对话角色（新建会话时自动选中；全站仅一位）
                 </label>
                 <p className="mt-2 text-xs text-ink-muted">
-                  建议将「通用助理 / default」设为默认；需要开测时再切换渗透等专家。
+                  {!enabled
+                    ? "启用专家后才能设为默认。"
+                    : !defaultEligible && !isDefault
+                      ? "绑定节点离线，专家上线后才能设为默认。"
+                      : "建议将「通用助理 / default」设为默认；需要开测时再切换渗透等专家。"}
                 </p>
               </div>
 

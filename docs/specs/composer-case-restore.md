@@ -55,7 +55,7 @@ Rules:
 5. Switching Case A → Case B restores **B**, never leaks A’s composer. Opening blank home clears Case composer (no bleed onto a new chat).  
 6. Heartbeat `GET /state` / mid-session snapshot **must not** overwrite composer (#278 D3). Only: this once-per-open restore, user menu edits, authorized `partner_switch`, and `work_mode_settled`.  
 7. Unsent Mention / Graph / Goal change on an **existing** Case is a draft. Remount of that Case restores last **committed** Case/Session fields (send or authorized transfer / mode settlement), not an unsent chip flip. Blank-home draft is the only unsent exception.
-8. While Case snapshot or first message page is loading, render conversation, composer, and any open right-panel skeletons. The composer must not infer a temporary partner from mention-catalog order; the real picker appears only after the Case loading boundary settles.
+8. While Case snapshot or first message page is loading, render conversation, composer, and any open right-panel skeletons. On blank/new-chat mount, keep the composer skeleton until home routing and the expert catalog/default-partner pick settle; an honestly empty or all-offline catalog may render the real no-partner composer. The composer must not infer a temporary partner from mention-catalog order.
 
 Next send still follows existing wire law: explicit composer Graph is permission (#284 B1); 不指定 is no force mode change (#278 A1). Restore only puts the chips back; it does not invent engagement or mode.
 

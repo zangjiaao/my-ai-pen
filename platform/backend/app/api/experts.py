@@ -15,6 +15,7 @@ from app.models.expert import Expert
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID
 from app.services.expert_instances import (
     expert_to_dict,
+    validate_default_expert_eligibility,
     validate_expert_color,
     validate_expert_name,
     validate_pack_for_node,
@@ -228,6 +229,7 @@ async def update_expert(
         node_id = _parse_uuid(body.node_id, "node_id")
 
     node = await _get_worker_node(db, node_id)
+    node_changed = node.id != expert.node_id
     pack = expert.pack_id
     if body.pack_id is not None:
         pack = body.pack_id
@@ -255,9 +257,14 @@ async def update_expert(
 
     if body.is_default is not None:
         want_default = bool(body.is_default)
-        if want_default and not expert.enabled:
-            raise HTTPException(400, "Cannot set a disabled expert as the default conversation partner")
         if want_default:
+            try:
+                validate_default_expert_eligibility(
+                    enabled=expert.enabled,
+                    node_status=node.status,
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
             # Exactly one default: clear others first.
             await db.execute(
                 update(Expert).where(Expert.id != expert.id).values(is_default=False)
@@ -265,6 +272,14 @@ async def update_expert(
             expert.is_default = True
         else:
             expert.is_default = False
+    elif node_changed and expert.is_default:
+        try:
+            validate_default_expert_eligibility(
+                enabled=expert.enabled,
+                node_status=node.status,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     try:
         user_uuid = uuid.UUID(str(current_user["user_id"]))

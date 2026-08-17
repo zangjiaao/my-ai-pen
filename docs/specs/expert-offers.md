@@ -189,7 +189,7 @@ WS resolution order: **explicit participant** → expert_id / @Expert name → s
 ## Expert management UI（虚拟形象）
 
 - `/experts` 卡片网格（名片）：@名、能力包、绑定节点、在线态；offline 绑定须可读为 **不可调度**。
-- 点开详情：**概述** / **配置**（改名、绑 Node、换包 — 允许在 offline 节点上配置）/ **能力**（pack skills + tools）。
+- 点开详情：**概述** / **配置**（改名、绑 Node、换包 — 允许在 offline 节点上配置；但只有已启用且绑定 online Node 的可调度专家可设为默认对话角色）/ **能力**（pack skills + tools）。
 - 多个专家可绑定同一物理节点。
 - Events `nodes:changed` / `experts:changed` refresh conversation mention lists (and re-apply selectable vs disabled).
 
