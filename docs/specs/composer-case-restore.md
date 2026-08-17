@@ -55,6 +55,7 @@ Rules:
 5. Switching Case A → Case B restores **B**, never leaks A’s composer. Opening blank home clears Case composer (no bleed onto a new chat).  
 6. Heartbeat `GET /state` / mid-session snapshot **must not** overwrite composer (#278 D3). Only: this once-per-open restore, user menu edits, authorized `partner_switch`, and `work_mode_settled`.  
 7. Unsent Mention / Graph / Goal change on an **existing** Case is a draft. Remount of that Case restores last **committed** Case/Session fields (send or authorized transfer / mode settlement), not an unsent chip flip. Blank-home draft is the only unsent exception.
+8. While Case snapshot or first message page is loading, render conversation, composer, and any open right-panel skeletons. The composer must not infer a temporary partner from mention-catalog order; the real picker appears only after the Case loading boundary settles.
 
 Next send still follows existing wire law: explicit composer Graph is permission (#284 B1); 不指定 is no force mode change (#278 A1). Restore only puts the chips back; it does not invent engagement or mode.
 
@@ -76,6 +77,7 @@ Next send still follows existing wire law: explicit composer Graph is permission
 | **L10** | No platform NLP / keyword table inventing partner, Graph, or Goal from chat text. |
 | **L11** | Text draft in the input box is **out of this Spec** as Case SOT (may stay component-local). |
 | **L12** | Do not “fix” remount by keep-alive-mounting the conversation page across `/experts` etc. Restore from Case/Session fields. |
+| **L13** | Case-switch loading is explicit UI state shared by the conversation, composer, and open right panel. Do not show empty-Case chrome or a first-catalog Expert while B is still loading. |
 
 ---
 
@@ -149,6 +151,7 @@ Primary unit seam: **S1**. Highest integration: open Case after remount → chip
 8. **S3:** only if idle snapshot AgentRows omit Session mode. Prefer lifting from `context.sessions` in the existing participants/AgentRow projection over a one-off FE parser of raw context.  
 9. **S4** is optional in the first PR. If skipped, blank-home remount stays #299 (documented). If shipped, key must not be the same as last-active Case id cache.  
 10. **Docs:** this file + `docs/README.md` index; thin pointers on #277 / #278 / #284. Same change as the implement PR when behavior lands; this record may ship first as docs-only.
+11. **Loading boundary:** scope the opening request to its Case id and combine it with the initial message-query pending state. A stale Case A completion cannot close Case B’s skeleton. `ChatComposer` renders only the parent-selected partner and never falls back to `mentionTargets[0]`; its skeleton must reuse the same outer shell, input-region height, and footer layout as the live composer. If the right panel was open, keep it mounted at its current width and replace its body with a skeleton instead of collapsing it during the switch.
 
 ---
 
@@ -163,6 +166,7 @@ Primary unit seam: **S1**. Highest integration: open Case after remount → chip
   - `goal_mode: true` + pentest partner → Goal on  
   - `goal_mode: false` + pentest partner → Goal off  
 - **Adapter tests (S2):** heartbeat must not overwrite after once-on-open (may complete a still-pending open restore); non-404 `/state` failure must not restore from empty archaeology; Case switch applies the new Case; blank home does not keep the previous Case partner.  
+- **Loading tests:** A → B shows conversation, composer, and open right-panel skeletons until B snapshot/message loading settles; no empty state or temporary Expert chip is visible; stale A completion does not hold or close B’s skeleton.
 - **Prior art:** `participant_session` envelope tests (A1 / sticky must not force Graph); frontend `experts.wire.test.ts` (non-pentest never sends template); ConversationPage composer isolation test (draft text stays out of page state).
 
 ---
@@ -193,3 +197,4 @@ This Spec does not make Case sticky template authoritative. It only makes the **
 | 2026-08-17 | First publish — #474. Scheme 1 Case-bound restore; Session mode not Case sticky; #299 blank default. |
 | 2026-08-17 | Implemented S1/S2/S3. S4 blank-home draft not shipped (blank remount stays #299). |
 | 2026-08-17 | Open `/state` failure must not restore from empty archaeology; first successful snapshot completes pending restore. |
+| 2026-08-17 | Added explicit Case-switch skeleton boundary; removed ChatComposer first-catalog partner fallback. |

@@ -9,18 +9,23 @@ import {
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import ChatComposer, {
+  ChatComposerSkeleton,
   isPentestMentionTarget,
   type ChatComposerHandle,
   type MentionTarget,
 } from "../components/ChatComposer";
 import {
+  decideComposerSnapshotAction,
   engagementTemplateFromGraphId,
   pickDefaultMentionTarget,
   restoreComposerFromCaseSnapshot,
+  shouldPollConversationSnapshot,
+  shouldShowCaseLoadingSkeleton,
   type ComposerRestoreSnapshot,
 } from "../lib/composerCaseRestore";
 import MessageRenderer, {
   AgentPendingCard,
+  ConversationMessagesSkeleton,
   agentDisplayName,
   shouldShowAgentSpeakerLabel,
 } from "../components/MessageRenderer";
@@ -115,6 +120,8 @@ import {
 } from "../lib/choiceCard";
 import {
   selectResultAnchorMessageIds,
+  workBurstForConversation,
+  type ScopedWorkBurst,
   type WorkBurstProjection,
 } from "../lib/workBurstTime";
 import {
@@ -304,6 +311,7 @@ export default function ConversationPage() {
   const caseRouteLoadedRef = useRef<string | null | undefined>(undefined);
   const [homeRestoreDone, setHomeRestoreDone] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
+  const [openingCaseId, setOpeningCaseId] = useState<string | null>(null);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const stateRefreshSeqRef = useRef(0);
@@ -420,7 +428,8 @@ export default function ConversationPage() {
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
   /** Spec #325: work-burst time ledger projection (composer timer + B1). */
-  const [workBurst, setWorkBurst] = useState<WorkBurstProjection | null>(null);
+  const [scopedWorkBurst, setScopedWorkBurst] = useState<ScopedWorkBurst>(null);
+  const workBurst = workBurstForConversation(scopedWorkBurst, activeId);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
   /**
@@ -480,6 +489,11 @@ export default function ConversationPage() {
     getNextPageParam: (lastPage, allPages) => lastPage.length === MESSAGE_PAGE_SIZE ? allPages.reduce((sum, page) => sum + page.length, 0) : undefined,
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+  });
+  const caseSurfaceLoading = shouldShowCaseLoadingSkeleton({
+    activeCaseId: activeId,
+    openingCaseId,
+    messagesLoading: messageQuery.isLoading,
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
@@ -685,7 +699,8 @@ export default function ConversationPage() {
   const prevHasTaskSurfaceRef = useRef(false);
   const rightPanelConvRef = useRef<string | null>(null);
 
-  // Conversation switch → start collapsed; task surface will rising-edge expand after load.
+  // Conversation switch preserves the user's panel visibility. An open panel
+  // stays mounted at the same width and renders the Case loading skeleton.
   useEffect(() => {
     if (!activeId) {
       rightPanelConvRef.current = null;
@@ -696,9 +711,8 @@ export default function ConversationPage() {
       rightPanelConvRef.current = activeId;
       // Assume "had task" until cleared state settles, so stale surface cannot false-trigger expand.
       prevHasTaskSurfaceRef.current = true;
-      setRightPanelCollapsedPersist(true);
     }
-  }, [activeId, setRightPanelCollapsedPersist]);
+  }, [activeId]);
 
   // Auto-expand only on false → true (new task / snapshot with work products).
   useEffect(() => {
@@ -856,10 +870,18 @@ export default function ConversationPage() {
     const nextWb = snapshot.work_burst && Object.keys(snapshot.work_burst).length
       ? snapshot.work_burst
       : fallback?.work_burst;
-    if (nextWb) {
-      setWorkBurst(nextWb);
+    const workBurstCaseId = String(
+      snapshot.conversation?.id || fallback?.conversation?.id || "",
+    ).trim();
+    if (nextWb && workBurstCaseId) {
+      setScopedWorkBurst({
+        conversationId: workBurstCaseId,
+        projection: nextWb,
+      });
     } else if (!snapshot.working && !(fallback?.working)) {
-      setWorkBurst(null);
+      setScopedWorkBurst((prev) =>
+        !workBurstCaseId || prev?.conversationId === workBurstCaseId ? null : prev,
+      );
     }
     // Spec #280: empty ledger arrays are correct — do not fall back to chat archaeology.
     setFindings(Array.isArray(snapshot.findings) ? snapshot.findings : (fallback?.findings || []));
@@ -1003,14 +1025,21 @@ export default function ConversationPage() {
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
       if (requestSeq !== stateRefreshSeqRef.current) return;
+      const action = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: "success",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (action === "ignore") return;
       applyConversationState(state, undefined, { intelEpochAtStart });
       setStateSnapshotLoaded(true);
-      // Spec #278 D3 / #474 L6: heartbeat must NOT overwrite composer after once-on-open.
-      // Open /state failure leaves restore pending — first successful snapshot is the open restore.
-      // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
-      if (composerRestoreCaseIdRef.current !== id) {
+      // A successful heartbeat may finish an initial restore that never completed.
+      // Once restored, later heartbeats remain state-only (#278 D3 / #474 L6).
+      if (action === "state_and_restore") {
         applyComposerRestoreFromSnapshot(id, state);
       }
+      // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
@@ -1069,9 +1098,23 @@ export default function ConversationPage() {
     }
     // Spec #325: work_burst is the sole C1/B1 clock source (not Status elapsed).
     if (isRecord(msg.work_burst)) {
-      setWorkBurst(msg.work_burst as WorkBurstProjection);
+      setScopedWorkBurst({
+        conversationId: convId,
+        projection: msg.work_burst as WorkBurstProjection,
+      });
     } else if (!working) {
-      setWorkBurst((prev) => (prev?.active_burst_id ? { ...prev, active_burst_id: null, accruing: false } : prev));
+      setScopedWorkBurst((prev) =>
+        prev?.conversationId === convId && prev.projection.active_burst_id
+          ? {
+              conversationId: convId,
+              projection: {
+                ...prev.projection,
+                active_burst_id: null,
+                accruing: false,
+              },
+            }
+          : prev,
+      );
     }
     const participants = Array.isArray(msg.participants) ? msg.participants : [];
     if (participants.length > 1 || (participants.length === 1 && !working)) {
@@ -2035,6 +2078,7 @@ export default function ConversationPage() {
     setWorkerAuditTarget(null);
     // Spec #311: clear Case Workset on conversation switch / blank chat (no bleed).
     setWorkset(undefined);
+    setScopedWorkBurst(null);
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
@@ -2052,6 +2096,7 @@ export default function ConversationPage() {
 
   const loadConversation = useCallback(async (id: string | null) => {
     stateRefreshSeqRef.current += 1;
+    setOpeningCaseId(id);
     setLiveStreams(clearLiveStreams());
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "clear" }));
     if (!id) {
@@ -2093,12 +2138,27 @@ export default function ConversationPage() {
 
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
-      if (caseRouteLoadedRef.current !== id) return;
+      const action = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: "success",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (action === "ignore") return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
-      applyComposerRestoreFromSnapshot(id, state);
+      if (action === "state_and_restore") {
+        applyComposerRestoreFromSnapshot(id, state);
+      }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
+      const action = decideComposerSnapshotAction({
+        requestedCaseId: id,
+        currentCaseId: caseRouteLoadedRef.current,
+        outcome: error instanceof ApiError && error.status === 404 ? "not_found" : "failure",
+        restoredCaseId: composerRestoreCaseIdRef.current,
+      });
+      if (action === "ignore") return;
+      if (action === "clear_case") {
         caseRouteLoadedRef.current = null;
         localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
@@ -2116,11 +2176,12 @@ export default function ConversationPage() {
         }
         return;
       }
-      if (caseRouteLoadedRef.current !== id) return;
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
       // Empty archaeology has no task_context / sessions — do not #299-and-mark
       // restored. First successful /state (heartbeat or WS refresh) is the open restore.
+    } finally {
+      setOpeningCaseId((current) => current === id ? null : current);
     }
   }, [
     applyComposerRestoreFromSnapshot,
@@ -2236,13 +2297,11 @@ export default function ConversationPage() {
     if (selectedMention) {
       const current = mentionTargets.find((t) => t.key === selectedMention.key);
       if (!current || current.selectable === false) {
-        const fallback = pickDefaultMentionTarget(mentionTargets, productExperts);
-        selectedMentionRef.current = fallback;
-        setSelectedMention(fallback);
-        if (!isPentestMentionTarget(fallback)) {
-          setEngagementTemplate(null);
-          setGoalModeEnabled(false);
-        }
+        const fallback = restoreComposerFromCaseSnapshot({}, mentionTargets, productExperts);
+        selectedMentionRef.current = fallback.partner;
+        setSelectedMention(fallback.partner);
+        setEngagementTemplate(fallback.engagementTemplate);
+        setGoalModeEnabled(fallback.goalMode);
       }
       return;
     }
@@ -2353,7 +2412,11 @@ export default function ConversationPage() {
   }, [activeId, send]);
 
   useEffect(() => {
-    if (!activeId || !isActiveConversationRunning) return;
+    if (!shouldPollConversationSnapshot({
+      activeCaseId: activeId,
+      running: isActiveConversationRunning,
+      snapshotLoaded: stateSnapshotLoaded,
+    })) return;
     let inFlight = false;
     const refresh = async () => {
       if (inFlight) return;
@@ -2366,7 +2429,7 @@ export default function ConversationPage() {
     };
     const timer = window.setInterval(() => { void refresh(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [activeId, isActiveConversationRunning, refreshConversationState]);
+  }, [activeId, isActiveConversationRunning, refreshConversationState, stateSnapshotLoaded]);
 
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
@@ -2412,16 +2475,33 @@ export default function ConversationPage() {
     [activeId, addMessageToConversation, send],
   );
 
+  const markComposerRestoreHandled = useCallback(() => {
+    if (!activeId) return;
+    composerRestoreCaseIdRef.current = activeId;
+    pendingRestoreSnapshotRef.current = null;
+  }, [activeId]);
+
   const handleSelectPartner = useCallback((target: MentionTarget) => {
     // Spec #299: offline-bound Expert is not a conversation partner.
     if (target.selectable === false) return;
+    markComposerRestoreHandled();
     selectedMentionRef.current = target;
     setSelectedMention(target);
     if (!isPentestMentionTarget(target)) {
       setGoalModeEnabled(false);
       setEngagementTemplate(null);
     }
-  }, []);
+  }, [markComposerRestoreHandled]);
+
+  const handleEngagementTemplate = useCallback((value: EngagementTemplateId | null) => {
+    markComposerRestoreHandled();
+    setEngagementTemplate(value);
+  }, [markComposerRestoreHandled]);
+
+  const handleGoalMode = useCallback((enabled: boolean) => {
+    markComposerRestoreHandled();
+    setGoalModeEnabled(enabled);
+  }, [markComposerRestoreHandled]);
 
   const handleImportReport = useCallback(async (file: File | null) => {
     if (!file) return;
@@ -3037,6 +3117,16 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         <div className="flex min-w-0 flex-1 overflow-hidden">
           <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${rightPanelOpen ? "border-r border-hairline-soft" : ""}`}>
             <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="no-scrollbar min-w-0 flex-1 overflow-y-auto px-9 py-4 space-y-4">
+              {caseSurfaceLoading && (
+                <div
+                  role="status"
+                  aria-label="正在加载会话"
+                  data-testid="case-loading-skeleton"
+                  className="h-full"
+                >
+                  <ConversationMessagesSkeleton />
+                </div>
+              )}
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
@@ -3068,7 +3158,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 </div>
               )}
-              {messages.length === 0 && activeId && (
+              {!caseSurfaceLoading && messages.length === 0 && activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center">
                     <h2 className="text-xl font-semibold">No messages yet</h2>
@@ -3076,9 +3166,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 </div>
               )}
-              {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
-              {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {streamChromeItems.map((item, index) => {
+              {!caseSurfaceLoading && messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
+              {!caseSurfaceLoading && messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
+              {!caseSurfaceLoading && streamChromeItems.map((item, index) => {
                 if (item.kind === "time_separator" || item.kind === "day_separator") {
                   const stampKey =
                     item.kind === "time_separator" ? item.stampKey : item.dayKey;
@@ -3132,7 +3222,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {/* Spec #276: list-tail Working is chrome only — not a Message.
                   Visibility = work-burst / Case working (same lifecycle as composer-work-timer).
                   Spec #305: speaker row when send_success left attribution for this Case. */}
-              {showListTailWorking && (() => {
+              {!caseSurfaceLoading && showListTailWorking && (() => {
                 const pendingContent = pendingChrome && pendingChrome.conversationId === activeId
                   ? pendingChromeSpeakerContent(pendingChrome)
                   : { text: listTailWorkingLabel };
@@ -3173,24 +3263,29 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
             {/* Draft state lives in ChatComposer — page-level input re-rendered the whole stream. */}
-            <ChatComposer
-              ref={composerRef}
-              mentionTargets={mentionTargets}
-              selectedMention={selectedMention}
-              onSelectPartner={handleSelectPartner}
-              engagementTemplate={engagementTemplate}
-              onEngagementTemplate={setEngagementTemplate}
-              goalModeEnabled={goalModeEnabled}
-              onGoalMode={setGoalModeEnabled}
-              running={isActiveConversationRunning}
-              interrupting={interrupting}
-              workBurst={workBurst}
-              onSend={(text) => { void handleSend(text); }}
-              onInterrupt={handleInterrupt}
-            />
+            {caseSurfaceLoading ? (
+              <ChatComposerSkeleton />
+            ) : (
+              <ChatComposer
+                ref={composerRef}
+                mentionTargets={mentionTargets}
+                selectedMention={selectedMention}
+                onSelectPartner={handleSelectPartner}
+                engagementTemplate={engagementTemplate}
+                onEngagementTemplate={handleEngagementTemplate}
+                goalModeEnabled={goalModeEnabled}
+                onGoalMode={handleGoalMode}
+                running={isActiveConversationRunning}
+                interrupting={interrupting}
+                workBurst={workBurst}
+                onSend={(text) => { void handleSend(text); }}
+                onInterrupt={handleInterrupt}
+              />
+            )}
           </main>
           {rightPanelOpen && (
             <RightPanel
+              loading={caseSurfaceLoading}
               phase={agentState.phase as string}
               activeTool={agentState.activeTool as string}
               intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}

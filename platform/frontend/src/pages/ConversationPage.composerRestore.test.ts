@@ -1,62 +1,94 @@
 /**
- * Spec #474 S2: Case-open restore adapter (source contract).
+ * Spec #474 S2: Case snapshot result coordination.
  * Run: npx tsx src/pages/ConversationPage.composerRestore.test.ts
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+  decideComposerSnapshotAction,
+  shouldPollConversationSnapshot,
+} from "../lib/composerCaseRestore";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const pageSrc = readFileSync(join(here, "ConversationPage.tsx"), "utf8");
-
-assert.match(
-  pageSrc,
-  /from "\.\.\/lib\/composerCaseRestore"/,
-  "ConversationPage must use the S1 restore helper",
-);
-assert.match(
-  pageSrc,
-  /applyComposerRestoreFromSnapshot\(id, state\)/,
-  "Case load must restore composer from the snapshot",
-);
-assert.match(
-  pageSrc,
-  /resetComposerChips\(\)/,
-  "Case open / blank home must reset composer chips before restore",
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-b",
+    outcome: "not_found",
+    restoredCaseId: undefined,
+  }),
+  "ignore",
+  "a stale Case A 404 must not clear the current Case B",
 );
 
 assert.equal(
-  /applyComposerRestoreFromSnapshot\(id, fallbackState\)/.test(pageSrc),
-  false,
-  "non-404 /state failure must not restore from empty archaeology",
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "failure",
+    restoredCaseId: undefined,
+  }),
+  "keep_restore_pending",
+  "a transient initial snapshot failure must not complete composer restore",
 );
 
-const refreshFn = pageSrc.slice(
-  pageSrc.indexOf("const refreshConversationState"),
-  pageSrc.indexOf("const setConversationMessageData"),
-);
-assert.match(
-  refreshFn,
-  /if \(composerRestoreCaseIdRef\.current !== id\) \{\s*applyComposerRestoreFromSnapshot\(id, state\);/,
-  "heartbeat may complete a still-pending once-on-open restore",
-);
 assert.equal(
-  refreshFn.includes("applyComposerRestoreFromSnapshot(id, state)") &&
-    refreshFn.includes("composerRestoreCaseIdRef.current !== id"),
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "success",
+    restoredCaseId: undefined,
+  }),
+  "state_and_restore",
+  "the first later successful snapshot completes pending restore",
+);
+
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "success",
+    restoredCaseId: "case-a",
+  }),
+  "state_only",
+  "heartbeat must not overwrite an already-restored composer",
+);
+
+assert.equal(
+  decideComposerSnapshotAction({
+    requestedCaseId: "case-a",
+    currentCaseId: "case-a",
+    outcome: "not_found",
+    restoredCaseId: undefined,
+  }),
+  "clear_case",
+  "a current Case 404 still clears the missing Case",
+);
+
+assert.equal(
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: false,
+    snapshotLoaded: false,
+  }),
   true,
-  "heartbeat restore stays gated on pending once-on-open (#474 L6 / #278 D3)",
+  "an idle Case with a failed initial snapshot must retry until restore can complete",
 );
-
-assert.match(
-  pageSrc,
-  /composerRestoreCaseIdRef\.current = convId/,
-  "first-send mint must keep send-time chips (do not S1-overwrite empty new Case)",
+assert.equal(
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: false,
+    snapshotLoaded: true,
+  }),
+  false,
+  "an idle Case stops polling after its snapshot loads",
 );
-assert.match(
-  pageSrc,
-  /if \(activeId && composerRestoreCaseIdRef\.current !== activeId\) return;/,
-  "#299 default must wait while Case restore is pending",
+assert.equal(
+  shouldPollConversationSnapshot({
+    activeCaseId: "case-a",
+    running: true,
+    snapshotLoaded: true,
+  }),
+  true,
+  "a running Case keeps the existing heartbeat",
 );
 
 console.log("ok: ConversationPage.composerRestore.test.ts");

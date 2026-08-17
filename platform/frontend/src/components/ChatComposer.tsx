@@ -39,6 +39,13 @@ export type MentionTarget = {
   selectable?: boolean;
 };
 
+/** Parent-owned partner only; never guess from catalog order during Case restore. */
+export function resolveActiveComposerPartner(
+  selectedMention: MentionTarget | null,
+): MentionTarget | null {
+  return selectedMention?.selectable !== false ? selectedMention : null;
+}
+
 export type ChatComposerHandle = {
   getValue: () => string;
   setValue: (text: string) => void;
@@ -61,6 +68,57 @@ type Props = {
   onSend: (text: string) => void;
   onInterrupt: () => void;
 };
+
+const CHAT_COMPOSER_OUTER_CLASS = "px-6 pb-4 pt-4";
+const CHAT_COMPOSER_SHELL_CLASS =
+  "relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
+const CHAT_COMPOSER_INPUT_REGION_CLASS = "relative h-[5.875rem] min-w-0";
+const CHAT_COMPOSER_INPUT_CONTENT_CLASS = "px-4 py-3.5 text-sm leading-5";
+const CHAT_COMPOSER_FOOTER_CLASS =
+  "flex min-w-0 items-center justify-between gap-2 px-2.5 py-2";
+const CHAT_COMPOSER_TOOLBAR_CLASS =
+  "flex min-w-0 flex-1 flex-wrap items-center gap-1.5";
+const CHAT_COMPOSER_PARTNER_CONTROL_CLASS =
+  "inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-2 pr-2 text-xs leading-none";
+const CHAT_COMPOSER_MODE_CONTROL_CLASS =
+  "inline-flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs leading-none";
+const CHAT_COMPOSER_GOAL_CONTROL_CLASS =
+  "inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none";
+const CHAT_COMPOSER_ACTIONS_CLASS = "flex h-8 shrink-0 items-center gap-2";
+const CHAT_COMPOSER_SUBMIT_CONTROL_CLASS =
+  "inline-flex h-8 items-center rounded-pill px-4 text-xs font-medium leading-none";
+
+export function ChatComposerSkeleton() {
+  return (
+    <div className={CHAT_COMPOSER_OUTER_CLASS} data-testid="composer-loading-skeleton">
+      <div
+        aria-hidden="true"
+        className={`${CHAT_COMPOSER_SHELL_CLASS} animate-pulse`}
+      >
+        <div className={CHAT_COMPOSER_INPUT_REGION_CLASS}>
+          <div className={CHAT_COMPOSER_INPUT_CONTENT_CLASS}>
+            <div className="flex h-5 items-center">
+              <div className="h-3 w-[38%] rounded-full bg-canvas-inset" />
+            </div>
+            <div className="flex h-5 items-center">
+              <div className="h-3 w-[24%] rounded-full bg-canvas-inset" />
+            </div>
+          </div>
+        </div>
+        <div className={CHAT_COMPOSER_FOOTER_CLASS}>
+          <div className={CHAT_COMPOSER_TOOLBAR_CLASS}>
+            <div className={`${CHAT_COMPOSER_PARTNER_CONTROL_CLASS} w-24 bg-canvas-inset`} />
+            <div className={`${CHAT_COMPOSER_MODE_CONTROL_CLASS} w-20 bg-canvas-inset`} />
+            <div className={`${CHAT_COMPOSER_GOAL_CONTROL_CLASS} w-14 bg-canvas-inset`} />
+          </div>
+          <div className={CHAT_COMPOSER_ACTIONS_CLASS}>
+            <div className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} w-14 bg-canvas-inset`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
 export function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
@@ -147,10 +205,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     [mentionTargets, mentionState],
   );
 
-  const activePartner =
-    (selectedMention && selectedMention.selectable !== false ? selectedMention : null)
-    || mentionTargets.find((t) => t.selectable !== false)
-    || null;
+  const activePartner = resolveActiveComposerPartner(selectedMention);
   const showPentestControls = isPentestMentionTarget(activePartner);
   const activeModeLabel =
     ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label
@@ -253,8 +308,8 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
   }, [input, onSend]);
 
   return (
-    <div className="px-6 pt-4 pb-4">
-      <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
+    <div className={CHAT_COMPOSER_OUTER_CLASS}>
+      <div className={`${CHAT_COMPOSER_SHELL_CLASS} focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]`}>
         {mentionState && mentionOptions.length > 0 && (
           <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-hairline bg-canvas shadow-lg">
             {mentionOptions.map((target) => {
@@ -304,11 +359,11 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
             })}
           </div>
         )}
-        <div className="relative min-w-0">
+        <div className={CHAT_COMPOSER_INPUT_REGION_CLASS}>
           {input && (
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-3.5 text-sm leading-5 text-ink"
+              className={`pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-ink ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}
             >
               {renderMentionText(input)}
             </div>
@@ -331,11 +386,11 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 ? `向 ${activePartner.label || activePartner.name} 描述任务…（Shift+Enter 换行）`
                 : "请先在专家管理创建专家，或从下方选择对话对象…"
             }
-            className="relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
+            className={`relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent text-transparent caret-ink placeholder:text-ink-muted focus:outline-none ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}
           />
         </div>
-        <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        <div className={CHAT_COMPOSER_FOOTER_CLASS}>
+          <div className={CHAT_COMPOSER_TOOLBAR_CLASS}>
             <div ref={partnerMenuRef} className="relative">
               <button
                 type="button"
@@ -346,7 +401,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                   setPartnerMenuOpen((open) => !open);
                   setModeMenuOpen(false);
                 }}
-                className={`inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-2 pr-2 text-xs leading-none text-ink transition-colors ${
+                className={`${CHAT_COMPOSER_PARTNER_CONTROL_CLASS} text-ink transition-colors ${
                   partnerMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
                 }`}
               >
@@ -455,7 +510,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                     setModeMenuOpen((open) => !open);
                     setPartnerMenuOpen(false);
                   }}
-                  className={`inline-flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs leading-none text-ink transition-colors ${
+                  className={`${CHAT_COMPOSER_MODE_CONTROL_CLASS} text-ink transition-colors ${
                     modeMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
                   }`}
                 >
@@ -539,7 +594,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 aria-label="Goal mode"
                 title={goalModeEnabled ? "Goal 已开启" : "开启 Goal 模式"}
                 onClick={() => onGoalMode(!goalModeEnabled)}
-                className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none transition-colors ${
+                className={`${CHAT_COMPOSER_GOAL_CONTROL_CLASS} transition-colors ${
                   goalModeEnabled
                     ? "bg-ink text-on-ink"
                     : "bg-canvas-inset text-ink-secondary hover:bg-surface-elevated"
@@ -549,7 +604,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
               </button>
             )}
           </div>
-          <div className="flex h-8 shrink-0 items-center gap-2">
+          <div className={CHAT_COMPOSER_ACTIONS_CLASS}>
             {composerTimerText != null && (
               <span
                 data-testid="composer-work-timer"
@@ -564,7 +619,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 type="button"
                 disabled={interrupting}
                 onClick={onInterrupt}
-                className="inline-flex h-8 items-center rounded-pill bg-severity-critical px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90 disabled:opacity-70"
+                className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-severity-critical text-white transition-opacity hover:opacity-90 disabled:opacity-70`}
               >
                 {interrupting ? "中断中…" : "中断"}
               </button>
@@ -573,7 +628,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 type="button"
                 onClick={submit}
                 disabled={!input.trim()}
-                className="inline-flex h-8 items-center rounded-pill bg-ink px-4 text-xs font-medium leading-none text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+                className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
               >
                 发送
               </button>

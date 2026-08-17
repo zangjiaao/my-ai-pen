@@ -381,6 +381,7 @@ def set_authorize_paused(
     ledger: dict[str, Any],
     *,
     paused: bool,
+    request_id: object = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """H1: pending authorize is not busy — close open intervals while paused."""
@@ -391,6 +392,21 @@ def set_authorize_paused(
     row = dict(ledger["bursts"][active_id])
     if str(row.get("status") or "") != "open":
         return ledger
+
+    rid = str(request_id or "").strip()
+    if paused and rid:
+        request_ids = [
+            str(value).strip()
+            for value in (row.get("authorize_request_ids") or [])
+            if str(value or "").strip()
+        ]
+        legacy_rid = str(row.get("authorize_request_id") or "").strip()
+        if legacy_rid and legacy_rid not in request_ids:
+            request_ids.append(legacy_rid)
+        if rid not in request_ids:
+            request_ids.append(rid)
+        row["authorize_request_ids"] = request_ids
+        row.pop("authorize_request_id", None)
 
     if paused and not row.get("authorize_paused"):
         # Close all open worker intervals (stop accrual)
@@ -415,6 +431,8 @@ def set_authorize_paused(
         row["open_workers"] = open_workers
         row["paused_workers"] = {}
         row["authorize_paused"] = False
+        row.pop("authorize_request_id", None)
+        row.pop("authorize_request_ids", None)
         ledger["bursts"][active_id] = row
         # Workers may have gone idle mid-authorize (paused_workers cleared by busy_end).
         # After authorize resolves with nobody busy, settle the burst (H1 complete).
@@ -453,6 +471,8 @@ def finalize_burst(
     row["open_workers"] = {}
     row["paused_workers"] = {}
     row["authorize_paused"] = False
+    row.pop("authorize_request_id", None)
+    row.pop("authorize_request_ids", None)
     row["work_seconds"] = max(0, seconds)
     row["status"] = "finalized"
     row["finalized_at"] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -570,11 +590,62 @@ def apply_authorize_pause(
     context: dict | None,
     *,
     paused: bool,
+    request_id: object = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     ledger = get_ledger(context)
-    ledger = set_authorize_paused(ledger, paused=paused, now=now)
+    ledger = set_authorize_paused(
+        ledger,
+        paused=paused,
+        request_id=request_id,
+        now=now,
+    )
     return set_ledger(context, ledger)
+
+
+def authorize_pause_request_matches(ledger: dict[str, Any], request_id: object) -> bool:
+    """True only when the active paused burst belongs to this durable request."""
+    rid = str(request_id or "").strip()
+    active_id = str(ledger.get("active_burst_id") or "").strip()
+    row = (ledger.get("bursts") or {}).get(active_id)
+    if not rid or not isinstance(row, dict) or row.get("authorize_paused") is not True:
+        return False
+    request_ids = {
+        str(value).strip()
+        for value in (row.get("authorize_request_ids") or [])
+        if str(value or "").strip()
+    }
+    legacy_rid = str(row.get("authorize_request_id") or "").strip()
+    if legacy_rid:
+        request_ids.add(legacy_rid)
+    return rid in request_ids
+
+
+def reconcile_terminal_work_burst(
+    context: dict | None,
+    *,
+    conversation_status: object,
+    workers: object,
+    now: float | None = None,
+) -> tuple[dict, bool]:
+    """Finalize an orphaned active burst once a workerless Case is terminal."""
+    status = str(conversation_status or "").strip().lower()
+    terminal = {"completed", "incomplete", "failed", "blocked", "canceled", "cancelled"}
+    ctx = dict(context or {})
+    if status not in terminal or bool(workers):
+        return ctx, False
+
+    ledger = get_ledger(ctx)
+    active_id = str(ledger.get("active_burst_id") or "").strip()
+    if not active_id:
+        return ctx, False
+    row = (ledger.get("bursts") or {}).get(active_id)
+    if not isinstance(row, dict) or str(row.get("status") or "") != "open":
+        ledger["active_burst_id"] = None
+        return set_ledger(ctx, ledger), True
+
+    ledger = finalize_burst(ledger, burst_id=active_id, now=now)
+    return set_ledger(ctx, ledger), True
 
 
 def work_seconds_for_burst(ledger: dict[str, Any], burst_id: object) -> int | None:

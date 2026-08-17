@@ -309,6 +309,24 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
     # Prefer healed row status (matches sidebar / conversation list).
     conv_status = conversation.status or "created"
+    # A terminal workerless Case cannot keep an open/authorize-paused burst.
+    # Heal persisted pre-request-binding ledgers on read so stale chrome cannot survive reload.
+    try:
+        from app.services.work_burst_time import reconcile_terminal_work_burst
+
+        healed_context, burst_healed = reconcile_terminal_work_burst(
+            context,
+            conversation_status=conv_status,
+            workers=context.get("workers") if isinstance(context.get("workers"), dict) else {},
+        )
+        if burst_healed:
+            conversation.context = healed_context
+            await db.commit()
+            context = healed_context
+            task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
+    except Exception as exc:
+        await db.rollback()
+        read_model_errors.append({"model": "work_burst_reconcile", "error": str(exc)})
     agent_state = agent_state_from_checkpoint(checkpoint, conv_status) if checkpoint else agent_state_from_messages(messages, evidence, conv_status)
     # Spec #280 Wave1: Findings SoT = vulnerabilities for this conversation only.
     # Do not merge message_findings / checkpoint shadow vulns into the panel list.

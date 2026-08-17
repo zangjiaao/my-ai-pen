@@ -8,7 +8,7 @@ import { PROCESS_LEADING_SLOT_CLASS } from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
-import { ToolCallCard } from "./cards/ToolCallCard";
+import { ToolCallCard, ToolCallCardSkeleton } from "./cards/ToolCallCard";
 import { LoadingPixelMark } from "./LoadingState";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
@@ -52,6 +52,54 @@ interface Props {
    * result anchor (one duration per work-burst; not on tool/thinking cards).
    */
   resultAnchorWorkSeconds?: number | null;
+}
+
+const USER_MESSAGE_CONTAINER_CLASS = "my-2 flex min-w-0 flex-col items-end";
+const USER_MESSAGE_BUBBLE_CLASS =
+  "max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]";
+const AGENT_MESSAGE_CONTAINER_CLASS = "my-2 min-w-0";
+const AGENT_MESSAGE_LABEL_CLASS = "mb-1 flex items-center gap-2 text-xs text-ink-muted";
+
+export function ConversationMessagesSkeleton() {
+  return (
+    <div aria-hidden="true" className="w-full animate-pulse space-y-4">
+      <div className="my-3 flex items-center justify-center">
+        <div className="h-[18px] w-16 rounded-full bg-canvas-inset" />
+      </div>
+      <div className={USER_MESSAGE_CONTAINER_CLASS}>
+        <div className={`${USER_MESSAGE_BUBBLE_CLASS} w-[44%]`}>
+          <div className="flex h-5 items-center">
+            <div className="h-3 w-full rounded-full bg-canvas-inset" />
+          </div>
+          <div className="flex h-5 items-center">
+            <div className="h-3 w-[64%] rounded-full bg-canvas-inset" />
+          </div>
+        </div>
+      </div>
+      <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
+        <div className={AGENT_MESSAGE_LABEL_CLASS}>
+          <div className="h-3 w-20 rounded-full bg-canvas-inset" />
+        </div>
+        <div className="relative min-w-0">
+          <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed">
+            {[100, 86, 58].map((width) => (
+              <div key={width} className="flex h-6 max-w-[78%] items-center">
+                <div
+                  className="h-3 rounded-full bg-canvas-inset"
+                  style={{ width: `${width}%` }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
+        <div className="relative min-w-0">
+          <ToolCallCardSkeleton />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
@@ -426,7 +474,7 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
     const decisionText = String(content.text || "").trim() || "已选择";
     return (
       <div className="my-2 flex min-w-0 justify-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">
+        <div className={USER_MESSAGE_BUBBLE_CLASS}>
           {renderMentionText(decisionText)}
         </div>
       </div>
@@ -437,8 +485,8 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
     // Mid-run user_steer: FE marks delivery=queued until Agent processes after tools.
     const deliveryQueued = isSteerDeliveryQueued(content);
     return (
-      <div className="my-2 flex min-w-0 flex-col items-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
+      <div className={USER_MESSAGE_CONTAINER_CLASS}>
+        <div className={USER_MESSAGE_BUBBLE_CLASS}>{renderMentionText(String(content.text || ""))}</div>
         {deliveryQueued ? (
           <div
             className="mt-1 max-w-[70%] text-right text-xs text-ink-muted"
@@ -526,9 +574,9 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
   // Spec #325 B1: total work duration only on Agent result (bottom-right), not user bubbles.
   // Stream datetime stamps live in ConversationPage chrome *before* dialogue.
   return (
-    <div className="my-2 min-w-0">
+    <div className={AGENT_MESSAGE_CONTAINER_CLASS}>
       {showAgentLabel && (
-        <div className="mb-1 flex items-center gap-2 text-xs text-ink-muted">
+        <div className={AGENT_MESSAGE_LABEL_CLASS}>
           <span className="font-medium text-ink-secondary">{agentLabel}</span>
         </div>
       )}
