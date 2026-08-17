@@ -1,7 +1,7 @@
 # Spec: Case · Participant Session · work mode continuity
 
 **Status:** Implementable Spec (product contract)  
-**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) mode continuity on interrupt→continue; [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9 working-runtime continuity; [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) Session owns runtime — Task package settle does not dispose captain)  
+**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) mode continuity on interrupt→continue; [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9 working-runtime continuity; [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) Session owns runtime — Task package settle does not dispose captain; [#474](https://github.com/zangjiaao/my-ai-pen/issues/474) composer restore on Case remount)  
 **Inputs:** Owner grilling (session analysis `0ab49d25-…`; Free→Graph silent divert; Case vs Session continuity); owner resolution vs map [#213](https://github.com/zangjiaao/my-ai-pen/issues/213) (2026-08-03); field Case `f758d7f5-…` (Graph interrupt → Free cold-start / working-runtime amnesia)  
 **Product path:** Graph × Pi + Product state (ADR 0001). Soft scenario Graph remains **retired**.  
 **Amends:** `docs/specs/task-graph.md` product rule “Expert = Graph only / no Expert free chip”; `docs/specs/expert-offers.md` Case sticky template as sole mode authority; interrupt continue continuity (#282 mode + #283 I0.9 park/attach).  
@@ -72,7 +72,7 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 11. **Permission** = standard option cards ∪ natural language.  
 12. **Cards:** current Session Agent requests permission; platform renders **standard shell** (enter Graph / exit Graph / handoff / continue-parked vs restart). Platform does **not** auto-pop “enter Graph?” on resume/fail.  
 13. **Natural language:** interpreted by **current** Session Agent; Agent commits **structured** decision. Platform does not regex-map「可以」→ mode.  
-14. **UI Graph control** includes **不指定** (user intent: no force mode change). Dual-rail: composer = user preference; AgentRow = Session actual (Spec #278). Sync composer only after mode settlement.  
+14. **UI Graph control** includes **不指定** (user intent: no force mode change). Dual-rail: composer = user preference; AgentRow = Session actual (Spec #278). Sync composer only after mode settlement. **Remount / Case open:** restore composer partner from Case current Mention and Graph/Goal from **that** Session — not Case sticky template, not a browser-global last pick (Spec [#474](https://github.com/zangjiaao/my-ai-pen/issues/474) / `composer-case-restore.md`).  
 14a. **Handoff / authorization wait (simple path):** Session tells platform it needs user approval → platform **displays** the card and **forwards user feedback** to the **current Session** only. Clicking Authorize/Cancel and **typing a reply** are the **same feedback path** (not a second task, not a speaker switch). Platform does **not** interpret approve/cancel semantics. After any user feedback, the card is **skipped / greyed** (no second click). **Speaker label** = current Participant Session (header/Mention); `handoff_expert_*` is card content only — never top-level `expert_name` on the waiting turn.
 
 ### 3.4 Queue and Mention
@@ -188,6 +188,7 @@ When implementing, update in the **same change**:
 - This file (if contract shifts)  
 - `docs/specs/task-graph.md` (Expert Free work mode + UI 不指定)  
 - `docs/specs/expert-offers.md` (Case share vs Session mode; handoff)  
+- `docs/specs/composer-case-restore.md` (composer chips after remount — #474)  
 - `CONTEXT.md` only if ubiquitous language needs Participant Session / work mode Free  
 - `docs/README.md` index (link present)
 

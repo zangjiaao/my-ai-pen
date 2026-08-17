@@ -23,7 +23,7 @@ Operators and Agents need a **skill-like** understanding of which Expert Graphs 
 | **D1** | Enter Graph requires **user permission**. Skill-like = **catalog + when-to-use**, not silent harness switch. |
 | **D2** | **Composer workflow control** = user intent for the next send. **AgentRow** = Session **actual** harness. |
 | **A1** | Composer **不指定** does **not** force mode change (if already in Graph, stay in Graph). |
-| **D3** | Sync composer → current expert + Graph **only after mode settlement** (enter/exit/switch Graph succeeds). Never continuous overwrite while user edits. |
+| **D3** | Sync composer → current expert + Graph **only after mode settlement** (enter/exit/switch Graph succeeds). Never continuous overwrite while user edits. **Case remount** is the same once-align from Session actual (Spec [#474](https://github.com/zangjiaao/my-ai-pen/issues/474)) — not a heartbeat overwrite, not Case sticky template. |
 | **D4** | Agent proposes enter/exit/switch Graph via **same authorization card path** as handoff. User selecting a Graph in composer and sending = explicit permission (no extra card required). |
 | **D5** | Graph overview / when-to-use is **authored inside Graph definitions**; Agent can **list/read** like Skills (L1 catalog; details on demand). Product graphs only by default (`app_assessment`, `redteam_deep`); lab `*_thin` excluded unless later opted in. |
 | **D6** | AgentRow shows **`Free`** or short Graph **label** (e.g. 应用评估), from Session actual mode. |
@@ -72,4 +72,4 @@ Primary pure seam: **S1 catalog builder**.
 
 ## 6. Doc maintenance
 
-Update this file and cross-link `participant-session.md` when catalog shape or dual-rail rules change. Index in `docs/README.md`.
+Update this file and cross-link `participant-session.md` when catalog shape or dual-rail rules change. Composer remount restore: `composer-case-restore.md` (#474). Index in `docs/README.md`.

@@ -13,6 +13,12 @@ import ChatComposer, {
   type ChatComposerHandle,
   type MentionTarget,
 } from "../components/ChatComposer";
+import {
+  engagementTemplateFromGraphId,
+  pickDefaultMentionTarget,
+  restoreComposerFromCaseSnapshot,
+  type ComposerRestoreSnapshot,
+} from "../lib/composerCaseRestore";
 import MessageRenderer, {
   AgentPendingCard,
   agentDisplayName,
@@ -238,6 +244,8 @@ type ConversationSnapshot = {
   working?: boolean;
   workers?: Array<Record<string, unknown>>;
   participants?: Array<Record<string, unknown>>;
+  /** Spec #474 S3: Session-private work_mode / graph_id per expert_id. */
+  sessions?: Record<string, unknown>;
   case_run?: CaseRunSummary;
   /** Spec #325 S2 work-burst time ledger (composer C1 + B1). */
   work_burst?: WorkBurstProjection;
@@ -313,6 +321,50 @@ export default function ConversationPage() {
   /** Selected conversation partner (expert or platform). */
   const [selectedMention, setSelectedMention] = useState<MentionTarget | null>(null);
   const selectedMentionRef = useRef<MentionTarget | null>(null);
+  const mentionTargetsRef = useRef<MentionTarget[]>([]);
+  const productExpertsRef = useRef<ProductExpert[]>([]);
+  /** Spec #474: last Case id whose composer chips were restored (`null` = blank home). */
+  const composerRestoreCaseIdRef = useRef<string | null | undefined>(undefined);
+  const pendingRestoreSnapshotRef = useRef<ComposerRestoreSnapshot | null>(null);
+
+  const resetComposerChips = useCallback(() => {
+    selectedMentionRef.current = null;
+    setSelectedMention(null);
+    setEngagementTemplate(null);
+    setGoalModeEnabled(false);
+    composerRestoreCaseIdRef.current = undefined;
+    pendingRestoreSnapshotRef.current = null;
+  }, []);
+
+  const applyComposerRestoreFromSnapshot = useCallback((
+    caseId: string | null,
+    snapshot: ComposerRestoreSnapshot | null,
+  ) => {
+    const targets = mentionTargetsRef.current;
+    const experts = productExpertsRef.current;
+    if (!caseId) {
+      pendingRestoreSnapshotRef.current = null;
+      composerRestoreCaseIdRef.current = null;
+      const pick = pickDefaultMentionTarget(targets, experts);
+      selectedMentionRef.current = pick;
+      setSelectedMention(pick);
+      setEngagementTemplate(null);
+      setGoalModeEnabled(false);
+      return;
+    }
+    if (!targets.length) {
+      pendingRestoreSnapshotRef.current = snapshot;
+      return;
+    }
+    const restored = restoreComposerFromCaseSnapshot(snapshot || {}, targets, experts);
+    selectedMentionRef.current = restored.partner;
+    setSelectedMention(restored.partner);
+    setEngagementTemplate(restored.engagementTemplate);
+    setGoalModeEnabled(restored.goalMode);
+    composerRestoreCaseIdRef.current = caseId;
+    pendingRestoreSnapshotRef.current = null;
+  }, []);
+
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [productExperts, setProductExperts] = useState<ProductExpert[]>([]);
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
@@ -953,8 +1005,8 @@ export default function ConversationPage() {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state, undefined, { intelEpochAtStart });
       setStateSnapshotLoaded(true);
-      // Spec #278 D3: do NOT overwrite composer engagementTemplate from Case sticky /
-      // heartbeat refresh — only work_mode_settled / user menu edits change it.
+      // Spec #278 D3 / #474 L6: heartbeat must NOT restore composer (partner / Graph / Goal).
+      // Only once-on-open restore, user menu edits, partner_switch, work_mode_settled.
       // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
@@ -1794,11 +1846,7 @@ export default function ConversationPage() {
       const mode = String(m.work_mode || "").trim().toLowerCase();
       const gid = String(m.graph_id || m.engagement_template || "").trim().toLowerCase();
       if (mode === "graph") {
-        if (gid === "redteam_deep") setEngagementTemplate("redteam_deep");
-        else if (gid === "app_assessment") setEngagementTemplate("app_assessment");
-        else if (gid === "hypothesis_cycle") setEngagementTemplate("hypothesis_cycle");
-        else if (gid === "redteam" || gid === "deep") setEngagementTemplate("redteam_deep");
-        else if (gid === "assess" || gid === "assessment") setEngagementTemplate("app_assessment");
+        setEngagementTemplate(engagementTemplateFromGraphId(gid));
       } else if (mode === "free") {
         setEngagementTemplate(null);
       }
@@ -2009,6 +2057,8 @@ export default function ConversationPage() {
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
       setActiveId(null);
       resetConversationState();
+      resetComposerChips();
+      applyComposerRestoreFromSnapshot(null, null);
       return;
     }
     // Selecting a real session cancels any pending blank-chat intent.
@@ -2027,6 +2077,7 @@ export default function ConversationPage() {
     void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
     // Clear previous Case surface first so Status auto-expand does not use stale task data.
     resetConversationState();
+    resetComposerChips();
     setActiveId(id);
     setActiveConversationNodeId(conversations.find(c => c.id === id)?.node_id || null);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
@@ -2039,8 +2090,10 @@ export default function ConversationPage() {
 
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
+      if (caseRouteLoadedRef.current !== id) return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
+      applyComposerRestoreFromSnapshot(id, state);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
         caseRouteLoadedRef.current = null;
@@ -2048,6 +2101,8 @@ export default function ConversationPage() {
         void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
         setActiveId(null);
         resetConversationState();
+        resetComposerChips();
+        applyComposerRestoreFromSnapshot(null, null);
         void fetchAll();
         // Drop dead Case URL so operator lands on blank home, not a stuck `/:missing`.
         navigate(HOME_CHAT_PATH, { replace: true, state: { preferBlankChat: true } });
@@ -2058,10 +2113,23 @@ export default function ConversationPage() {
         }
         return;
       }
+      if (caseRouteLoadedRef.current !== id) return;
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
+      applyComposerRestoreFromSnapshot(id, fallbackState);
     }
-  }, [applyConversationState, conversations, fetchAll, loadOwnerLedgerAssets, navigate, queryClient, resetConversationState, send]);
+  }, [
+    applyComposerRestoreFromSnapshot,
+    applyConversationState,
+    conversations,
+    fetchAll,
+    loadOwnerLedgerAssets,
+    navigate,
+    queryClient,
+    resetComposerChips,
+    resetConversationState,
+    send,
+  ]);
   loadConversationRef.current = loadConversation;
 
   useEffect(() => {
@@ -2145,16 +2213,32 @@ export default function ConversationPage() {
     return out;
   }, [productExperts]);
 
-  // Default partner: online is_default → online pack=default → first online (Spec #299).
-  // Re-pick when current Expert goes offline or is removed.
+  mentionTargetsRef.current = mentionTargets;
+  productExpertsRef.current = productExperts;
+
+  // Spec #474: flush Case restore once mention catalog arrives after snapshot.
   useEffect(() => {
+    if (!activeId) return;
+    if (composerRestoreCaseIdRef.current === activeId) return;
+    if (!pendingRestoreSnapshotRef.current) return;
+    if (!mentionTargets.length) return;
+    applyComposerRestoreFromSnapshot(activeId, pendingRestoreSnapshotRef.current);
+  }, [activeId, mentionTargets, productExperts, applyComposerRestoreFromSnapshot]);
+
+  // Default partner: #299 for blank home, or after restore left us empty / offline.
+  // Spec #474: do not #299 while a Case restore is still pending.
+  useEffect(() => {
+    if (activeId && composerRestoreCaseIdRef.current !== activeId) return;
     if (selectedMention) {
       const current = mentionTargets.find((t) => t.key === selectedMention.key);
-      // Drop if deleted or bound node went offline (not selectable).
       if (!current || current.selectable === false) {
         const fallback = pickDefaultMentionTarget(mentionTargets, productExperts);
         selectedMentionRef.current = fallback;
         setSelectedMention(fallback);
+        if (!isPentestMentionTarget(fallback)) {
+          setEngagementTemplate(null);
+          setGoalModeEnabled(false);
+        }
       }
       return;
     }
@@ -2163,7 +2247,7 @@ export default function ConversationPage() {
     if (!pick) return;
     selectedMentionRef.current = pick;
     setSelectedMention(pick);
-  }, [mentionTargets, selectedMention, productExperts]);
+  }, [mentionTargets, selectedMention, productExperts, activeId]);
 
   // Case URL is the only SoT for the open session. localStorage is last-active
   // cache (redirect `/` → `/:id`). preferBlank forces blank home without redirect.
@@ -2441,6 +2525,8 @@ export default function ConversationPage() {
         // startFresh is false, and polluted plan_tree from WS-while-blank would stick.
         resetConversationState();
         setActiveId(convId);
+        // Spec #474: keep send-time chips; new Case snapshot has no expert_id yet.
+        composerRestoreCaseIdRef.current = convId;
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
         if (location.pathname !== casePath(convId)) {
@@ -2839,32 +2925,6 @@ export default function ConversationPage() {
 
 function resolveMentionedTarget(value: string, targets: MentionTarget[]): MentionTarget | null {
   return targets.find((t) => value.includes(`@${t.name}`)) || null;
-}
-
-/** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
-/**
- * New-chat partner priority (Spec #299: only online / schedulable seats):
- * 1) expert.is_default from 专家管理 (if online)
- * 2) pack_id === default (通用助理, if online)
- * 3) first online target
- * Never default to an offline-bound Expert.
- */
-function pickDefaultMentionTarget(
-  targets: MentionTarget[],
-  experts: ProductExpert[],
-): MentionTarget | null {
-  const selectable = targets.filter((t) => t.selectable !== false);
-  if (!selectable.length) return null;
-  const byId = new Map(experts.map((e) => [e.id, e]));
-  const flagged = selectable.find((t) => {
-    if (!t.expertId) return false;
-    const e = byId.get(t.expertId);
-    return Boolean(e?.is_default && e.enabled !== false);
-  });
-  if (flagged) return flagged;
-  const builtin = selectable.find((t) => String(t.packId || "").toLowerCase() === "default");
-  if (builtin) return builtin;
-  return selectable.find((t) => t.status === "online") || selectable[0] || null;
 }
 
 function stripMentionToken(value: string, name: string | null): string {

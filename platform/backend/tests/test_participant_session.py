@@ -8,6 +8,7 @@ from app.services.participant_session import (
     resolve_interrupt_wind_down,
     resolve_work_envelope,
     session_record_from_context,
+    sessions_projection_for_snapshot,
     wire_graph_execution_for_status,
 )
 
@@ -690,6 +691,26 @@ def test_is_incomplete_like_status():
     assert is_incomplete_like_status("interrupted") is True
     assert is_incomplete_like_status("completed") is False
     assert is_incomplete_like_status(None) is False
+
+
+def test_sessions_projection_for_snapshot_is_thin():
+    """Spec #474 S3: snapshot sessions are work_mode / graph_id only."""
+    ctx = merge_session_into_context(
+        {},
+        expert_id="e-pen",
+        work_mode="graph",
+        graph_id="app_assessment",
+    )
+    ctx = merge_session_into_context(
+        ctx,
+        expert_id="e-default",
+        work_mode="free",
+    )
+    proj = sessions_projection_for_snapshot(ctx)
+    assert proj["e-pen"] == {"work_mode": "graph", "graph_id": "app_assessment"}
+    assert proj["e-default"] == {"work_mode": "free"}
+    assert sessions_projection_for_snapshot({}) == {}
+    assert sessions_projection_for_snapshot(None) == {}
 
 
 # --- Spec #282 S7 finalize after apply (router edge paths) ---
