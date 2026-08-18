@@ -6,6 +6,8 @@
  * current_action / agent_phase stay machine-readable for filters.
  */
 
+import type { LlmUsageSnapshot } from "./llm-usage.js";
+
 export type PanelAgentRecord = {
   id: string;
   name: string;
@@ -33,6 +35,11 @@ export type PanelAgentRecord = {
    * Not expert catalog id.
    */
   session_id?: string;
+  /**
+   * Spec #487: child (parent_id set) own LLM usage. Root checkpoint llm_usage
+   * stays Main/Stage Captain own usage — do not merge children here.
+   */
+  usage?: LlmUsageSnapshot;
 };
 
 /** Map tool names → short Chinese labels (product UI language). */
@@ -241,19 +248,28 @@ export class PanelAgentTracker {
     const goal = resolveSubagentGoal(input.label, input.assignment);
     const workerN = this.workerIndexFor(input.id);
     const name = formatWorkerName(workerN);
+    const prev = this.children.get(input.id);
     this.children.set(input.id, {
       id: input.id,
-      name,
+      name: prev?.name || name,
       status: "running",
       parent_id: "node4-main",
       task: goal.slice(0, 240),
-      skills: node ? [node] : [],
+      skills: node ? [node] : prev?.skills || [],
       pending_count: 0,
       role: "subagent",
       current_action: "running",
       current_detail: goal.slice(0, 160),
       goal_id: input.goalId,
+      usage: prev?.usage,
     });
+  }
+
+  /** Attach or replace the child row's own usage snapshot (does not change status). */
+  setChildUsage(id: string, usage: LlmUsageSnapshot): void {
+    const prev = this.children.get(id);
+    if (!prev) return;
+    this.children.set(id, { ...prev, usage: { ...usage } });
   }
 
   noteSubagentEnd(input: { id: string; ok: boolean; summary?: string }): void {
@@ -280,6 +296,7 @@ export class PanelAgentTracker {
       outcome: status,
       error: input.ok ? undefined : (input.summary || "failed").slice(0, 240),
       goal_id: prev?.goal_id,
+      usage: prev?.usage,
     });
   }
 

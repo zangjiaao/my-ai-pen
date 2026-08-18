@@ -187,3 +187,4 @@ Optional later: Status chrome that occupancy shrink ran. **Not** Spec-blocking.
 | 2026-08-15 | Shipped: `NODE4_COMPACT_THRESHOLD` (default 0.8) + `transformContext` persist-then-checkpoint. |
 | 2026-08-15 | Settle persist called out as a separate optional pass (does not replace compact persist). |
 | 2026-08-15 | Living intel inject follows owner-intel Case hang filter (Host-level + Scope Service ports). |
+| 2026-08-19 | Each model POST records UTF-8 body bytes to `piDir/llm-requests.jsonl` (and `events.jsonl`); no request body stored. |

@@ -177,6 +177,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
    - Stream: chat date/time stamps; suppress infra status notices; B1 duration on result anchor.  
    - Composer: live C1 timer by Send; hide when not busy.  
 4. **Double-count policy:** Prefer Sub-reported usage as source for child work; parent rollup = own + children; Case = sum of Participants without recounting.  
+    **Node4 wire (Spec [#487](https://github.com/zangjiaao/my-ai-pen/issues/487)):** each LLM Sub/package pi session has a **narrow usage observer** (assistant `message_end` only — not Main text/status/health attach). Cumulative usage is published on the matching **child** `panel_agents` row (`usage`). Root checkpoint `llm_usage` remains Participant Main / Graph Stage Captain **own** usage. Platform continues to fold child rows once. Terminal child snapshot is mandatory on success, fail, timeout, and interrupt; warm Worker park retains the ledger + subscription; hard release (TTL / LRU / task dispose) drops the listener. Shell-only packages make no model request and omit LLM usage. `agent_count` is descriptive metadata, not a token multiplier.  
 5. **Model field:** Display the model id/name associated with that Participant’s metered usage (last-known or primary configured model for the seat—product may pick one stable field; must not invent per-tool marketing names).  
 6. **Active count:** May remain as secondary mono text; must not replace Case totals as the primary header metric.  
 7. **Internal status denylist (v1):** At least infra/health style status payloads (including `tooling_health` and equivalent opaque system health tokens). User-meaningful system gists already governed by other Specs (e.g. engagement closeout) are not reclassified as infra by this Spec without explicit amend.  
@@ -223,6 +224,8 @@ on LLM usage event:
 | **UI** | Status has no elapsed hero requirement; header shows Case tok+cost; AgentRow has model/requests/tokens and no required work-summary string; tooling_health not rendered; composer timer present only when working; Case B cannot render Case A work-burst during switch; one B1 duration per burst after settle. |
 
 **Prior art:** `test_case_participants` / `recompute_case_run`; conversation snapshot purity (#280); `conversation_working` / work_status paths; RightPanel / AgentCollaborationTree tests; MessageRenderer status rendering; #321 projection tests when present.
+
+**Node4 wire (#487):** `node4/src/runtime/subagent-usage-metering.test.ts` drives synthetic Main + Sub pi `message_end` events through Node4, applies the emitted checkpoint via `apply_checkpoint_to_participant`, and asserts Main 70 + Sub 30 = Case 100 once (re-apply idempotent). Platform-only fixtures with injected child usage are not sufficient as the primary proof.
 
 **Fixtures:** Synthetic usage events and busy interval timelines; no live LLM required for ledger math.
 

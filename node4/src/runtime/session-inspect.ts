@@ -33,6 +33,7 @@ export async function writePostRunInspectArtifacts(options: {
   const present: string[] = [];
   const checks: Array<{ name: string; dir: string }> = [
     { name: "events.jsonl", dir: piDir },
+    { name: "llm-requests.jsonl", dir: piDir },
     { name: "transcript.jsonl", dir: piDir },
     { name: "agent-summary.json", dir: piDir },
     { name: "findings", dir: caseDir },
@@ -76,11 +77,29 @@ export async function writePostRunInspectArtifacts(options: {
     artifacts: present,
     writtenAt: new Date().toISOString(),
     inspect:
-      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
+      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and llm-requests.jsonl; Case findings/evidence/surfaces under workspace/case-{caseId}/ after dispose.",
   };
   const manifestPath = join(piDir, "session-manifest.json");
   await writeFileInsideRoot(manifestPath, contain, JSON.stringify(manifest, null, 2));
   return { manifestPath, transcriptPath };
+}
+
+/**
+ * Spec #487: persist the child pi session transcript (including assistant
+ * `usage`) so Sub metering can be recomputed offline from messages[].usage.
+ * Same jsonl shape as Main `transcript.jsonl`. Empty list still writes the file
+ * so a missing file means "never persisted", not "zero usage".
+ */
+export async function writeChildSessionTranscript(
+  workDir: string,
+  messages: readonly unknown[] | undefined,
+): Promise<string> {
+  await ensureDirInsideRoot(workDir, workDir);
+  const transcriptPath = join(workDir, "transcript.jsonl");
+  const list = Array.isArray(messages) ? messages : [];
+  const lines = list.map((m) => JSON.stringify(m));
+  await writeFileInsideRoot(transcriptPath, workDir, lines.length ? `${lines.join("\n")}\n` : "");
+  return transcriptPath;
 }
 
 /** Pure check used by smokes: required inspect files exist after a run. */
