@@ -31,6 +31,7 @@ import {
   surfaceFieldsFromToolArgs,
 } from "./tool-result-wire.js";
 import { convertNode4MessagesToLlm, makeHarnessMessage } from "./harness-channel.js";
+import { appendLlmRequestRecord, measureLlmRequestPayload } from "./llm-request-meter.js";
 
 export type Node4AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -80,6 +81,8 @@ export type RunNode4AgentOptions = {
   transformContext?: Agent["transformContext"];
   /** Fail-closed occupancy after shrink retry. */
   occupancyError?: () => string | undefined;
+  /** Called with the serialized chat.completions body size (no body stored). */
+  onLlmRequest?: (meter: import("./llm-request-meter.js").LlmRequestMeter) => void;
   /** Test seam: inject a prebuilt session (skips Agent construction). */
   sessionFactory?: () => Node4AgentSession | Promise<Node4AgentSession>;
 };
@@ -205,7 +208,19 @@ export async function runNode4Agent(options: RunNode4AgentOptions): Promise<Node
       tools: options.tools,
     },
     // streamSimple is the stable Agent streamFn today (pi-ai Models.streamSimple is equivalent once providers are registered).
-    streamFn: streamSimple,
+    streamFn: (model, context, streamOpts) =>
+      streamSimple(model, context, {
+        ...streamOpts,
+        onPayload: async (params, m) => {
+          try {
+            options.onLlmRequest?.(measureLlmRequestPayload(params, m));
+          } catch {
+            /* meter must not break the call */
+          }
+          const next = await streamOpts?.onPayload?.(params, m);
+          return next === undefined ? params : next;
+        },
+      }),
     convertToLlm: convertNode4MessagesToLlm,
     getApiKey: options.getApiKey ?? ((provider: string) => resolveNode4ApiKey(provider)),
     beforeToolCall: options.beforeToolCall,
@@ -340,6 +355,13 @@ export async function createBoundNode4Session(
     thinkingLevel: options.thinkingLevel ?? "medium",
     sessionId: options.sessionId,
     occupancyError: () => compactCycle.occupancyError,
+    onLlmRequest: (meter) => {
+      void appendLlmRequestRecord(runtime.piDir, {
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        ...meter,
+      });
+    },
     transformContext: createContextWindowTransform({
       contextWindow: Number(model.contextWindow) || 128_000,
       cycle: compactCycle,

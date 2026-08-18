@@ -33,6 +33,7 @@ export async function writePostRunInspectArtifacts(options: {
   const present: string[] = [];
   const checks: Array<{ name: string; dir: string }> = [
     { name: "events.jsonl", dir: piDir },
+    { name: "llm-requests.jsonl", dir: piDir },
     { name: "transcript.jsonl", dir: piDir },
     { name: "agent-summary.json", dir: piDir },
     { name: "findings", dir: caseDir },
@@ -76,7 +77,7 @@ export async function writePostRunInspectArtifacts(options: {
     artifacts: present,
     writtenAt: new Date().toISOString(),
     inspect:
-      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
+      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and llm-requests.jsonl; Case findings/evidence/surfaces under workspace/case-{caseId}/ after dispose.",
   };
   const manifestPath = join(piDir, "session-manifest.json");
   await writeFileInsideRoot(manifestPath, contain, JSON.stringify(manifest, null, 2));
