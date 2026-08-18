@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveSessionWorkspaceDir } from "../runtime/session-workspace.js";
 import { resolveShellCwd, runShellOnHost } from "./shell.js";
 
 assert.equal(
@@ -16,6 +17,15 @@ assert.equal(
     task: { conversationId: "c", expertId: "e" } as any,
   }),
   "/e",
+);
+assert.equal(
+  resolveShellCwd({
+    piDir: "/p",
+    workspaceDir: "/w",
+    task: { conversationId: "c", expertId: "e" } as any,
+  }),
+  resolveSessionWorkspaceDir("/w", "c", "e"),
+  "command= and shell share the expert fallback when sessionDir is unset",
 );
 assert.equal(
   resolveShellCwd({

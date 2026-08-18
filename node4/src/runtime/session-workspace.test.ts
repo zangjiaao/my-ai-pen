@@ -279,6 +279,10 @@ try {
         factsAsRoot = true;
       }
       assert(factsAsRoot, "symlink containment root is refused");
+      assert(
+        (await readFileInsideRoot(join(facts, "x.json"), facts)) === null,
+        "read refuses symlink containment root",
+      );
 
       let blocked = false;
       try {

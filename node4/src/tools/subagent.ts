@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { runShell } from "./shell.js";
+import { resolveShellCwd, runShell } from "./shell.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import {
@@ -603,7 +603,7 @@ async function runSubagentPackage(
     subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {
       if (command) {
-        const cwd = runtime.sessionDir || ctx.workDir;
+        const cwd = resolveShellCwd(runtime);
         const shellOut = await runShell(
           command,
           cwd,

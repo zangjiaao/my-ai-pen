@@ -3,9 +3,10 @@
  * so Main can still book or deadend instead of blindly re-dispatching.
  */
 
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeSubagentResult, type SubagentStructuredResult } from "./subagent-result.js";
+import { readFileInsideRoot } from "./session-workspace.js";
 import type { SubagentHandoffFields } from "./subagent-handoff.js";
 
 const MAX_FILES = 24;
@@ -24,7 +25,8 @@ async function collectTextSnippets(workDir: string): Promise<string[]> {
     }
     for (const name of names.slice(0, MAX_FILES)) {
       try {
-        const raw = await readFile(join(dir, name), "utf8");
+        const raw = await readFileInsideRoot(join(dir, name), workDir);
+        if (raw == null) continue;
         const text = raw.slice(0, MAX_FILE_CHARS).trim();
         if (text.length >= 24) snippets.push(text);
       } catch {

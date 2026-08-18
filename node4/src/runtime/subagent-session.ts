@@ -7,8 +7,13 @@
  * instead of runNode4Agent cold start.
  */
 
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  readFileInsideRoot,
+  unlinkInsideRoot,
+  writeFileInsideRoot,
+} from "./session-workspace.js";
 import { loadConfig } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import { GoalStore } from "../stores/goal.js";
@@ -143,7 +148,8 @@ async function readIntentionalStructuredFile(
 ): Promise<unknown | undefined> {
   for (const name of INTENTIONAL_STRUCTURED_FILES) {
     try {
-      const raw = await readFile(join(workDir, name), "utf8");
+      const raw = await readFileInsideRoot(join(workDir, name), workDir);
+      if (raw == null) continue;
       return JSON.parse(raw);
     } catch {
       /* try next */
@@ -155,9 +161,9 @@ async function readIntentionalStructuredFile(
 async function clearIntentionalStructuredFiles(workDir: string): Promise<void> {
   for (const name of INTENTIONAL_STRUCTURED_FILES) {
     try {
-      await unlink(join(workDir, name));
+      await unlinkInsideRoot(join(workDir, name), workDir);
     } catch {
-      /* ok if missing */
+      /* ok if missing or blocked */
     }
   }
 }
@@ -237,10 +243,10 @@ async function collectStructuredResult(input: {
       input.promptError,
     );
     if (!existing) {
-      await writeFile(
+      await writeFileInsideRoot(
         join(input.workDir, "settlement.json"),
+        input.workDir,
         JSON.stringify(structured, null, 2),
-        "utf8",
       );
     }
     return { structured, salvaged: false };
@@ -268,10 +274,10 @@ async function collectStructuredResult(input: {
   });
   // Salvage path always ≠ package success (even when no candidates were recovered).
   const salvaged = true;
-  await writeFile(
+  await writeFileInsideRoot(
     join(input.workDir, "salvage-evidence.json"),
+    input.workDir,
     JSON.stringify({ ...structured, salvaged: true }, null, 2),
-    "utf8",
   );
   return { structured, salvaged };
 }
@@ -547,7 +553,11 @@ async function runColdPackage(args: {
       artifacts: [],
       notes: `NODE4_SUBAGENT_DRY=1 — no LLM child session; session_seed=${sessionSeed.seeded}`,
     });
-    await writeFile(join(workDir, "settlement.json"), JSON.stringify(structured, null, 2), "utf8");
+    await writeFileInsideRoot(
+      join(workDir, "settlement.json"),
+      workDir,
+      JSON.stringify(structured, null, 2),
+    );
     return {
       ok: true,
       summary: structured.summary,

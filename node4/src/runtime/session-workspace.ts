@@ -264,16 +264,50 @@ export async function ensureDirInsideRoot(dirAbs: string, rootAbs: string): Prom
   }
 }
 
+/** Remove a symlink leaf only when its parent is a real directory. Never follow ancestors. */
+async function unlinkSymlinkLeaf(target: string): Promise<void> {
+  await assertRealDir(dirname(target));
+  const st = await lstat(target);
+  if (!st.isSymbolicLink()) {
+    throw new Error(`host I/O blocked: ELOOP but leaf is not a symlink ${target}`);
+  }
+  await unlink(target);
+}
+
 async function openNoFollow(target: string, flags: number): Promise<Awaited<ReturnType<typeof open>>> {
   try {
     return await open(target, flags | fsConstants.O_NOFOLLOW);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP") {
-      await unlink(target).catch(() => {});
+      await unlinkSymlinkLeaf(target);
       return open(target, flags | fsConstants.O_NOFOLLOW);
     }
     throw err;
+  }
+}
+
+/** Prefer the opened fd (Linux /proc). Path realpath can lie after an ancestor swap. */
+async function realpathOfHandle(
+  fh: Awaited<ReturnType<typeof open>>,
+  fallbackPath: string,
+): Promise<string> {
+  try {
+    return await realpath(`/proc/self/fd/${fh.fd}`);
+  } catch {
+    return canonicalizeExisting(fallbackPath);
+  }
+}
+
+async function assertHandleInsideRoot(
+  fh: Awaited<ReturnType<typeof open>>,
+  rootAbs: string,
+  fallbackPath: string,
+): Promise<void> {
+  const realFile = await realpathOfHandle(fh, fallbackPath);
+  const realRoot = await canonicalizeExisting(rootAbs);
+  if (!pathStaysInside(realRoot, realFile)) {
+    throw new Error(`host I/O escaped workspace root: ${realFile}`);
   }
 }
 
@@ -286,11 +320,7 @@ async function openLeafInsideRoot(
   await ensureDirInsideRoot(dirname(target), rootAbs);
   const fh = await openNoFollow(target, flags);
   try {
-    const realFile = await realpath(target);
-    const realRoot = await canonicalizeExisting(rootAbs);
-    if (!pathStaysInside(realRoot, realFile)) {
-      throw new Error(`host I/O escaped workspace root: ${realFile}`);
-    }
+    await assertHandleInsideRoot(fh, rootAbs, target);
   } catch (err) {
     await fh.close().catch(() => {});
     throw err;
@@ -333,17 +363,34 @@ export async function appendFileInsideRoot(
   }
 }
 
-/** Read a regular file only. Symlink leaf / ancestor → null (do not follow). */
+/** Read a regular file only. Symlink leaf / ancestor / escaped fd → null (do not follow). */
 export async function readFileInsideRoot(absPath: string, rootAbs: string): Promise<string | null> {
   try {
+    await assertRealDir(rootAbs);
     const target = await prepareHostWritePath(absPath, rootAbs);
     const fh = await open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {
+      await assertHandleInsideRoot(fh, rootAbs, target);
       return await fh.readFile("utf8");
     } finally {
       await fh.close();
     }
   } catch {
     return null;
+  }
+}
+
+/** Unlink a file or symlink leaf. Refuses directories and symlink ancestors. */
+export async function unlinkInsideRoot(absPath: string, rootAbs: string): Promise<void> {
+  const target = await prepareHostWritePath(absPath, rootAbs);
+  try {
+    await assertRealDir(dirname(target));
+    const st = await lstat(target);
+    if (st.isDirectory()) throw new Error(`host I/O blocked: refusing to unlink directory ${target}`);
+    await unlink(target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return;
+    throw err;
   }
 }
