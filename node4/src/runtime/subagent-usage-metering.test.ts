@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +69,7 @@ function createFakeSession(opts: {
   afterEmit: "ok" | "throw" | "hang" | "nothing";
 } {
   const listeners: Array<(event: any) => void | Promise<void>> = [];
+  const storedMessages: unknown[] = [...(opts.messages || [])];
   const state = {
     disposed: false,
     prompted: false,
@@ -107,6 +108,7 @@ function createFakeSession(opts: {
       if (state.afterEmit === "nothing") return;
       for (const u of state.nextUsages) {
         const ev = usageEvent(u);
+        storedMessages.push(ev.message);
         for (const l of listeners) await l(ev);
       }
       if (state.afterEmit === "throw") throw new Error("provider failed after usage");
@@ -122,7 +124,9 @@ function createFakeSession(opts: {
     },
     steer() {},
     followUp() {},
-    messages: opts.messages || [],
+    get messages() {
+      return storedMessages;
+    },
   };
 }
 
@@ -300,6 +304,16 @@ function childRow(panel: PanelAgentTracker, id?: string) {
       30,
       `child row must carry Sub usage 30, got ${JSON.stringify(child)}`,
     );
+
+    const childDir = join(dir, "subagents", "sub_487");
+    const raw = await readFile(join(childDir, "transcript.jsonl"), "utf8");
+    const persisted = raw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { role?: string; usage?: { totalTokens?: number } });
+    const assistant = persisted.filter((m) => m.role === "assistant");
+    assert.equal(assistant.length, 1, "child transcript has the assistant message");
+    assert.equal(Number(assistant[0]?.usage?.totalTokens), 30, "persisted messages[].usage matches pi");
 
     const checkpoint = buildNode4Checkpoint({
       platform: runtime.platform,

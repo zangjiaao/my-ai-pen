@@ -43,6 +43,7 @@ import {
   type SubagentIdlePool,
 } from "./subagent-idle-pool.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+import { writeChildSessionTranscript } from "./session-inspect.js";
 // Package worker system-prompt layers live in the canonical prompt module (#393).
 import {
   buildSubagentPromptLayers,
@@ -191,6 +192,17 @@ function sessionTimeoutMs(): number {
     Math.max(Number(process.env.NODE4_SUBAGENT_TIMEOUT_MS || 600_000) || 600_000, 30_000),
     1_800_000,
   );
+}
+
+async function persistChildTranscript(
+  session: { messages?: readonly unknown[] },
+  workDir: string,
+): Promise<void> {
+  try {
+    await writeChildSessionTranscript(workDir, session.messages);
+  } catch {
+    /* inspectability must not change package settlement */
+  }
 }
 
 function publishChildUsage(
@@ -480,6 +492,7 @@ async function runWarmPackage(args: {
         status: "failed",
         summary: llmErr,
       }).catch(() => {});
+      await persistChildTranscript(warm.session, workDir);
       publishChildUsage(input.parent, agentId, usageMeter);
       try {
         warm.clearAbort?.();
@@ -533,6 +546,7 @@ async function runWarmPackage(args: {
   const shouldPark =
     Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
+  await persistChildTranscript(warm.session, workDir);
   publishChildUsage(input.parent, agentId, usageMeter);
   if (shouldPark) {
     pool.park(warm);
@@ -749,6 +763,7 @@ async function runColdPackage(args: {
         status: "failed",
         summary: llmErr,
       }).catch(() => {});
+      await persistChildTranscript(session, workDir);
       publishChildUsage(parent, agentId, usageMeter);
       try {
         usageMeter.dispose();
@@ -799,6 +814,7 @@ async function runColdPackage(args: {
   const shouldPark =
     Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
+  await persistChildTranscript(session, workDir);
   publishChildUsage(parent, agentId, usageMeter);
   if (shouldPark && pool) {
     const handle: IdleSubagentHandle = {

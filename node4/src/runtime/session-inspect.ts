@@ -83,6 +83,24 @@ export async function writePostRunInspectArtifacts(options: {
   return { manifestPath, transcriptPath };
 }
 
+/**
+ * Spec #487: persist the child pi session transcript (including assistant
+ * `usage`) so Sub metering can be recomputed offline from messages[].usage.
+ * Same jsonl shape as Main `transcript.jsonl`. Empty list still writes the file
+ * so a missing file means "never persisted", not "zero usage".
+ */
+export async function writeChildSessionTranscript(
+  workDir: string,
+  messages: readonly unknown[] | undefined,
+): Promise<string> {
+  await mkdir(workDir, { recursive: true });
+  const transcriptPath = join(workDir, "transcript.jsonl");
+  const list = Array.isArray(messages) ? messages : [];
+  const lines = list.map((m) => JSON.stringify(m));
+  await writeFile(transcriptPath, lines.length ? `${lines.join("\n")}\n` : "", "utf8");
+  return transcriptPath;
+}
+
 /** Pure check used by smokes: required inspect files exist after a run. */
 export function inspectArtifactChecklist(entries: string[]): { ok: boolean; missing: string[] } {
   const need = ["events.jsonl", "transcript.jsonl", "session-manifest.json"];
