@@ -64,5 +64,24 @@ const child4 = join(root, "child4");
 const seed2 = await seedChildSessionFromParent(parent2, child4);
 assert.equal(seed2.seeded, true);
 
+// Shared expert/pi tree: live jars stay on expert; promote must not clobber.
+const expert = join(root, "expert");
+const piChild = join(expert, "pi-child");
+await mkdir(join(expert, "session"), { recursive: true });
+await mkdir(piChild, { recursive: true });
+await writeFile(join(expert, "session", "cookies.json"), JSON.stringify({ live: "during-package" }), "utf8");
+await mkdir(join(piChild, "session"), { recursive: true });
+await writeFile(join(piChild, "session", "cookies.json"), JSON.stringify({ stale: "seed-snapshot" }), "utf8");
+const sharedSeed = await seedChildSessionFromParent(expert, piChild);
+assert.equal(sharedSeed.seeded, true, sharedSeed.detail);
+assert.match(sharedSeed.detail, /shared/);
+const sharedProm = await promoteChildSessionToParent(piChild, expert);
+assert.equal(sharedProm.promoted, false, sharedProm.detail);
+const live = await import("node:fs/promises").then((fs) =>
+  fs.readFile(join(expert, "session", "cookies.json"), "utf8"),
+);
+assert.match(live, /during-package/);
+assert.doesNotMatch(live, /stale/);
+
 await rm(root, { recursive: true, force: true });
 console.log("subagent-salvage.test.ts: ok");

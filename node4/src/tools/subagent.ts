@@ -697,7 +697,10 @@ async function runSubagentPackage(
   // Shell path / any package: promote cookies parent←child (Graph hard needs this)
   try {
     if (result.artifactPath) {
-      await promoteChildSessionToParent(dirname(result.artifactPath), runtime.taskDir);
+      await promoteChildSessionToParent(
+        dirname(result.artifactPath),
+        runtime.sessionDir || runtime.taskDir,
+      );
     }
   } catch {
     /* non-fatal */

@@ -5,7 +5,6 @@
  * sessions — no fake goals/evidence stubs. Agent Runtime via createBoundNode4Session.
  */
 
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ensurePiInstanceWorkspace,
@@ -15,7 +14,6 @@ import {
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
-import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
@@ -252,7 +250,7 @@ export function buildHardGraphStageChildRuntime(options: {
     platform: parent.platform,
     platformApi: parent.platformApi,
     todo: new TodoStore(),
-    evidence: new EvidenceStore(join(workDir, "evidence")),
+    evidence: parent.evidence,
     findingsDir: parent.findingsDir,
     goals: new GoalStore(),
     rolePackId: pack.id,
@@ -381,7 +379,6 @@ export function createHardGraphStageExecutor(options: {
             `stage-${input.stageIndex}-${input.stage.id}`,
           );
     await ensurePiInstanceWorkspace(workDir);
-    await mkdir(join(workDir, "evidence"), { recursive: true });
 
     // Spec #116 I0.6: new stage attempt resets non-success package attempt budgets
     const stageAttempt = Math.max(1, Math.floor(input.stageAttempt || 1));

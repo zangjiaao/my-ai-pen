@@ -295,8 +295,8 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
     sessionSeeded
       ? [
           "## Session seed",
-          "Parent cookie jars were copied into this workDir (`session/`).",
-          "Use session tools with the existing jar first; re-login only if requests return login page / 401 / unauthenticated.",
+          "Cookie jars for this Session are available via session tools (shared expert `session/`).",
+          "Use the existing jar first; re-login only if requests return login page / 401 / unauthenticated.",
           "",
         ].join("\n")
       : "",

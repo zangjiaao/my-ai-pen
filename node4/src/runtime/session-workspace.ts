@@ -8,8 +8,8 @@
  * Task package id is not a directory. Park continue stays on the same pi-* dir;
  * Session Reset mints a new piSessionId → new pi-* dir under the same expert.
  */
-import { mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { appendFile, lstat, mkdir, unlink } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function safeWorkspaceSegment(raw: string): string {
   const s = String(raw || "").trim().replace(/[/\\]/g, "_").slice(0, 128);
@@ -158,4 +158,45 @@ export function resolveRuntimeCaseDir(runtime: {
   const root = String(runtime.workspaceDir || "").trim();
   if (conv && root) return resolveCaseDir(root, conv);
   return String(runtime.taskDir || "");
+}
+
+/**
+ * Host I/O under the sandbox mount must not follow agent-planted symlinks.
+ * Unlink a symlink leaf (so the next write creates a regular file); refuse
+ * symlink ancestors that would redirect the write outside `rootAbs`.
+ */
+export async function prepareHostWritePath(absPath: string, rootAbs: string): Promise<string> {
+  const root = resolve(String(rootAbs || "").trim() || ".");
+  const target = resolve(absPath);
+  const rel = relative(root, target);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(`host write outside workspace root: ${target}`);
+  }
+  let cur = target;
+  while (true) {
+    try {
+      const st = await lstat(cur);
+      if (st.isSymbolicLink()) {
+        if (cur === target) await unlink(cur);
+        else throw new Error(`host write blocked: symlink ancestor ${cur}`);
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") throw err;
+    }
+    if (cur === root) break;
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return target;
+}
+
+export async function appendFileInsideRoot(
+  absPath: string,
+  rootAbs: string,
+  data: string,
+): Promise<void> {
+  const target = await prepareHostWritePath(absPath, rootAbs);
+  await appendFile(target, data, "utf8");
 }

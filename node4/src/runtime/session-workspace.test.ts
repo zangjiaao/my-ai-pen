@@ -2,11 +2,21 @@
  * Spec #428: Session workspace path helpers.
  * Run: npx tsx src/runtime/session-workspace.test.ts
  */
-import { mkdtempSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  existsSync,
+  lstatSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  appendFileInsideRoot,
   ensureSessionWorkspace,
+  prepareHostWritePath,
   resolveCaseDir,
   resolveExpertDir,
   resolvePiInstanceDir,
@@ -199,6 +209,33 @@ try {
       assert(r.via !== "ephemeral-run", "no silent ephemeral twin");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // --- host I/O refuses symlink escape under the sandbox mount ---
+  {
+    const root = mkdtempSync(join(tmpdir(), "host-io-"));
+    const outside = mkdtempSync(join(tmpdir(), "host-io-out-"));
+    try {
+      const leaf = join(root, "events.jsonl");
+      writeFileSync(join(outside, "target"), "secret\n");
+      symlinkSync(join(outside, "target"), leaf);
+      await prepareHostWritePath(leaf, root);
+      assert(!existsSync(leaf) || !lstatSync(leaf).isSymbolicLink(), "leaf symlink removed");
+      await appendFileInsideRoot(leaf, root, "ok\n");
+      assert(readFileSync(leaf, "utf8") === "ok\n", "wrote regular file");
+      assert(readFileSync(join(outside, "target"), "utf8") === "secret\n", "outside unchanged");
+
+      let blocked = false;
+      try {
+        await prepareHostWritePath(join(outside, "nope"), root);
+      } catch {
+        blocked = true;
+      }
+      assert(blocked, "write outside root blocked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   }
 

@@ -1,4 +1,4 @@
-import { mkdir, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import { node4Root } from "../config.js";
@@ -91,8 +91,10 @@ import type { TodoStore as TodoStoreType } from "../stores/todo.js";
 import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
 import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
 import {
+  appendFileInsideRoot,
   ensureWorkspaceLayout,
   mintPiSessionId,
+  prepareHostWritePath,
   resolveCaseDir,
   resolveWorkspaceLayout,
   type WorkspaceLayout,
@@ -212,6 +214,7 @@ export async function runNode4Task(
   }
 
   const eventsPath = join(taskDir, "events.jsonl");
+  const hostWriteRoot = caseDir || taskDir;
   /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
   const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking", "status_update"]);
   const loggingPlatform: PlatformSink = {
@@ -219,9 +222,9 @@ export async function runNode4Task(
       const line = `${JSON.stringify({ ts: new Date().toISOString(), ...message })}\n`;
       const typ = String((message as { type?: string }).type || "");
       if (STREAM_TYPES.has(typ)) {
-        void appendFile(eventsPath, line, "utf8").catch(() => {});
+        void appendFileInsideRoot(eventsPath, hostWriteRoot, line).catch(() => {});
       } else {
-        await appendFile(eventsPath, line, "utf8").catch(() => {});
+        await appendFileInsideRoot(eventsPath, hostWriteRoot, line).catch(() => {});
       }
       await platform.send(message);
     },
@@ -957,7 +960,7 @@ export async function runNode4Task(
     });
 
     await writeFile(
-      join(taskDir, "agent-summary.json"),
+      await prepareHostWritePath(join(taskDir, "agent-summary.json"), hostWriteRoot),
       JSON.stringify(
         {
           taskId: task.taskId,
@@ -983,10 +986,16 @@ export async function runNode4Task(
       "utf8",
     );
 
-    await writeFile(join(taskDir, "goals-snapshot.json"), JSON.stringify(goals.snapshot(), null, 2), "utf8");
+    await writeFile(
+      await prepareHostWritePath(join(taskDir, "goals-snapshot.json"), hostWriteRoot),
+      JSON.stringify(goals.snapshot(), null, 2),
+      "utf8",
+    );
 
     await writePostRunInspectArtifacts({
       taskDir,
+      caseDir,
+      sessionDir,
       taskId: task.taskId,
       terminalStatus: emitStatus,
       summary,

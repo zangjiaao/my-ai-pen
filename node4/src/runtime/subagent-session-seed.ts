@@ -1,11 +1,21 @@
 /**
  * Session jar sharing between parent task and child subagent workDirs.
- * - seed: parent → child (start of package; avoid re-login)
- * - promote: child → parent (end of package; Graph hard Main has no session tools)
+ * - seed: parent → child (legacy sibling dirs; avoid re-login)
+ * - promote: child → parent (legacy sibling dirs)
+ * When the child pi-* sits under the expert jar root, session tools write
+ * live jars there — seed/promote are no-ops so a start-of-package snapshot
+ * cannot overwrite cookies written during the package.
  */
 
 import { access, cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
+
+/** Child pi-* under the expert jar root writes live session/ there — do not snapshot-copy. */
+export function childSharesParentSessionTree(parentJarRoot: string, childWorkDir: string): boolean {
+  const parent = resolve(String(parentJarRoot || "").trim() || ".");
+  const child = resolve(String(childWorkDir || "").trim() || ".");
+  return parent === child || child.startsWith(parent + sep);
+}
 
 async function dirExists(p: string): Promise<boolean> {
   try {
@@ -23,6 +33,13 @@ export async function seedChildSessionFromParent(
   parentTaskDir: string,
   childWorkDir: string,
 ): Promise<{ seeded: boolean; detail: string }> {
+  if (childSharesParentSessionTree(parentTaskDir, childWorkDir)) {
+    const live = join(parentTaskDir, "session");
+    if (await dirExists(live) && (await sessionTreeHasCookies(live))) {
+      return { seeded: true, detail: "shared live session dir" };
+    }
+    return { seeded: false, detail: "shared session dir; no cookies yet" };
+  }
   const src = join(parentTaskDir, "session");
   const dest = join(childWorkDir, "session");
   if (!(await dirExists(src))) {
@@ -50,6 +67,9 @@ export async function promoteChildSessionToParent(
   childWorkDir: string,
   parentTaskDir: string,
 ): Promise<{ promoted: boolean; detail: string }> {
+  if (childSharesParentSessionTree(parentTaskDir, childWorkDir)) {
+    return { promoted: false, detail: "shared live session dir; no snapshot promote" };
+  }
   const src = join(childWorkDir, "session");
   const dest = join(parentTaskDir, "session");
   if (!(await dirExists(src))) {
