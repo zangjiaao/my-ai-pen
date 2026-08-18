@@ -8,8 +8,8 @@
  * Task package id is not a directory. Park continue stays on the same pi-* dir;
  * Session Reset mints a new piSessionId → new pi-* dir under the same expert.
  */
-import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, realpath, stat, unlink } from "node:fs/promises";
+import { constants as fsConstants, realpathSync } from "node:fs";
+import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function safeWorkspaceSegment(raw: string): string {
@@ -30,9 +30,18 @@ export function workspaceCaseId(conversationId?: string): string {
   return String(conversationId || "").trim() || LOCAL_CASE_ID;
 }
 
-export function resolveCaseDir(workspaceRoot: string, caseId: string): string {
+/** Follow a symlinked NODE4_WORKSPACE once; never treat a live agent-writable dir as the pin. */
+export function resolveWorkspaceRoot(workspaceRoot: string): string {
   const root = resolve(String(workspaceRoot || "").trim() || "./workspace");
-  return join(root, `case-${safeWorkspaceSegment(caseId)}`);
+  try {
+    return realpathSync(root);
+  } catch {
+    return root;
+  }
+}
+
+export function resolveCaseDir(workspaceRoot: string, caseId: string): string {
+  return join(resolveWorkspaceRoot(workspaceRoot), `case-${safeWorkspaceSegment(caseId)}`);
 }
 
 export function resolveExpertDir(
@@ -191,21 +200,16 @@ function pathStaysInside(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-async function assertUsableDir(path: string, allowSymlinkRoot: boolean): Promise<void> {
+async function assertRealDir(path: string): Promise<void> {
   const st = await lstat(path);
-  if (st.isSymbolicLink()) {
-    if (!allowSymlinkRoot) throw new Error(`host I/O blocked: symlink ancestor ${path}`);
-    const real = await stat(path);
-    if (!real.isDirectory()) throw new Error(`host I/O blocked: not a directory ${path}`);
-    return;
-  }
+  if (st.isSymbolicLink()) throw new Error(`host I/O blocked: symlink root or ancestor ${path}`);
   if (!st.isDirectory()) throw new Error(`host I/O blocked: not a directory ${path}`);
 }
 
 /** Create `path` if missing. Existing symlink/file is a hard error. Concurrent create is ok. */
 async function mkdirNoFollow(path: string): Promise<void> {
   try {
-    await assertUsableDir(path, false);
+    await assertRealDir(path);
     return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -217,7 +221,7 @@ async function mkdirNoFollow(path: string): Promise<void> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "EEXIST") throw err;
   }
-  await assertUsableDir(path, false);
+  await assertRealDir(path);
 }
 
 /** Refuse symlink ancestors (leaf may be missing or a symlink we will not follow). */
@@ -244,12 +248,12 @@ export async function prepareHostWritePath(absPath: string, rootAbs: string): Pr
 export async function ensureDirInsideRoot(dirAbs: string, rootAbs: string): Promise<void> {
   const { root, target } = resolvedInsideRoot(dirAbs, rootAbs);
   try {
-    await assertUsableDir(root, true);
+    await assertRealDir(root);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     await mkdir(root, { recursive: true });
-    await assertUsableDir(root, true);
+    await assertRealDir(root);
   }
   const rel = relative(root, target);
   if (!rel || rel === ".") return;

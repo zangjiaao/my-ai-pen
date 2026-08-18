@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   rmSync,
   writeFileSync,
   readFileSync,
@@ -247,15 +248,37 @@ try {
       await ensureDirInsideRoot(join(missingRoot, "session", "actors", "user_a"), missingRoot);
       assert(existsSync(join(missingRoot, "session", "actors", "user_a")), "creates missing root");
 
-      const realWs = mkdtempSync(join(tmpdir(), "host-io-real-"));
+      const prefixReal = mkdtempSync(join(tmpdir(), "host-io-prefix-"));
       try {
-        const linkWs = join(root, "link-ws");
-        symlinkSync(realWs, linkWs);
-        await writeFileInsideRoot(join(linkWs, "via-link.txt"), linkWs, "linked-ok\n");
-        assert(readFileSync(join(realWs, "via-link.txt"), "utf8") === "linked-ok\n", "symlink workspace root is allowed");
+        const wsReal = join(prefixReal, "ws");
+        mkdirSync(wsReal);
+        const prefixLink = join(root, "var-link");
+        symlinkSync(prefixReal, prefixLink);
+        const wsViaLink = join(prefixLink, "ws");
+        await writeFileInsideRoot(join(wsViaLink, "a.txt"), wsViaLink, "via-prefix\n");
+        assert(readFileSync(join(wsReal, "a.txt"), "utf8") === "via-prefix\n", "symlink prefix above root is ok");
       } finally {
-        rmSync(realWs, { recursive: true, force: true });
+        rmSync(prefixReal, { recursive: true, force: true });
       }
+
+      const expert = join(root, "expert");
+      const facts = join(expert, "facts");
+      mkdirSync(expert);
+      symlinkSync(outside, facts);
+      let factsEscaped = false;
+      try {
+        await writeFileInsideRoot(join(facts, "x.json"), expert, "{}");
+      } catch {
+        factsEscaped = true;
+      }
+      assert(factsEscaped, "agent-replaced facts dir cannot be a write root child");
+      let factsAsRoot = false;
+      try {
+        await writeFileInsideRoot(join(facts, "y.json"), facts, "{}");
+      } catch {
+        factsAsRoot = true;
+      }
+      assert(factsAsRoot, "symlink containment root is refused");
 
       let blocked = false;
       try {

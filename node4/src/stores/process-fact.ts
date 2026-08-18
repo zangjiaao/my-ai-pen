@@ -8,7 +8,7 @@
  */
 
 import { readdir, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ensureDirInsideRoot,
   readFileInsideRoot,
@@ -52,8 +52,13 @@ function fileNameForKey(key: string): string {
 export class ProcessFactStore {
   constructor(private readonly factsDir: string) {}
 
+  /** pi-* (parent of facts/). Never the facts dir itself — that path is agent-writable. */
+  private containmentRoot(): string {
+    return dirname(this.factsDir);
+  }
+
   async ensureDir(): Promise<void> {
-    await ensureDirInsideRoot(this.factsDir, this.factsDir);
+    await ensureDirInsideRoot(this.factsDir, this.containmentRoot());
   }
 
   async upsert(input: {
@@ -87,7 +92,7 @@ export class ProcessFactStore {
       updated_at: new Date().toISOString(),
     };
     const path = join(this.factsDir, fileNameForKey(key));
-    await writeFileInsideRoot(path, this.factsDir, JSON.stringify(fact, null, 2));
+    await writeFileInsideRoot(path, this.containmentRoot(), JSON.stringify(fact, null, 2));
     return fact;
   }
 
@@ -95,7 +100,7 @@ export class ProcessFactStore {
     const key = safeKey(fact_key);
     if (!key) return { error: "invalid fact_key" };
     try {
-      const raw = await readFileInsideRoot(join(this.factsDir, fileNameForKey(key)), this.factsDir);
+      const raw = await readFileInsideRoot(join(this.factsDir, fileNameForKey(key)), this.containmentRoot());
       if (raw == null) return { error: `fact not found: ${key}` };
       const parsed = JSON.parse(raw) as ProcessFact;
       if (!parsed?.fact_key) return { error: "corrupt fact file" };
@@ -117,7 +122,7 @@ export class ProcessFactStore {
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
       try {
-        const raw = await readFileInsideRoot(join(this.factsDir, name), this.factsDir);
+        const raw = await readFileInsideRoot(join(this.factsDir, name), this.containmentRoot());
         if (raw == null) continue;
         const f = JSON.parse(raw) as ProcessFact;
         if (!f?.fact_key) continue;

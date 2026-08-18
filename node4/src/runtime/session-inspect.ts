@@ -23,11 +23,12 @@ export async function writePostRunInspectArtifacts(options: {
   const { piDir } = options;
   const caseDir = options.caseDir || piDir;
   const sessionDir = options.sessionDir || piDir;
-  await ensureDirInsideRoot(piDir, piDir);
+  await ensureDirInsideRoot(piDir, caseDir || piDir);
 
   const transcriptPath = join(piDir, "transcript.jsonl");
   const lines = (options.messages || []).map((m) => JSON.stringify(m));
-  await writeFileInsideRoot(transcriptPath, piDir, lines.length ? `${lines.join("\n")}\n` : "");
+  const contain = caseDir || piDir;
+  await writeFileInsideRoot(transcriptPath, contain, lines.length ? `${lines.join("\n")}\n` : "");
 
   const present: string[] = [];
   const checks: Array<{ name: string; dir: string }> = [
@@ -78,7 +79,7 @@ export async function writePostRunInspectArtifacts(options: {
       "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
   };
   const manifestPath = join(piDir, "session-manifest.json");
-  await writeFileInsideRoot(manifestPath, piDir, JSON.stringify(manifest, null, 2));
+  await writeFileInsideRoot(manifestPath, contain, JSON.stringify(manifest, null, 2));
   return { manifestPath, transcriptPath };
 }
 
