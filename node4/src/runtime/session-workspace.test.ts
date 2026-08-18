@@ -2,12 +2,32 @@
  * Spec #428: Session workspace path helpers.
  * Run: npx tsx src/runtime/session-workspace.test.ts
  */
-import { mkdtempSync, existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  appendFileInsideRoot,
+  ensureDirInsideRoot,
   ensureSessionWorkspace,
+  LOCAL_CASE_ID,
+  prepareHostWritePath,
+  readFileInsideRoot,
+  writeFileInsideRoot,
+  resolveCaseDir,
+  resolveExpertDir,
+  resolvePiInstanceDir,
   resolveSessionWorkspaceDir,
+  resolveWorkspaceLayout,
+  workspaceCaseId,
 } from "./session-workspace.js";
 import {
   BrowserSandboxRuntime,
@@ -28,13 +48,26 @@ function ok(): SandboxExecResult {
 // --- path layout ---
 {
   const p = resolveSessionWorkspaceDir("/tmp/ws", "conv-abc", "exp-1");
-  assert(p.includes("sessions"), "under sessions/");
-  assert(p.endsWith(join("sessions", "conv-abc", "exp-1")) || p.includes("conv-abc"), "per seat");
+  assert(p.includes("case-conv-abc"), p);
+  assert(p.includes("expert-exp-1"), p);
   assert(
     resolveSessionWorkspaceDir("/tmp/ws", "c", "a") !==
       resolveSessionWorkspaceDir("/tmp/ws", "c", "b"),
     "experts isolated",
   );
+  const pi = resolvePiInstanceDir("/tmp/ws", "c1", "e1", "sid-9");
+  assert(pi.startsWith(resolveExpertDir("/tmp/ws", "c1", "e1")), "pi under expert");
+  assert(resolveExpertDir("/tmp/ws", "c1", "e1").startsWith(resolveCaseDir("/tmp/ws", "c1")), "expert under case");
+  assert(pi.includes("pi-sid-9"), pi);
+}
+
+{
+  assert(workspaceCaseId("") === LOCAL_CASE_ID, "empty case is local");
+  assert(workspaceCaseId("  ") === LOCAL_CASE_ID, "blank case is local");
+  assert(workspaceCaseId("c1") === "c1", "real case id");
+  const layout = resolveWorkspaceLayout("/tmp/ws", workspaceCaseId(""), "pentest", "sid");
+  assert(layout.caseDir.includes("case-local"), layout.caseDir);
+  assert(!layout.piDir.includes("task-"), layout.piDir);
 }
 
 // --- ensure creates subdirs ---
@@ -43,7 +76,7 @@ function ok(): SandboxExecResult {
   try {
     const dir = resolveSessionWorkspaceDir(root, "c1", "e1");
     const abs = await ensureSessionWorkspace(dir);
-    for (const sub of ["scripts", "evidence", "findings", "credentials", "exports", "notes"]) {
+    for (const sub of ["scripts", "notes", "credentials", "exports", "session"]) {
       assert(existsSync(join(abs, sub)), `subdir ${sub}`);
     }
   } finally {
@@ -192,6 +225,75 @@ try {
       assert(r.via !== "ephemeral-run", "no silent ephemeral twin");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // --- host I/O refuses symlink escape under the sandbox mount ---
+  {
+    const root = mkdtempSync(join(tmpdir(), "host-io-"));
+    const outside = mkdtempSync(join(tmpdir(), "host-io-out-"));
+    try {
+      const leaf = join(root, "events.jsonl");
+      writeFileSync(join(outside, "target"), "secret\n");
+      symlinkSync(join(outside, "target"), leaf);
+      await appendFileInsideRoot(leaf, root, "ok\n");
+      assert(!lstatSync(leaf).isSymbolicLink(), "leaf is regular file");
+      assert(readFileSync(leaf, "utf8") === "ok\n", "wrote regular file");
+      assert(readFileSync(join(outside, "target"), "utf8") === "secret\n", "outside unchanged");
+      assert((await readFileInsideRoot(leaf, root)) === "ok\n", "read regular file");
+      symlinkSync(join(outside, "target"), join(root, "cookies.json"));
+      assert((await readFileInsideRoot(join(root, "cookies.json"), root)) === null, "read skips symlink");
+
+      const missingRoot = join(root, "missing-expert");
+      await ensureDirInsideRoot(join(missingRoot, "session", "actors", "user_a"), missingRoot);
+      assert(existsSync(join(missingRoot, "session", "actors", "user_a")), "creates missing root");
+
+      const prefixReal = mkdtempSync(join(tmpdir(), "host-io-prefix-"));
+      try {
+        const wsReal = join(prefixReal, "ws");
+        mkdirSync(wsReal);
+        const prefixLink = join(root, "var-link");
+        symlinkSync(prefixReal, prefixLink);
+        const wsViaLink = join(prefixLink, "ws");
+        await writeFileInsideRoot(join(wsViaLink, "a.txt"), wsViaLink, "via-prefix\n");
+        assert(readFileSync(join(wsReal, "a.txt"), "utf8") === "via-prefix\n", "symlink prefix above root is ok");
+      } finally {
+        rmSync(prefixReal, { recursive: true, force: true });
+      }
+
+      const expert = join(root, "expert");
+      const facts = join(expert, "facts");
+      mkdirSync(expert);
+      symlinkSync(outside, facts);
+      let factsEscaped = false;
+      try {
+        await writeFileInsideRoot(join(facts, "x.json"), expert, "{}");
+      } catch {
+        factsEscaped = true;
+      }
+      assert(factsEscaped, "agent-replaced facts dir cannot be a write root child");
+      let factsAsRoot = false;
+      try {
+        await writeFileInsideRoot(join(facts, "y.json"), facts, "{}");
+      } catch {
+        factsAsRoot = true;
+      }
+      assert(factsAsRoot, "symlink containment root is refused");
+      assert(
+        (await readFileInsideRoot(join(facts, "x.json"), facts)) === null,
+        "read refuses symlink containment root",
+      );
+
+      let blocked = false;
+      try {
+        await prepareHostWritePath(join(outside, "nope"), root);
+      } catch {
+        blocked = true;
+      }
+      assert(blocked, "write outside root blocked");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   }
 

@@ -19,7 +19,7 @@ Node4 (OMP) — target model
       browser  → exec agent-browser (profile in-box)
       shell    → docker exec (not per-command --rm)
       scanners → same image
-  Session workspace (host) → mount /workspace (SoT for scripts/evidence)
+  Session workspace (host) → `workspace/case-{caseId}/expert-{expertId}/` mount /workspace (scripts / notes / credentials)
 ```
 
 | Concern | Image |
@@ -102,7 +102,7 @@ docker pull "$PEN_SANDBOX_IMAGE"
 
 **Attach:** seat live + running → reuse; stopped → `start` same container; none → create. Hard cutover from #320 (no dual-mode task\|session flag).
 
-**Workspace SoT:** host path `{NODE4_WORKSPACE}/sessions/{conversationId}/{expertId}/` mounted at `/workspace` (rw). Durable subdirs include `scripts/`, `evidence/`, `findings/`, `credentials/`, `exports/`, `notes/`. Login **primary** = in-box browser profile + stickiness; optional cookie/profile packs under `credentials/` for agent import (v1 file slot; dedicated captcha UI is **future**).
+**Workspace SoT:** host path `{NODE4_WORKSPACE}/case-{caseId}/expert-{expertId}/` mounted at `/workspace` (rw). Durable subdirs include `scripts/`, `notes/`, `credentials/`, `exports/`, `session/`. Case-shared inspect (`findings/`, `evidence/`, `surfaces/`) lives on `{NODE4_WORKSPACE}/case-{caseId}/`. One pi-agent-core instance is `{NODE4_WORKSPACE}/case-{caseId}/expert-{expertId}/pi-{piSessionId}/`. Host Node I/O into that tree (`events.jsonl`, inspect dumps, cookie jars) opens with `O_NOFOLLOW` and refuses symlink ancestors so a sandbox agent cannot redirect host reads/writes off the mount. Login **primary** = in-box browser profile + stickiness; optional cookie/profile packs under `credentials/` for agent import (v1 file slot; dedicated captcha UI is **future**).
 
 **HOME / browser sockets:** container `HOME=/root` and `PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` (rootfs), **not** `/workspace`. Session workspace binds (esp. WSL/`/mnt/d`/9p) often cannot host `AF_UNIX` sockets under `$HOME/.agent-browser/*.sock` — that failure looks like `Daemon failed to start (socket: /workspace/.agent-browser/…)`. Durable agent files stay on `/workspace`; browser daemon/socket + Playwright cache stay on rootfs. Sticky `docker exec` also forces these env vars so legacy boxes created with `HOME=/workspace` keep working without a manual `rm`.
 
@@ -131,7 +131,7 @@ Phase **S3**: Node4 can report whether the L2 shell path is ready **without bloc
 |---------|-----|
 | CLI | `cd node4 && npm run doctor:pen-tools` (or `npx tsx src/tooling-health-cli.ts`) |
 | Flags | `--json` machine-readable; `--fast` skip container binary probe (image/shim/host only) |
-| Task start | Non-chat execution packs with `shell`: write `taskDir/tooling-health.json` + one `status_update` summary |
+| Task start | Non-chat execution packs with `shell`: write `pi-{sessionId}/tooling-health.json` + one `status_update` summary |
 | Code | `node4/src/runtime/tooling-health.ts` |
 
 **Report fields (factual env state only):** resolved sandbox image + present?, shell mode (`container` \| `host`), host pen-tools bin/PATH shim, key tools (`nuclei`, `nmap`, `sqlmap`, `ffuf`, `redis-cli`). `gating` is always `false`. Missing `nuclei` marks `degraded: true` but **exit code stays 0** and the harness still runs.

@@ -3,8 +3,8 @@
  * Dual storage: taskDir file + platform event/message; same JSON semantics.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import type { FindingStore } from "./finding-store.js";
 import type { HardGraphStageRecord, HardGraphTerminal } from "./hard-graph-runner.js";
 import type { PriorSeedResult } from "./prior-seed.js";
@@ -192,16 +192,14 @@ export function buildEngagementCloseout(input: {
 }
 
 export async function writeEngagementCloseout(options: {
-  taskDir: string;
+  caseDir: string;
   platform: PlatformSink;
   task: TaskEnvelope;
   closeout: EngagementCloseout;
 }): Promise<{ path: string }> {
-  const dir = join(options.taskDir, "hard-graph");
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, "engagement-closeout.json");
+  const path = join(options.caseDir, "hard-graph", "engagement-closeout.json");
   const body = JSON.stringify(options.closeout, null, 2);
-  await writeFile(path, body, "utf8");
+  await writeFileInsideRoot(path, options.caseDir, body);
   await options.platform.send({
     type: "engagement_closeout",
     conversation_id: options.task.conversationId,

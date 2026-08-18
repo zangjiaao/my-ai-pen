@@ -3,14 +3,15 @@
  * No OMP TUI/IRC/worktree hub. Workers are injectable for deterministic smokes.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
 import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
 import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
 import { formatWorkerName, resolveSubagentGoal } from "./panel-agents.js";
+import { resolvePiInstanceDir, workspaceCaseId, writeFileInsideRoot } from "./session-workspace.js";
 
 export type SubagentResult = {
   ok: boolean;
@@ -33,7 +34,7 @@ export type SubagentContext = {
   subagentId: string;
   assignment: string;
   goalId?: string;
-  taskDir: string;
+  piDir: string;
   workDir: string;
   task: TaskEnvelope;
 };
@@ -42,7 +43,8 @@ export type SubagentWorker = (ctx: SubagentContext) => Promise<{ summary: string
 
 export type SubagentHostOptions = {
   task: TaskEnvelope;
-  taskDir: string;
+  piDir: string;
+  workspaceDir?: string;
   evidence: EvidenceStoreLike;
   platform: PlatformSink;
   goals: GoalStore;
@@ -287,17 +289,21 @@ export class SubagentHost {
     planNodeId?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
-    const workDir = join(this.opts.taskDir, "subagents", subagentId);
+    const exp = String(this.opts.task.expertId || "").trim() || "default";
+    const ws = String(this.opts.workspaceDir || "").trim();
+    const workDir = ws
+      ? resolvePiInstanceDir(ws, workspaceCaseId(this.opts.task.conversationId), exp, subagentId)
+      : join(dirname(this.opts.piDir), `pi-${subagentId}`);
     await mkdir(workDir, { recursive: true });
 
     if (options.goalId) {
       this.opts.goals.attachSubagent(options.goalId, subagentId);
     }
 
-    await writeFile(
+    await writeFileInsideRoot(
       join(workDir, "assignment.md"),
+      workDir,
       `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\nnodeType: ${options.nodeType || ""}\nplanNodeId: ${options.planNodeId || ""}\n`,
-      "utf8",
     );
 
     this.opts.panelAgents?.noteSubagentStart({
@@ -338,7 +344,7 @@ export class SubagentHost {
         subagentId,
         assignment: options.assignment,
         goalId: options.goalId,
-        taskDir: this.opts.taskDir,
+        piDir: this.opts.piDir,
         workDir,
         task: this.opts.task,
       });
@@ -360,7 +366,7 @@ export class SubagentHost {
       goalId: options.goalId,
       finishedAt: new Date().toISOString(),
     };
-    await writeFile(artifactPath, JSON.stringify(payload, null, 2), "utf8");
+    await writeFileInsideRoot(artifactPath, workDir, JSON.stringify(payload, null, 2));
 
     const evidence = await this.opts.evidence.create({
       type: "subagent_result",

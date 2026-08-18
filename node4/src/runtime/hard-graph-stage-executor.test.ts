@@ -61,7 +61,7 @@ const runtime = {
     scope: {},
   },
   workspaceDir: workDir,
-  taskDir: workDir,
+  piDir: workDir,
   platform: { send: async () => {} },
   findingsDir: join(workDir, "findings"),
   rolePackId: "pentest",
@@ -121,7 +121,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
   const emptyLedger = new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(poisonDir));
   const poisonRt = {
     ...runtime,
-    taskDir: poisonDir,
+    piDir: poisonDir,
     workspaceDir: poisonDir,
     surfaceLedger: emptyLedger,
     lifecycle: {
@@ -185,7 +185,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
       expertName: "Expert",
     },
     workspaceDir: taskDir,
-    taskDir,
+    piDir: taskDir,
     platform: { send: async () => {} },
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -222,7 +222,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
     } as any,
     // Production-like path: bound session writes poison result.json; no hostInject.
     boundSessionFactory: async ({ runtime: childRt }) => {
-      const stageWork = childRt.taskDir;
+      const stageWork = childRt.piDir;
       await mkdir(stageWork, { recursive: true });
       await writeFile(
         join(stageWork, "result.json"),

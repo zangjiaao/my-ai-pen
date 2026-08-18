@@ -30,7 +30,7 @@ function minimalRuntime(
   return {
     task,
     workspaceDir: taskDir,
-    taskDir,
+    piDir: taskDir,
     platform: { async send() {} },
     todo: {} as ToolRuntime["todo"],
     evidence: {} as ToolRuntime["evidence"],

@@ -146,7 +146,7 @@ v1 code paths (SQLite, dual-write, FE projection, import, identity pure) **remai
 ### D1 — Product SoT vs working store (unchanged topology)
 
 - **UI / Case SoT:** `conversation.context["surface_ledger"]` on Platform.
-- **Agent / Runtime working store:** Node **SQLite** (`taskDir/surfaces/ledger.sqlite`).
+- **Agent / Runtime working store:** Node **SQLite** (`workspace/case-{caseId}/surfaces/ledger.sqlite`).
 - Online: dual-write; local commit required for Agent-visible local reads; Platform async (`platform_sync`).
 - Offline: local only; import elevates to Case.
 

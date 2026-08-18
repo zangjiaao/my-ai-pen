@@ -1,12 +1,17 @@
-import { mkdir, writeFile, readdir, access } from "node:fs/promises";
+import { readdir, access } from "node:fs/promises";
 import { join } from "node:path";
+import { ensureDirInsideRoot, writeFileInsideRoot } from "./session-workspace.js";
 
 /**
  * After the agent disposes, write inspectable artifacts so operators can query
  * the session offline (OMP-like post-run inspectability).
  */
 export async function writePostRunInspectArtifacts(options: {
-  taskDir: string;
+  piDir: string;
+  /** Case-shared findings/evidence/surfaces. Defaults to piDir (standalone). */
+  caseDir?: string;
+  /** Expert sandbox (scripts / cookies). Defaults to piDir (standalone). */
+  sessionDir?: string;
   taskId: string;
   terminalStatus: string;
   summary: string;
@@ -15,25 +20,29 @@ export async function writePostRunInspectArtifacts(options: {
   stopReason: string;
   bookedFindingCount: number;
 }): Promise<{ manifestPath: string; transcriptPath: string }> {
-  const { taskDir } = options;
-  await mkdir(taskDir, { recursive: true });
+  const { piDir } = options;
+  const caseDir = options.caseDir || piDir;
+  const sessionDir = options.sessionDir || piDir;
+  await ensureDirInsideRoot(piDir, caseDir || piDir);
 
-  const transcriptPath = join(taskDir, "transcript.jsonl");
+  const transcriptPath = join(piDir, "transcript.jsonl");
   const lines = (options.messages || []).map((m) => JSON.stringify(m));
-  await writeFile(transcriptPath, lines.length ? `${lines.join("\n")}\n` : "", "utf8");
+  const contain = caseDir || piDir;
+  await writeFileInsideRoot(transcriptPath, contain, lines.length ? `${lines.join("\n")}\n` : "");
 
   const present: string[] = [];
-  for (const name of [
-    "events.jsonl",
-    "transcript.jsonl",
-    "findings",
-    "evidence",
-    "scripts",
-    "pi-sessions",
-    "agent-summary.json",
-  ]) {
+  const checks: Array<{ name: string; dir: string }> = [
+    { name: "events.jsonl", dir: piDir },
+    { name: "transcript.jsonl", dir: piDir },
+    { name: "agent-summary.json", dir: piDir },
+    { name: "findings", dir: caseDir },
+    { name: "evidence", dir: caseDir },
+    { name: "surfaces", dir: caseDir },
+    { name: "scripts", dir: sessionDir },
+  ];
+  for (const { name, dir } of checks) {
     try {
-      await access(join(taskDir, name));
+      await access(join(dir, name));
       present.push(name);
     } catch {
       // missing
@@ -43,12 +52,12 @@ export async function writePostRunInspectArtifacts(options: {
   let findingFiles = 0;
   let evidenceFiles = 0;
   try {
-    findingFiles = (await readdir(join(taskDir, "findings"))).filter((n) => n.endsWith(".json")).length;
+    findingFiles = (await readdir(join(caseDir, "findings"))).filter((n) => n.endsWith(".json")).length;
   } catch {
     /* */
   }
   try {
-    evidenceFiles = (await readdir(join(taskDir, "evidence"))).filter((n) => n.endsWith(".json")).length;
+    evidenceFiles = (await readdir(join(caseDir, "evidence"))).filter((n) => n.endsWith(".json")).length;
   } catch {
     /* */
   }
@@ -66,10 +75,11 @@ export async function writePostRunInspectArtifacts(options: {
     transcriptMessages: options.messages?.length ?? 0,
     artifacts: present,
     writtenAt: new Date().toISOString(),
-    inspect: "Read transcript.jsonl, events.jsonl, findings/, evidence/, pi-sessions/ offline after dispose.",
+    inspect:
+      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
   };
-  const manifestPath = join(taskDir, "session-manifest.json");
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const manifestPath = join(piDir, "session-manifest.json");
+  await writeFileInsideRoot(manifestPath, contain, JSON.stringify(manifest, null, 2));
   return { manifestPath, transcriptPath };
 }
 

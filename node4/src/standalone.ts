@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   if (args.output) config.workspaceDir = resolve(args.output);
 
   const result = await runNode4Task(config, new LogSink(), task);
-  console.log(`[node4-standalone] terminal=${result.terminalStatus} taskDir=${result.taskDir}`);
+  console.log(`[node4-standalone] terminal=${result.terminalStatus} taskDir=${result.piDir}`);
   if (result.terminalStatus === "failed") process.exit(1);
 }
 

@@ -149,7 +149,7 @@ async function main() {
   const runtime: ToolRuntime = {
     task,
     workspaceDir: root,
-    taskDir,
+    piDir: taskDir,
     platform,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -193,7 +193,7 @@ async function main() {
 
   await writeFile(join(taskDir, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   await writePostRunInspectArtifacts({
-    taskDir,
+    piDir: taskDir,
     taskId: task.taskId,
     terminalStatus: status,
     summary: "harness settled",

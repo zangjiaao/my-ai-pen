@@ -1,5 +1,6 @@
-import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { writeFileInsideRoot } from "../runtime/session-workspace.js";
 import { randomBytes } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -825,8 +826,12 @@ async function finalizeFinding(
     related_prior_id: input.relatedPriorId || undefined,
     created_at: new Date().toISOString(),
   };
-  await mkdir(runtime.findingsDir, { recursive: true });
-  await writeFile(join(runtime.findingsDir, `${id}.json`), JSON.stringify(record, null, 2), "utf8");
+  const caseRoot = runtime.caseDir || dirname(runtime.findingsDir);
+  await writeFileInsideRoot(
+    join(runtime.findingsDir, `${id}.json`),
+    caseRoot,
+    JSON.stringify(record, null, 2),
+  );
   await runtime.platform.send({
     type: "vuln_found",
     conversation_id: runtime.task.conversationId,

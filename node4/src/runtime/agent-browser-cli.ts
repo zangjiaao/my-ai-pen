@@ -37,7 +37,7 @@ export function runAgentBrowser(
   args: string[],
   options: {
     taskId: string;
-    taskDir: string;
+    piDir: string;
     timeoutMs?: number;
     env?: Record<string, string>;
   },
@@ -49,14 +49,14 @@ export function runAgentBrowser(
     PATH: pathWithNode(),
     AGENT_BROWSER_SESSION: process.env.AGENT_BROWSER_SESSION || `n4-${options.taskId}`,
     AGENT_BROWSER_SCREENSHOT_DIR:
-      process.env.AGENT_BROWSER_SCREENSHOT_DIR || `${options.taskDir}/browser`,
+      process.env.AGENT_BROWSER_SCREENSHOT_DIR || `${options.piDir}/browser`,
     ...options.env,
   };
 
   return new Promise((resolve) => {
     const child = spawn(bin, args, {
       env,
-      cwd: options.taskDir,
+      cwd: options.piDir,
       shell: false,
     });
     let stdout = "";

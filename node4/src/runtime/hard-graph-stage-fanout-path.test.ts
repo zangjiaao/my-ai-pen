@@ -47,7 +47,7 @@ async function parentRuntime(): Promise<ToolRuntime> {
       graphDiscipline: "hard",
     },
     workspaceDir: root,
-    taskDir,
+    piDir: taskDir,
     platform,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -71,7 +71,7 @@ const pack: RolePack = {
 };
 
 const parent = await parentRuntime();
-const workDir = join(parent.taskDir, "hard-graph", "app_assessment", "stage-2-class_probe");
+const workDir = join(parent.piDir, "hard-graph", "app_assessment", "stage-2-class_probe");
 
 const tools = ["todo", "write", "shell", "http", "subagent", "skill", "fact"];
 const { childRuntime } = buildHardGraphStageChildRuntime({
@@ -96,7 +96,7 @@ assert.ok(listOut.includes("idle") || listOut.includes("ok") || listOut.includes
 // Without subagent in allowlist → no host (fail-closed tool surface)
 const noFan = buildHardGraphStageChildRuntime({
   parent,
-  workDir: join(parent.taskDir, "stage-no-sub"),
+  workDir: join(parent.piDir, "stage-no-sub"),
   tools: ["todo", "write", "shell"],
   pack,
 });

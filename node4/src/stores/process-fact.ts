@@ -1,14 +1,19 @@
 /**
  * Process-cognition facts (CyberStrike A2/A5 adapted) — separate from finding booking.
  *
- * Stored under taskDir/facts/<safe_key>.json. Never creates platform host assets
+ * Stored under pi-{sessionId}/facts/<safe_key>.json. Never creates platform host assets
  * (IP/domain rows remain user-created only per PRD).
  *
  * Index inject = key + summary only; full body via get / read tool.
  */
 
-import { mkdir, readdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 
 export type ProcessFact = {
   fact_key: string;
@@ -47,8 +52,13 @@ function fileNameForKey(key: string): string {
 export class ProcessFactStore {
   constructor(private readonly factsDir: string) {}
 
+  /** pi-* (parent of facts/). Never the facts dir itself — that path is agent-writable. */
+  private containmentRoot(): string {
+    return dirname(this.factsDir);
+  }
+
   async ensureDir(): Promise<void> {
-    await mkdir(this.factsDir, { recursive: true });
+    await ensureDirInsideRoot(this.factsDir, this.containmentRoot());
   }
 
   async upsert(input: {
@@ -82,7 +92,7 @@ export class ProcessFactStore {
       updated_at: new Date().toISOString(),
     };
     const path = join(this.factsDir, fileNameForKey(key));
-    await writeFile(path, JSON.stringify(fact, null, 2), "utf8");
+    await writeFileInsideRoot(path, this.containmentRoot(), JSON.stringify(fact, null, 2));
     return fact;
   }
 
@@ -90,7 +100,8 @@ export class ProcessFactStore {
     const key = safeKey(fact_key);
     if (!key) return { error: "invalid fact_key" };
     try {
-      const raw = await readFile(join(this.factsDir, fileNameForKey(key)), "utf8");
+      const raw = await readFileInsideRoot(join(this.factsDir, fileNameForKey(key)), this.containmentRoot());
+      if (raw == null) return { error: `fact not found: ${key}` };
       const parsed = JSON.parse(raw) as ProcessFact;
       if (!parsed?.fact_key) return { error: "corrupt fact file" };
       return parsed;
@@ -111,7 +122,8 @@ export class ProcessFactStore {
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
       try {
-        const raw = await readFile(join(this.factsDir, name), "utf8");
+        const raw = await readFileInsideRoot(join(this.factsDir, name), this.containmentRoot());
+        if (raw == null) continue;
         const f = JSON.parse(raw) as ProcessFact;
         if (!f?.fact_key) continue;
         out.push({

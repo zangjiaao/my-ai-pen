@@ -127,7 +127,7 @@ function runtimeFor(
       ...task,
     } as TaskEnvelope,
     workspaceDir: taskDir,
-    taskDir,
+    piDir: taskDir,
     platform,
     platformApi:
       opts?.platformApi === false

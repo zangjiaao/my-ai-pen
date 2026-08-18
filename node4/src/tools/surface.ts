@@ -5,7 +5,7 @@
  * Normal fill is Runtime: Traffic settle + TARGET seed; booked via finding(confirm).
  * upsert remains registered as non-primary (corrective / debug / import / tests).
  *
- * Working store: Node SQLite (taskDir/surfaces/ledger.sqlite). Offline ok without Platform.
+ * Working store: Node SQLite (caseDir/surfaces/ledger.sqlite). Offline ok without Platform.
  * Online (#374): local commit required for ok; async Platform surface_upsert (platform_sync pending→ok|error).
  */
 

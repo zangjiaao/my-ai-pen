@@ -71,7 +71,7 @@ try {
       workspaceDir: dir,
     },
     workspaceDir: dir,
-    taskDir: dir,
+    piDir: dir,
     platform: {
       send: async (msg: Record<string, unknown>) => {
         platformMessages.push(msg);

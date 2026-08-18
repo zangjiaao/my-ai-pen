@@ -103,7 +103,7 @@ writeFileSync(
   JSON.stringify(
     {
       terminalStatus: result.terminalStatus,
-      taskDir: result.taskDir,
+      piDir: result.piDir,
       target,
       messageCount: captured.length,
       evidenceCreated: captured.filter((m) => m.type === "evidence_created").length,
@@ -113,6 +113,6 @@ writeFileSync(
     2,
   ),
 );
-console.log(`[live] terminal=${result.terminalStatus} taskDir=${result.taskDir} messages=${captured.length}`);
+console.log(`[live] terminal=${result.terminalStatus} taskDir=${result.piDir} messages=${captured.length}`);
 writeFileSync(resolve(out, "../LATEST"), out + "\n", "utf8");
 if (result.terminalStatus === "failed") process.exit(1);

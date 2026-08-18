@@ -47,7 +47,7 @@ function runtimeFor(
   return {
     task,
     workspaceDir: taskDir,
-    taskDir,
+    piDir: taskDir,
     platform,
     platformApi:
       opts?.platformApi === false

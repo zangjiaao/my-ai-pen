@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { runShell } from "./shell.js";
+import { resolveShellCwd, runShell } from "./shell.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import {
@@ -603,9 +603,10 @@ async function runSubagentPackage(
     subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {
       if (command) {
+        const cwd = resolveShellCwd(runtime);
         const shellOut = await runShell(
           command,
-          ctx.taskDir,
+          cwd,
           pkg.timeout_seconds * 1000,
           runtime.lifecycle.abortSignal,
         );
@@ -626,7 +627,7 @@ async function runSubagentPackage(
           data: {
             kind: "shell",
             command,
-            cwd: ctx.taskDir,
+            cwd,
             workDir: ctx.workDir,
             exitCode: shellOut.exitCode,
             stdout: shellOut.stdout.slice(0, 80_000),
@@ -697,7 +698,10 @@ async function runSubagentPackage(
   // Shell path / any package: promote cookies parent←child (Graph hard needs this)
   try {
     if (result.artifactPath) {
-      await promoteChildSessionToParent(dirname(result.artifactPath), runtime.taskDir);
+      await promoteChildSessionToParent(
+        dirname(result.artifactPath),
+        runtime.sessionDir || runtime.piDir,
+      );
     }
   } catch {
     /* non-fatal */

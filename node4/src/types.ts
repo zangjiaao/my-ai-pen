@@ -133,7 +133,16 @@ export type PlatformApiAccess = {
 export type ToolRuntime = {
   task: TaskEnvelope;
   workspaceDir: string;
-  taskDir: string;
+  /**
+   * This pi-agent-core instance dir:
+   * `{workspace}/case-{caseId}/expert-{expertId}/pi-{sessionId}`.
+   * Not a Task package id. Park continue reuses it; Reset mints a new one.
+   */
+  piDir: string;
+  /** `{workspace}/case-{caseId}` — Case-shared findings/evidence/surfaces. */
+  caseDir?: string;
+  /** `{workspace}/case-{caseId}/expert-{expertId}` — Session sandbox + cookies. */
+  sessionDir?: string;
   platform: PlatformSink;
   /** Optional Node→platform HTTP for ledger tools (default seat). */
   platformApi?: PlatformApiAccess;
@@ -147,15 +156,15 @@ export type ToolRuntime = {
   skills?: import("./stores/skill.js").SkillStore;
   /** Pack-scoped skill ids for skill(list) filter. */
   skillIds?: readonly string[];
-  /** Process cognition facts (taskDir/facts) — separate from finding booking. */
+  /** Process cognition facts (pi instance `facts/`) — separate from finding booking. */
   processFacts?: import("./stores/process-fact.js").ProcessFactStore;
   /**
-   * Legacy JSON surface ledger (taskDir/surfaces/ledger.json).
+   * Legacy JSON surface ledger (caseDir/surfaces/ledger.json).
    * Prefer surfaceSqlite for gates; kept for migrate/tests only (#371).
    */
   surfaceLedger?: import("./stores/surface-ledger.js").SurfaceLedgerStore;
   /**
-   * Case Surface working store (taskDir/surfaces/ledger.sqlite) — Agent tool + Graph gate SoT (#370–#371).
+   * Case Surface working store (caseDir/surfaces/ledger.sqlite) — Agent tool + Graph gate SoT (#370–#371).
    * Offline ok without Platform. Online dual-write (#374) via surface_upsert when platformApi set.
    */
   surfaceSqlite?: import("./stores/surface-sqlite.js").SurfaceSqliteStore;

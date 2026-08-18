@@ -75,7 +75,7 @@ async function makeRuntime(label: string): Promise<{ runtime: ToolRuntime; dir: 
       instruction: "limits test",
     } as any,
     workspaceDir: dir,
-    taskDir,
+    piDir: taskDir,
     platform: platform as any,
     todo: new TodoStore(),
     evidence: evidence as any,
@@ -92,7 +92,7 @@ async function makeRuntime(label: string): Promise<{ runtime: ToolRuntime; dir: 
 
   runtime.subagents = new SubagentHost({
     task: runtime.task,
-    taskDir,
+    piDir: taskDir,
     evidence: runtime.evidence,
     platform: platform as any,
     goals,

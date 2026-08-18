@@ -61,7 +61,7 @@ const panel = new PanelAgentTracker(task.instruction, "渗透大师");
 const parentRuntime = {
   task,
   workspaceDir: taskDir,
-  taskDir,
+  piDir: taskDir,
   platform,
   todo: new TodoStore(),
   evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -130,7 +130,7 @@ const executor = createHardGraphStageExecutor({
   parentRuntime,
   pack: pack as any,
   boundSessionFactory: async ({ runtime }) => ({
-    session: createFakeSession(runtime.taskDir),
+    session: createFakeSession(runtime.piDir),
   }),
 });
 

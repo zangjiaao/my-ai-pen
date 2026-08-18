@@ -158,7 +158,7 @@ writeFileSync(
   JSON.stringify(
     {
       terminalStatus: result.terminalStatus,
-      taskDir: result.taskDir,
+      piDir: result.piDir,
       conversationId,
       target,
       messageCount: captured.length,
@@ -185,6 +185,6 @@ try {
 }
 
 writeFileSync(resolve(out, "../LATEST"), out + "\n");
-console.log(`[plat-live] terminal=${result.terminalStatus} taskDir=${result.taskDir} messages=${captured.length}`);
+console.log(`[plat-live] terminal=${result.terminalStatus} taskDir=${result.piDir} messages=${captured.length}`);
 client.close();
 process.exit(result.terminalStatus === "failed" ? 1 : 0);

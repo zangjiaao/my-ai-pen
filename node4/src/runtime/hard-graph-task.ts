@@ -3,8 +3,9 @@
  * Main OMP loop is not the stage scheduler. Outer continues do not apply.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
@@ -47,7 +48,7 @@ import { isLlmTurnError } from "./llm-turn-error.js";
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
   harnessStatus: "completed" | "incomplete" | "blocked";
-  taskDir: string;
+  piDir: string;
   graphId: string;
   terminal: HardGraphTerminal;
   workMode: string;
@@ -247,7 +248,7 @@ export async function runHardGraphExpertTask(options: {
   config: Node4Config;
   platform: PlatformSink;
   task: TaskEnvelope;
-  taskDir: string;
+  caseDir: string;
   pack: RolePack;
   graph: HardGraphDefinition;
   /** Real parent ToolRuntime — required for production pi stages. */
@@ -256,10 +257,10 @@ export async function runHardGraphExpertTask(options: {
   /** Test inject: skip real pi */
   stageExecutor?: StageExecutor;
 }): Promise<HardGraphTaskResult> {
-  const { config, platform, task, taskDir, pack, graph, parentRuntime, signal } = options;
+  const { config, platform, task, caseDir, pack, graph, parentRuntime, signal } = options;
   const startedAt = new Date().toISOString();
 
-  await mkdir(join(taskDir, "hard-graph"), { recursive: true });
+  await mkdir(join(caseDir, "hard-graph"), { recursive: true });
 
   // Run-level Tasks map + usage + panel (single hardGraphRun owner).
   const graphPlan = new HardGraphPlanStore(graph);
@@ -448,10 +449,10 @@ export async function runHardGraphExpertTask(options: {
     throw err;
   }
 
-  await writeFile(
-    join(taskDir, "hard-graph", "run-result.json"),
+  await writeFileInsideRoot(
+    join(caseDir, "hard-graph", "run-result.json"),
+    caseDir,
     JSON.stringify(result, null, 2),
-    "utf8",
   );
 
   // Spec #139 NC-Closeout: dual storage on any terminal
@@ -474,7 +475,7 @@ export async function runHardGraphExpertTask(options: {
       hypothesis_summary,
     });
     gq.engagementCloseout = closeout;
-    await writeEngagementCloseout({ taskDir, platform, task, closeout });
+    await writeEngagementCloseout({ caseDir, platform, task, closeout });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[hard-graph] engagement close-out failed: ${msg}`);
@@ -593,7 +594,7 @@ export async function runHardGraphExpertTask(options: {
 
   return {
     harnessStatus: settled.harnessStatus,
-    taskDir,
+    piDir: parentRuntime.piDir,
     graphId: graph.id,
     terminal: result.terminal,
     workMode: settled.workMode,

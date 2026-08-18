@@ -4,7 +4,6 @@
  * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
-import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -20,6 +19,12 @@ import {
   parseBrowserNetworkList,
 } from "../runtime/traffic-collect.js";
 import type { ToolRuntime } from "../types.js";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  resolveRuntimeSessionDir,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 /**
@@ -99,7 +104,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         return textResult(`error: action must be one of ${ACTIONS.join("|")}`);
       }
 
-      await mkdir(join(runtime.taskDir, "browser"), { recursive: true });
+      await ensureDirInsideRoot(join(runtime.piDir, "browser"), runtime.piDir);
       const run = (args: string[], timeoutMs?: number) =>
         runBrowserCommand(runtime, args, timeoutMs);
 
@@ -253,7 +258,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const pathHint =
           params.path != null
             ? String(params.path)
-            : join(runtime.taskDir, "browser", `shot_${Date.now()}.png`);
+            : join(runtime.piDir, "browser", `shot_${Date.now()}.png`);
         const args = ["screenshot"];
         if (params.selector) args.push(String(params.selector));
         // In sandbox, path is inside container; keep basename under /tmp
@@ -299,23 +304,25 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const r = await run(["cookies", "get", "--json"], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const jar = parseCookiesJson(r.stdout || r.text);
-        const dir = join(runtime.taskDir, "session", "actors", actor);
-        await mkdir(dir, { recursive: true });
+        const sessionRoot = resolveRuntimeSessionDir(runtime) || runtime.piDir;
+        const dir = join(sessionRoot, "session", "actors", actor);
+        await ensureDirInsideRoot(dir, sessionRoot);
         const jarPath = join(dir, "cookies.json");
         let existing: Record<string, string> = {};
         try {
-          existing = JSON.parse(await readFile(jarPath, "utf8")) as Record<string, string>;
+          const raw = await readFileInsideRoot(jarPath, sessionRoot);
+          if (raw) existing = JSON.parse(raw) as Record<string, string>;
         } catch {
           existing = {};
         }
         const merged = { ...existing, ...jar };
-        await writeFile(jarPath, JSON.stringify(merged, null, 2), "utf8");
+        await writeFileInsideRoot(jarPath, sessionRoot, JSON.stringify(merged, null, 2));
         if (actor === "default") {
-          await mkdir(join(runtime.taskDir, "session"), { recursive: true });
-          await writeFile(
-            join(runtime.taskDir, "session", "cookies.json"),
+          await ensureDirInsideRoot(join(sessionRoot, "session"), sessionRoot);
+          await writeFileInsideRoot(
+            join(sessionRoot, "session", "cookies.json"),
+            sessionRoot,
             JSON.stringify(merged, null, 2),
-            "utf8",
           );
         }
         recordActObservation(runtime, "browser", `export cookies → session actor=${actor}`, {

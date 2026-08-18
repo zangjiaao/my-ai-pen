@@ -135,7 +135,7 @@ async function main(): Promise<void> {
       engagement: "pentest",
     },
     workspaceDir: taskDir,
-    taskDir,
+    piDir: taskDir,
     platform,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),

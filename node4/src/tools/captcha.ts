@@ -3,12 +3,17 @@
  * Does not solve challenges for the agent; removes environment friction.
  */
 
-import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  resolveRuntimeSessionDir,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
@@ -35,8 +40,8 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "info").trim().toLowerCase();
-      const captchaDir = join(runtime.taskDir, "captcha");
-      await mkdir(captchaDir, { recursive: true });
+      const captchaDir = join(runtime.piDir, "captcha");
+      await ensureDirInsideRoot(captchaDir, runtime.piDir);
 
       if (op === "info") {
         const hasTess = await commandExists("tesseract");
@@ -61,7 +66,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         }
         if (!isInScope(runtime, url)) return textResult(`error: out of scope: ${url}`);
         const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
-        const jar = await loadActorJar(runtime.taskDir, actor);
+        const jar = await loadActorJar(resolveRuntimeSessionDir(runtime) || runtime.piDir, actor);
         const headers: Record<string, string> = {};
         const cookie = formatCookieHeader(jar);
         if (cookie) headers.Cookie = cookie;
@@ -81,7 +86,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
                   ? "webp"
                   : "bin";
           const image_path = join(captchaDir, `captcha_${actor}_${Date.now()}.${ext}`);
-          await writeFile(image_path, buf);
+          await writeFileInsideRoot(image_path, runtime.piDir, buf);
           recordActObservation(runtime, "captcha", `captcha fetch ${url}`, {
             url,
             actor,
@@ -114,12 +119,9 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         // stay under taskDir when relative
         const full = image_path.startsWith("/")
           ? image_path
-          : join(runtime.taskDir, image_path);
-        try {
-          await readFile(full);
-        } catch {
-          return textResult(`error: cannot read image_path: ${full}`);
-        }
+          : join(runtime.piDir, image_path);
+        const raw = await readFileInsideRoot(full, runtime.piDir);
+        if (raw == null) return textResult(`error: cannot read image_path: ${full}`);
         if (!(await commandExists("tesseract"))) {
           return jsonResult({
             ok: false,
@@ -169,7 +171,8 @@ async function loadActorJar(taskDir: string, actor: string): Promise<JarMap> {
   ];
   for (const p of paths) {
     try {
-      const raw = await readFile(p, "utf8");
+      const raw = await readFileInsideRoot(p, taskDir);
+      if (raw == null) continue;
       const o = JSON.parse(raw) as unknown;
       if (o && typeof o === "object" && !Array.isArray(o)) {
         const jar: JarMap = {};
