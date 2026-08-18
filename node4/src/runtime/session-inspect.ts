@@ -1,6 +1,6 @@
-import { mkdir, readdir, access } from "node:fs/promises";
+import { readdir, access } from "node:fs/promises";
 import { join } from "node:path";
-import { writeFileInsideRoot } from "./session-workspace.js";
+import { ensureDirInsideRoot, writeFileInsideRoot } from "./session-workspace.js";
 
 /**
  * After the agent disposes, write inspectable artifacts so operators can query
@@ -23,7 +23,7 @@ export async function writePostRunInspectArtifacts(options: {
   const { piDir } = options;
   const caseDir = options.caseDir || piDir;
   const sessionDir = options.sessionDir || piDir;
-  await mkdir(piDir, { recursive: true });
+  await ensureDirInsideRoot(piDir, piDir);
 
   const transcriptPath = join(piDir, "transcript.jsonl");
   const lines = (options.messages || []).map((m) => JSON.stringify(m));

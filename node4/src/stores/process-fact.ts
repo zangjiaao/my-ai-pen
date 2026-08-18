@@ -7,8 +7,13 @@
  * Index inject = key + summary only; full body via get / read tool.
  */
 
-import { mkdir, readdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 
 export type ProcessFact = {
   fact_key: string;
@@ -48,7 +53,7 @@ export class ProcessFactStore {
   constructor(private readonly factsDir: string) {}
 
   async ensureDir(): Promise<void> {
-    await mkdir(this.factsDir, { recursive: true });
+    await ensureDirInsideRoot(this.factsDir, this.factsDir);
   }
 
   async upsert(input: {
@@ -82,7 +87,7 @@ export class ProcessFactStore {
       updated_at: new Date().toISOString(),
     };
     const path = join(this.factsDir, fileNameForKey(key));
-    await writeFile(path, JSON.stringify(fact, null, 2), "utf8");
+    await writeFileInsideRoot(path, this.factsDir, JSON.stringify(fact, null, 2));
     return fact;
   }
 
@@ -90,7 +95,8 @@ export class ProcessFactStore {
     const key = safeKey(fact_key);
     if (!key) return { error: "invalid fact_key" };
     try {
-      const raw = await readFile(join(this.factsDir, fileNameForKey(key)), "utf8");
+      const raw = await readFileInsideRoot(join(this.factsDir, fileNameForKey(key)), this.factsDir);
+      if (raw == null) return { error: `fact not found: ${key}` };
       const parsed = JSON.parse(raw) as ProcessFact;
       if (!parsed?.fact_key) return { error: "corrupt fact file" };
       return parsed;
@@ -111,7 +117,8 @@ export class ProcessFactStore {
     for (const name of names) {
       if (!name.endsWith(".json")) continue;
       try {
-        const raw = await readFile(join(this.factsDir, name), "utf8");
+        const raw = await readFileInsideRoot(join(this.factsDir, name), this.factsDir);
+        if (raw == null) continue;
         const f = JSON.parse(raw) as ProcessFact;
         if (!f?.fact_key) continue;
         out.push({

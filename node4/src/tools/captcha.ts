@@ -3,13 +3,17 @@
  * Does not solve challenges for the agent; removes environment friction.
  */
 
-import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
-import { readFileInsideRoot, resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  resolveRuntimeSessionDir,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
@@ -37,7 +41,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: any) {
       const op = String(params.op || "info").trim().toLowerCase();
       const captchaDir = join(runtime.piDir, "captcha");
-      await mkdir(captchaDir, { recursive: true });
+      await ensureDirInsideRoot(captchaDir, runtime.piDir);
 
       if (op === "info") {
         const hasTess = await commandExists("tesseract");
@@ -82,7 +86,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
                   ? "webp"
                   : "bin";
           const image_path = join(captchaDir, `captcha_${actor}_${Date.now()}.${ext}`);
-          await writeFile(image_path, buf);
+          await writeFileInsideRoot(image_path, runtime.piDir, buf);
           recordActObservation(runtime, "captcha", `captcha fetch ${url}`, {
             url,
             actor,
@@ -116,11 +120,8 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         const full = image_path.startsWith("/")
           ? image_path
           : join(runtime.piDir, image_path);
-        try {
-          await readFile(full);
-        } catch {
-          return textResult(`error: cannot read image_path: ${full}`);
-        }
+        const raw = await readFileInsideRoot(full, runtime.piDir);
+        if (raw == null) return textResult(`error: cannot read image_path: ${full}`);
         if (!(await commandExists("tesseract"))) {
           return jsonResult({
             ok: false,

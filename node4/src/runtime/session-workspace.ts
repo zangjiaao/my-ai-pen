@@ -9,7 +9,7 @@
  * Session Reset mints a new piSessionId → new pi-* dir under the same expert.
  */
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function safeWorkspaceSegment(raw: string): string {
@@ -178,21 +178,34 @@ function resolvedInsideRoot(absPath: string, rootAbs: string): { root: string; t
   return { root, target };
 }
 
+async function canonicalizeExisting(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function pathStaysInside(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-async function assertNotSymlinkDir(path: string): Promise<void> {
+async function assertUsableDir(path: string, allowSymlinkRoot: boolean): Promise<void> {
   const st = await lstat(path);
-  if (st.isSymbolicLink()) throw new Error(`host I/O blocked: symlink ancestor ${path}`);
+  if (st.isSymbolicLink()) {
+    if (!allowSymlinkRoot) throw new Error(`host I/O blocked: symlink ancestor ${path}`);
+    const real = await stat(path);
+    if (!real.isDirectory()) throw new Error(`host I/O blocked: not a directory ${path}`);
+    return;
+  }
   if (!st.isDirectory()) throw new Error(`host I/O blocked: not a directory ${path}`);
 }
 
 /** Create `path` if missing. Existing symlink/file is a hard error. Concurrent create is ok. */
 async function mkdirNoFollow(path: string): Promise<void> {
   try {
-    await assertNotSymlinkDir(path);
+    await assertUsableDir(path, false);
     return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -204,14 +217,14 @@ async function mkdirNoFollow(path: string): Promise<void> {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "EEXIST") throw err;
   }
-  await assertNotSymlinkDir(path);
+  await assertUsableDir(path, false);
 }
 
 /** Refuse symlink ancestors (leaf may be missing or a symlink we will not follow). */
 export async function prepareHostWritePath(absPath: string, rootAbs: string): Promise<string> {
   const { root, target } = resolvedInsideRoot(absPath, rootAbs);
   let cur = dirname(target);
-  while (true) {
+  while (cur !== root) {
     try {
       const st = await lstat(cur);
       if (st.isSymbolicLink()) {
@@ -221,7 +234,6 @@ export async function prepareHostWritePath(absPath: string, rootAbs: string): Pr
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") throw err;
     }
-    if (cur === root) break;
     const parent = dirname(cur);
     if (parent === cur) break;
     cur = parent;
@@ -232,12 +244,12 @@ export async function prepareHostWritePath(absPath: string, rootAbs: string): Pr
 export async function ensureDirInsideRoot(dirAbs: string, rootAbs: string): Promise<void> {
   const { root, target } = resolvedInsideRoot(dirAbs, rootAbs);
   try {
-    await assertNotSymlinkDir(root);
+    await assertUsableDir(root, true);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
     await mkdir(root, { recursive: true });
-    await assertNotSymlinkDir(root);
+    await assertUsableDir(root, true);
   }
   const rel = relative(root, target);
   if (!rel || rel === ".") return;
@@ -270,9 +282,10 @@ async function openLeafInsideRoot(
   await ensureDirInsideRoot(dirname(target), rootAbs);
   const fh = await openNoFollow(target, flags);
   try {
-    const real = await realpath(target);
-    if (!pathStaysInside(rootAbs, real)) {
-      throw new Error(`host I/O escaped workspace root: ${real}`);
+    const realFile = await realpath(target);
+    const realRoot = await canonicalizeExisting(rootAbs);
+    if (!pathStaysInside(realRoot, realFile)) {
+      throw new Error(`host I/O escaped workspace root: ${realFile}`);
     }
   } catch (err) {
     await fh.close().catch(() => {});

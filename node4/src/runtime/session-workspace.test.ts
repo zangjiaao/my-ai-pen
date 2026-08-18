@@ -20,6 +20,7 @@ import {
   LOCAL_CASE_ID,
   prepareHostWritePath,
   readFileInsideRoot,
+  writeFileInsideRoot,
   resolveCaseDir,
   resolveExpertDir,
   resolvePiInstanceDir,
@@ -245,6 +246,16 @@ try {
       const missingRoot = join(root, "missing-expert");
       await ensureDirInsideRoot(join(missingRoot, "session", "actors", "user_a"), missingRoot);
       assert(existsSync(join(missingRoot, "session", "actors", "user_a")), "creates missing root");
+
+      const realWs = mkdtempSync(join(tmpdir(), "host-io-real-"));
+      try {
+        const linkWs = join(root, "link-ws");
+        symlinkSync(realWs, linkWs);
+        await writeFileInsideRoot(join(linkWs, "via-link.txt"), linkWs, "linked-ok\n");
+        assert(readFileSync(join(realWs, "via-link.txt"), "utf8") === "linked-ok\n", "symlink workspace root is allowed");
+      } finally {
+        rmSync(realWs, { recursive: true, force: true });
+      }
 
       let blocked = false;
       try {

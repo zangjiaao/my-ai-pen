@@ -4,7 +4,6 @@
  * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -105,7 +104,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         return textResult(`error: action must be one of ${ACTIONS.join("|")}`);
       }
 
-      await mkdir(join(runtime.piDir, "browser"), { recursive: true });
+      await ensureDirInsideRoot(join(runtime.piDir, "browser"), runtime.piDir);
       const run = (args: string[], timeoutMs?: number) =>
         runBrowserCommand(runtime, args, timeoutMs);
 
