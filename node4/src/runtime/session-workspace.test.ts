@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendFileInsideRoot,
+  ensureDirInsideRoot,
   ensureSessionWorkspace,
   LOCAL_CASE_ID,
   prepareHostWritePath,
@@ -240,6 +241,10 @@ try {
       assert((await readFileInsideRoot(leaf, root)) === "ok\n", "read regular file");
       symlinkSync(join(outside, "target"), join(root, "cookies.json"));
       assert((await readFileInsideRoot(join(root, "cookies.json"), root)) === null, "read skips symlink");
+
+      const missingRoot = join(root, "missing-expert");
+      await ensureDirInsideRoot(join(missingRoot, "session", "actors", "user_a"), missingRoot);
+      assert(existsSync(join(missingRoot, "session", "actors", "user_a")), "creates missing root");
 
       let blocked = false;
       try {

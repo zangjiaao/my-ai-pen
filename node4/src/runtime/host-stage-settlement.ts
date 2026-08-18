@@ -9,8 +9,8 @@
  * Host-declared failure keys are metadata for deadends/audit, not an agent honesty ritual.
  */
 
-import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import type { ToolRuntime } from "../types.js";
 import type { FindingRecord, FindingStore } from "./finding-store.js";
 import {
@@ -388,8 +388,9 @@ export async function writeHostSettlementAudit(
   settlement: HostStageSettlement,
 ): Promise<void> {
   try {
-    await writeFile(
+    await writeFileInsideRoot(
       join(workDir, "host-settlement-audit.json"),
+      workDir,
       JSON.stringify(
         {
           agent_result_json_ignored: true,
@@ -410,7 +411,6 @@ export async function writeHostSettlementAudit(
         null,
         2,
       ),
-      "utf8",
     );
   } catch {
     /* audit is best-effort */

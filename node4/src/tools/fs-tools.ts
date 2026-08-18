@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
-import { dirname, join, resolve, relative } from "node:path";
+import { stat } from "node:fs/promises";
+import { join, resolve, relative } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
+import { readFileInsideRoot, writeFileInsideRoot } from "../runtime/session-workspace.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
 /** Session sandbox root: expertDir (`/workspace`), not the pi-instance dir. */
@@ -97,8 +98,7 @@ export function createWriteTool(runtime: ToolRuntime): AgentTool<any> {
       });
       const file = safeUnderTask(root, rel);
       const content = String(params.content ?? "");
-      await mkdir(dirname(file), { recursive: true });
-      await writeFile(file, content, "utf8");
+      await writeFileInsideRoot(file, root, content);
       const st = await stat(file);
       const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
       const preview = content.slice(0, 2500);
@@ -146,7 +146,8 @@ export function createReadTool(runtime: ToolRuntime): AgentTool<any> {
           piDir: runtime.piDir,
         }),
       );
-      let text = await readFile(file, "utf8");
+      const text = await readFileInsideRoot(file, sessionWorkspaceRoot(runtime));
+      if (text == null) return textResult("error: file not found");
       const lines = text.split(/\n/);
       const offset = Math.max(0, Number(params.offset || 0));
       const limit = params.limit != null ? Math.max(1, Number(params.limit)) : undefined;
@@ -178,11 +179,12 @@ export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
       const oldStr = String(params.old_string ?? "");
       const newStr = String(params.new_string ?? "");
       if (!oldStr) return textResult("error: old_string required");
-      const text = await readFile(file, "utf8");
+      const text = await readFileInsideRoot(file, sessionWorkspaceRoot(runtime));
+      if (text == null) return textResult("error: file not found");
       const count = text.split(oldStr).length - 1;
       if (count === 0) return textResult("error: old_string not found");
       if (count > 1) return textResult(`error: old_string matched ${count} times; make it unique`);
-      await writeFile(file, text.replace(oldStr, newStr), "utf8");
+      await writeFileInsideRoot(file, sessionWorkspaceRoot(runtime), text.replace(oldStr, newStr));
       const st = await stat(file);
       return jsonResult({
         ok: true,

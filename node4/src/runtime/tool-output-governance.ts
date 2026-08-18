@@ -4,9 +4,9 @@
  * Pure helpers + async archive — unit-testable without live LLM.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { writeFileInsideRoot } from "./session-workspace.js";
 
 /** Soft cap for model-facing combined stdout+stderr (chars). */
 export const MODEL_TOOL_OUTPUT_CHARS = 48_000;
@@ -104,8 +104,6 @@ export async function archiveAndGovernToolOutput(options: {
     };
   }
 
-  const dir = join(options.piDir, "tool-output");
-  await mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tool = String(options.tool || "tool").replace(/[^\w.-]+/g, "_").slice(0, 40);
   const hash = createHash("sha256")
@@ -127,7 +125,7 @@ export async function archiveAndGovernToolOutput(options: {
     "",
   ].join("\n");
   const body = `${header}${stdout}\n\n--- stderr ---\n${stderr}\n`;
-  await writeFile(abs, body, "utf8");
+  await writeFileInsideRoot(abs, options.piDir, body);
 
   const note =
     `\n\n[output truncated for model context; full archive: ${rel} — use read path="${rel}"]`;

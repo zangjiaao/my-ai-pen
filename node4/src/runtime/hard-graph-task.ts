@@ -3,8 +3,9 @@
  * Main OMP loop is not the stage scheduler. Outer continues do not apply.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
@@ -448,10 +449,10 @@ export async function runHardGraphExpertTask(options: {
     throw err;
   }
 
-  await writeFile(
+  await writeFileInsideRoot(
     join(caseDir, "hard-graph", "run-result.json"),
+    caseDir,
     JSON.stringify(result, null, 2),
-    "utf8",
   );
 
   // Spec #139 NC-Closeout: dual storage on any terminal

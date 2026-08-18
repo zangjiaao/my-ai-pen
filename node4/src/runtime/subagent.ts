@@ -3,7 +3,7 @@
  * No OMP TUI/IRC/worktree hub. Workers are injectable for deterministic smokes.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
 import type { TodoStore } from "../stores/todo.js";
@@ -11,7 +11,7 @@ import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js"
 import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
 import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
 import { formatWorkerName, resolveSubagentGoal } from "./panel-agents.js";
-import { resolvePiInstanceDir, workspaceCaseId } from "./session-workspace.js";
+import { resolvePiInstanceDir, workspaceCaseId, writeFileInsideRoot } from "./session-workspace.js";
 
 export type SubagentResult = {
   ok: boolean;
@@ -300,10 +300,10 @@ export class SubagentHost {
       this.opts.goals.attachSubagent(options.goalId, subagentId);
     }
 
-    await writeFile(
+    await writeFileInsideRoot(
       join(workDir, "assignment.md"),
+      workDir,
       `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\nnodeType: ${options.nodeType || ""}\nplanNodeId: ${options.planNodeId || ""}\n`,
-      "utf8",
     );
 
     this.opts.panelAgents?.noteSubagentStart({
@@ -366,7 +366,7 @@ export class SubagentHost {
       goalId: options.goalId,
       finishedAt: new Date().toISOString(),
     };
-    await writeFile(artifactPath, JSON.stringify(payload, null, 2), "utf8");
+    await writeFileInsideRoot(artifactPath, workDir, JSON.stringify(payload, null, 2));
 
     const evidence = await this.opts.evidence.create({
       type: "subagent_result",

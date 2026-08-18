@@ -6,8 +6,8 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import { buildShellEnv, isPenToolsPathEnabled, resolvePenToolsBinDir } from "./pen-tools-path.js";
 import {
   dockerImageExists,
@@ -324,7 +324,7 @@ export async function recordToolingHealthAtTaskStart(opts: {
     const report = opts.probe ? opts.probe() : probeToolingHealth();
     const path = join(opts.piDir, "tooling-health.json");
     try {
-      await writeFile(path, JSON.stringify(report, null, 2), "utf8");
+      await writeFileInsideRoot(path, opts.piDir, JSON.stringify(report, null, 2));
     } catch {
       // disk failure must not abort the task
     }

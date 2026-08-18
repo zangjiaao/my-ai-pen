@@ -9,7 +9,7 @@
  * Session Reset mints a new piSessionId → new pi-* dir under the same expert.
  */
 import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function safeWorkspaceSegment(raw: string): string {
@@ -178,6 +178,35 @@ function resolvedInsideRoot(absPath: string, rootAbs: string): { root: string; t
   return { root, target };
 }
 
+function pathStaysInside(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+async function assertNotSymlinkDir(path: string): Promise<void> {
+  const st = await lstat(path);
+  if (st.isSymbolicLink()) throw new Error(`host I/O blocked: symlink ancestor ${path}`);
+  if (!st.isDirectory()) throw new Error(`host I/O blocked: not a directory ${path}`);
+}
+
+/** Create `path` if missing. Existing symlink/file is a hard error. Concurrent create is ok. */
+async function mkdirNoFollow(path: string): Promise<void> {
+  try {
+    await assertNotSymlinkDir(path);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw err;
+  }
+  try {
+    await mkdir(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") throw err;
+  }
+  await assertNotSymlinkDir(path);
+}
+
 /** Refuse symlink ancestors (leaf may be missing or a symlink we will not follow). */
 export async function prepareHostWritePath(absPath: string, rootAbs: string): Promise<string> {
   const { root, target } = resolvedInsideRoot(absPath, rootAbs);
@@ -202,22 +231,20 @@ export async function prepareHostWritePath(absPath: string, rootAbs: string): Pr
 
 export async function ensureDirInsideRoot(dirAbs: string, rootAbs: string): Promise<void> {
   const { root, target } = resolvedInsideRoot(dirAbs, rootAbs);
+  try {
+    await assertNotSymlinkDir(root);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw err;
+    await mkdir(root, { recursive: true });
+    await assertNotSymlinkDir(root);
+  }
   const rel = relative(root, target);
   if (!rel || rel === ".") return;
   let cur = root;
   for (const part of rel.split(/[/\\]/).filter(Boolean)) {
     cur = join(cur, part);
-    try {
-      const st = await lstat(cur);
-      if (st.isSymbolicLink()) throw new Error(`host I/O blocked: symlink ancestor ${cur}`);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        await mkdir(cur);
-        continue;
-      }
-      throw err;
-    }
+    await mkdirNoFollow(cur);
   }
 }
 
@@ -234,19 +261,39 @@ async function openNoFollow(target: string, flags: number): Promise<Awaited<Retu
   }
 }
 
+async function openLeafInsideRoot(
+  absPath: string,
+  rootAbs: string,
+  flags: number,
+): Promise<{ fh: Awaited<ReturnType<typeof open>>; target: string }> {
+  const target = await prepareHostWritePath(absPath, rootAbs);
+  await ensureDirInsideRoot(dirname(target), rootAbs);
+  const fh = await openNoFollow(target, flags);
+  try {
+    const real = await realpath(target);
+    if (!pathStaysInside(rootAbs, real)) {
+      throw new Error(`host I/O escaped workspace root: ${real}`);
+    }
+  } catch (err) {
+    await fh.close().catch(() => {});
+    throw err;
+  }
+  return { fh, target };
+}
+
 export async function writeFileInsideRoot(
   absPath: string,
   rootAbs: string,
-  data: string,
+  data: string | Uint8Array,
 ): Promise<void> {
-  const target = await prepareHostWritePath(absPath, rootAbs);
-  await ensureDirInsideRoot(dirname(target), rootAbs);
-  const fh = await openNoFollow(
-    target,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+  const { fh } = await openLeafInsideRoot(
+    absPath,
+    rootAbs,
+    fsConstants.O_RDWR | fsConstants.O_CREAT,
   );
   try {
-    await fh.writeFile(data, "utf8");
+    await fh.truncate(0);
+    await fh.writeFile(data);
   } finally {
     await fh.close();
   }
@@ -255,16 +302,15 @@ export async function writeFileInsideRoot(
 export async function appendFileInsideRoot(
   absPath: string,
   rootAbs: string,
-  data: string,
+  data: string | Uint8Array,
 ): Promise<void> {
-  const target = await prepareHostWritePath(absPath, rootAbs);
-  await ensureDirInsideRoot(dirname(target), rootAbs);
-  const fh = await openNoFollow(
-    target,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND,
+  const { fh } = await openLeafInsideRoot(
+    absPath,
+    rootAbs,
+    fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_APPEND,
   );
   try {
-    await fh.writeFile(data, "utf8");
+    await fh.writeFile(data);
   } finally {
     await fh.close();
   }

@@ -3,11 +3,11 @@
  * Keeps session-runner cold settle and parked-continue settle in lockstep.
  */
 
-import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskEnvelope } from "../types.js";
 import { loadFindings } from "../tools/finding.js";
 import { buildAttackSurfaceCandidates, type AttackSurfaceCandidate } from "./attack-surface.js";
+import { writeFileInsideRoot } from "./session-workspace.js";
 import {
   filterEmitableWorksetCandidates,
   worksetCandidatesFromAttackSurface,
@@ -72,10 +72,10 @@ export async function writeAttackSurfaceCandidatesArtifact(
   attackSurfaceCandidates: AttackSurfaceCandidate[],
 ): Promise<void> {
   try {
-    await writeFile(
+    await writeFileInsideRoot(
       join(piDir, "attack_surface_candidates.json"),
+      piDir,
       JSON.stringify(attackSurfaceCandidates, null, 2),
-      "utf8",
     );
   } catch {
     /* best-effort */
