@@ -354,7 +354,7 @@ function Sidebar({ activeId }: Props) {
         <div className="no-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           {compact ? (
             <div className="flex flex-col items-center gap-1 py-1">
-              {conversations.slice(0, 8).map((c) => (
+              {conversations.map((c) => (
                 <button
                   key={c.id}
                   type="button"
