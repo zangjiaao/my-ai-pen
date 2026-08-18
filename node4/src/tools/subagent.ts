@@ -603,9 +603,10 @@ async function runSubagentPackage(
     subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {
       if (command) {
+        const cwd = runtime.sessionDir || ctx.workDir;
         const shellOut = await runShell(
           command,
-          ctx.piDir,
+          cwd,
           pkg.timeout_seconds * 1000,
           runtime.lifecycle.abortSignal,
         );
@@ -626,7 +627,7 @@ async function runSubagentPackage(
           data: {
             kind: "shell",
             command,
-            cwd: ctx.piDir,
+            cwd,
             workDir: ctx.workDir,
             exitCode: shellOut.exitCode,
             stdout: shellOut.stdout.slice(0, 80_000),

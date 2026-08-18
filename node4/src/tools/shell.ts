@@ -77,7 +77,8 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
       const timeoutMs = timeoutSec * 1000;
       const startedMs = Date.now();
       const shellOpts = await resolveStickyShellOpts(runtime);
-      const result = await runShell(command, runtime.piDir, timeoutMs, combined, shellOpts);
+      const cwd = resolveShellCwd(runtime);
+      const result = await runShell(command, cwd, timeoutMs, combined, shellOpts);
       const durationMs = Date.now() - startedMs;
       const governed = await archiveAndGovernToolOutput({
         piDir: runtime.piDir,
@@ -193,6 +194,23 @@ export type ShellRunResult = {
   timedOut: boolean;
   aborted: boolean;
 };
+
+/** Expert sandbox (`/workspace`, scripts/). Not the pi instance dir. */
+export function resolveShellCwd(
+  runtime: Pick<ToolRuntime, "sessionDir" | "piDir" | "workspaceDir" | "task">,
+): string {
+  const session = String(runtime.sessionDir || "").trim();
+  if (session) return session;
+  try {
+    const conv = String(runtime.task?.conversationId || "").trim();
+    const exp = String(runtime.task?.expertId || "").trim();
+    const ws = String(runtime.workspaceDir || "").trim();
+    if (conv && exp && ws) return resolveSessionWorkspaceDir(ws, conv, exp);
+  } catch {
+    /* fall through */
+  }
+  return runtime.piDir;
+}
 
 async function resolveStickyShellOpts(
   runtime: ToolRuntime,
