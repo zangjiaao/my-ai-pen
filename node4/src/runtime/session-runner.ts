@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import { node4Root } from "../config.js";
@@ -97,6 +97,7 @@ import {
   prepareHostWritePath,
   resolveCaseDir,
   resolveWorkspaceLayout,
+  workspaceCaseId,
   type WorkspaceLayout,
 } from "./session-workspace.js";
 
@@ -105,7 +106,7 @@ export async function runNode4Task(
   platform: PlatformSink,
   task: TaskEnvelope,
   signal?: AbortSignal,
-): Promise<{ terminalStatus: string; taskDir: string }> {
+): Promise<{ terminalStatus: string; piDir: string }> {
   const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
   const pack = roleResolved.pack;
   const expertId = String(task.expertId || pack.id || "").trim();
@@ -117,10 +118,8 @@ export async function runNode4Task(
       task_id: task.taskId,
       message: msg,
     } as any);
-    const failedDir = task.conversationId
-      ? resolveCaseDir(config.workspaceDir, task.conversationId)
-      : join(config.workspaceDir, task.taskId);
-    return { terminalStatus: "failed", taskDir: failedDir };
+    const failedDir = resolveCaseDir(config.workspaceDir, workspaceCaseId(task.conversationId));
+    return { terminalStatus: "failed", piDir: failedDir };
   }
   /** Work-burst wall clock: right-panel Elapsed uses started_at → end_time (task lifecycle hooks). */
   const startedAt = new Date().toISOString();
@@ -188,33 +187,19 @@ export async function runNode4Task(
   }
 
   const piSessionId = reseedAgentSessionId || mintPiSessionId();
-  let layout: WorkspaceLayout | undefined;
-  if (task.conversationId && expertId && piSessionId) {
-    layout = resolveWorkspaceLayout(
-      config.workspaceDir,
-      task.conversationId,
-      expertId,
-      piSessionId,
-    );
-    await ensureWorkspaceLayout(layout);
-  } else {
-    await mkdir(join(config.workspaceDir, task.taskId), { recursive: true });
-  }
-  const taskDir = layout?.piDir || join(config.workspaceDir, task.taskId);
-  const caseDir = layout?.caseDir || taskDir;
-  const sessionDir = layout?.expertDir || taskDir;
-  if (!layout) {
-    await mkdir(join(taskDir, "evidence"), { recursive: true });
-    await mkdir(join(taskDir, "findings"), { recursive: true });
-    await mkdir(join(taskDir, "scripts"), { recursive: true });
-    await mkdir(join(taskDir, "subagents"), { recursive: true });
-    await mkdir(join(taskDir, "facts"), { recursive: true });
-    await mkdir(join(taskDir, "surfaces"), { recursive: true });
-    await mkdir(join(taskDir, "tool-output"), { recursive: true });
-  }
+  const layout = resolveWorkspaceLayout(
+    config.workspaceDir,
+    workspaceCaseId(task.conversationId),
+    expertId || "default",
+    piSessionId,
+  );
+  await ensureWorkspaceLayout(layout);
+  const piDir = layout.piDir;
+  const caseDir = layout.caseDir;
+  const sessionDir = layout.expertDir;
 
-  const eventsPath = join(taskDir, "events.jsonl");
-  const hostWriteRoot = caseDir || taskDir;
+  const eventsPath = join(piDir, "events.jsonl");
+  const hostWriteRoot = caseDir || piDir;
   /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
   const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking", "status_update"]);
   const loggingPlatform: PlatformSink = {
@@ -238,7 +223,7 @@ export async function runNode4Task(
       parked: parkContinue.entry,
       signal,
     });
-    return { terminalStatus: parkedOut.terminalStatus, taskDir };
+    return { terminalStatus: parkedOut.terminalStatus, piDir };
   }
 
   // --- Cold reseed path only (no park attach) ---
@@ -256,7 +241,7 @@ export async function runNode4Task(
   // Pack-scoped skills only when an expert is installed (bare runtime has none)
   const skillsDir = (pack as { skillsRoot?: string }).skillsRoot;
   const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
-  const processFacts = new ProcessFactStore(join(taskDir, "facts"));
+  const processFacts = new ProcessFactStore(join(piDir, "facts"));
   await processFacts.ensureDir();
   // Spec #370–#371: SQLite is surface tool + Graph gate SoT (offline ok).
   // Legacy JSON still opened for one-shot migrate via store.open() and test fallbacks.
@@ -269,7 +254,7 @@ export async function runNode4Task(
   const runtime: ToolRuntime = {
     task,
     workspaceDir: config.workspaceDir,
-    taskDir,
+    piDir,
     caseDir,
     sessionDir,
     platform: loggingPlatform,
@@ -297,7 +282,7 @@ export async function runNode4Task(
   };
   runtime.subagents = new SubagentHost({
     task,
-    taskDir,
+    piDir,
     workspaceDir: config.workspaceDir,
     evidence: runtime.evidence,
     platform: loggingPlatform,
@@ -351,13 +336,13 @@ export async function runNode4Task(
         config,
         platform: loggingPlatform,
         task,
-        taskDir,
+        caseDir,
         pack,
         graph: hardResolved.graph,
         parentRuntime: runtime,
         signal,
       });
-      return { terminalStatus: hardOut.harnessStatus, taskDir };
+      return { terminalStatus: hardOut.harnessStatus, piDir };
     } finally {
       // Spec #333: dispose browser sandbox (and idle pool if any) after Hard Graph task.
       await cleanupTaskResources().catch(() => {});
@@ -374,7 +359,7 @@ export async function runNode4Task(
         message: term.message,
       } as any)
       .catch(() => {});
-    return { terminalStatus: term.terminalStatus, taskDir };
+    return { terminalStatus: term.terminalStatus, piDir };
   }
 
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).
@@ -587,11 +572,11 @@ export async function runNode4Task(
   await emitCheckpointUpdate(obsCtx);
   checkpointThrottle.markEmitted();
 
-  // L2 tooling health: observability only (taskDir + status_update). Never gates the loop.
+  // L2 tooling health: observability only (piDir + status_update). Never gates the loop.
   if (shouldEmitToolingHealth({ chatOnly, toolNames })) {
     try {
       await recordToolingHealthAtTaskStart({
-        taskDir,
+        piDir,
         platform: loggingPlatform,
         task,
       });
@@ -927,7 +912,7 @@ export async function runNode4Task(
     const attackSurfaceCandidates = settlePkg.attackSurfaceCandidates;
     const sideCandidates = settlePkg.nextScopeCandidates;
     const worksetCandidates = settlePkg.worksetCandidates;
-    await writeAttackSurfaceCandidatesArtifact(taskDir, attackSurfaceCandidates);
+    await writeAttackSurfaceCandidatesArtifact(piDir, attackSurfaceCandidates);
 
     // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
     await emitCheckpointUpdate(obsCtx, {
@@ -960,7 +945,7 @@ export async function runNode4Task(
     });
 
     await writeFile(
-      await prepareHostWritePath(join(taskDir, "agent-summary.json"), hostWriteRoot),
+      await prepareHostWritePath(join(piDir, "agent-summary.json"), hostWriteRoot),
       JSON.stringify(
         {
           taskId: task.taskId,
@@ -987,13 +972,13 @@ export async function runNode4Task(
     );
 
     await writeFile(
-      await prepareHostWritePath(join(taskDir, "goals-snapshot.json"), hostWriteRoot),
+      await prepareHostWritePath(join(piDir, "goals-snapshot.json"), hostWriteRoot),
       JSON.stringify(goals.snapshot(), null, 2),
       "utf8",
     );
 
     await writePostRunInspectArtifacts({
-      taskDir,
+      piDir,
       caseDir,
       sessionDir,
       taskId: task.taskId,
@@ -1005,7 +990,7 @@ export async function runNode4Task(
       bookedFindingCount: booked.count,
     });
 
-    return { terminalStatus: emitStatus, taskDir };
+    return { terminalStatus: emitStatus, piDir };
   } finally {
     // Spec #333/#427: idle pool only; sticky pen-sandbox survives work-burst end.
     await cleanupTaskResources().catch(() => {});

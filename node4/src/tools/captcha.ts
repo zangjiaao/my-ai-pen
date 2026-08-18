@@ -36,7 +36,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "info").trim().toLowerCase();
-      const captchaDir = join(runtime.taskDir, "captcha");
+      const captchaDir = join(runtime.piDir, "captcha");
       await mkdir(captchaDir, { recursive: true });
 
       if (op === "info") {
@@ -62,7 +62,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         }
         if (!isInScope(runtime, url)) return textResult(`error: out of scope: ${url}`);
         const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
-        const jar = await loadActorJar(resolveRuntimeSessionDir(runtime) || runtime.taskDir, actor);
+        const jar = await loadActorJar(resolveRuntimeSessionDir(runtime) || runtime.piDir, actor);
         const headers: Record<string, string> = {};
         const cookie = formatCookieHeader(jar);
         if (cookie) headers.Cookie = cookie;
@@ -115,7 +115,7 @@ export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
         // stay under taskDir when relative
         const full = image_path.startsWith("/")
           ? image_path
-          : join(runtime.taskDir, image_path);
+          : join(runtime.piDir, image_path);
         try {
           await readFile(full);
         } catch {

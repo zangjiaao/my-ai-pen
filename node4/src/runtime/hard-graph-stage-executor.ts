@@ -5,11 +5,12 @@
  * sessions — no fake goals/evidence stubs. Agent Runtime via createBoundNode4Session.
  */
 
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ensurePiInstanceWorkspace,
   mintPiSessionId,
   resolvePiInstanceDir,
+  workspaceCaseId,
 } from "./session-workspace.js";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
@@ -244,7 +245,7 @@ export function buildHardGraphStageChildRuntime(options: {
   const childRuntime: ToolRuntime = {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
-    taskDir: workDir,
+    piDir: workDir,
     caseDir: parent.caseDir,
     sessionDir: parent.sessionDir,
     platform: parent.platform,
@@ -277,7 +278,7 @@ export function buildHardGraphStageChildRuntime(options: {
   if (allowSubagent) {
     childRuntime.subagents = new SubagentHost({
       task: parent.task,
-      taskDir: workDir,
+      piDir: workDir,
       workspaceDir: parent.workspaceDir,
       evidence: childRuntime.evidence,
       platform: parent.platform,
@@ -364,20 +365,14 @@ export function createHardGraphStageExecutor(options: {
   return async (input: StageExecutorInput): Promise<StageExecutorOutput> => {
     const expertId = String(task.expertId || pack.id || "").trim();
     const stageSid = mintPiSessionId();
-    const workDir =
-      parentRuntime.workspaceDir && task.conversationId && expertId
-        ? resolvePiInstanceDir(
-            parentRuntime.workspaceDir,
-            task.conversationId,
-            expertId,
-            stageSid,
-          )
-        : join(
-            parentRuntime.taskDir,
-            "hard-graph",
-            input.graphId,
-            `stage-${input.stageIndex}-${input.stage.id}`,
-          );
+    const workDir = parentRuntime.workspaceDir
+      ? resolvePiInstanceDir(
+          parentRuntime.workspaceDir,
+          workspaceCaseId(task.conversationId),
+          expertId || "default",
+          stageSid,
+        )
+      : join(dirname(parentRuntime.piDir), `pi-${stageSid}`);
     await ensurePiInstanceWorkspace(workDir);
 
     // Spec #116 I0.6: new stage attempt resets non-success package attempt budgets
@@ -392,7 +387,7 @@ export function createHardGraphStageExecutor(options: {
     }
 
     // A4: cookies from prior stages → this stage workDir (best-effort)
-    await seedChildSessionFromParent(parentRuntime.sessionDir || parentRuntime.taskDir, workDir).catch(() => ({
+    await seedChildSessionFromParent(parentRuntime.sessionDir || parentRuntime.piDir, workDir).catch(() => ({
       seeded: false,
       detail: "seed failed",
     }));
@@ -451,7 +446,7 @@ export function createHardGraphStageExecutor(options: {
     const promoteSession = async () => {
       if (sessionPromoted) return;
       sessionPromoted = true;
-      await promoteChildSessionToParent(workDir, parentRuntime.sessionDir || parentRuntime.taskDir).catch(() => ({
+      await promoteChildSessionToParent(workDir, parentRuntime.sessionDir || parentRuntime.piDir).catch(() => ({
         promoted: false,
         detail: "promote failed",
       }));

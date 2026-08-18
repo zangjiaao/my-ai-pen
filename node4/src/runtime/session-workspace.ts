@@ -22,6 +22,13 @@ export function mintPiSessionId(): string {
   return `n4-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Standalone / no conversationId — not a Task package id. */
+export const LOCAL_CASE_ID = "local";
+
+export function workspaceCaseId(conversationId?: string): string {
+  return String(conversationId || "").trim() || LOCAL_CASE_ID;
+}
+
 export function resolveCaseDir(workspaceRoot: string, caseId: string): string {
   const root = resolve(String(workspaceRoot || "").trim() || "./workspace");
   return join(root, `case-${safeWorkspaceSegment(caseId)}`);
@@ -135,7 +142,7 @@ export async function ensureWorkspaceLayout(layout: WorkspaceLayout): Promise<Wo
 export function resolveRuntimeSessionDir(runtime: {
   sessionDir?: string;
   workspaceDir?: string;
-  taskDir?: string;
+  piDir?: string;
   task?: { conversationId?: string; expertId?: string };
   rolePackId?: string;
 }): string {
@@ -144,20 +151,20 @@ export function resolveRuntimeSessionDir(runtime: {
   const exp = String(runtime.task?.expertId || runtime.rolePackId || "").trim();
   const root = String(runtime.workspaceDir || "").trim();
   if (conv && exp && root) return resolveExpertDir(root, conv, exp);
-  return String(runtime.taskDir || "");
+  return String(runtime.piDir || "");
 }
 
 export function resolveRuntimeCaseDir(runtime: {
   caseDir?: string;
   workspaceDir?: string;
-  taskDir?: string;
+  piDir?: string;
   task?: { conversationId?: string };
 }): string {
   if (runtime.caseDir) return runtime.caseDir;
   const conv = String(runtime.task?.conversationId || "").trim();
   const root = String(runtime.workspaceDir || "").trim();
   if (conv && root) return resolveCaseDir(root, conv);
-  return String(runtime.taskDir || "");
+  return String(runtime.piDir || "");
 }
 
 /**

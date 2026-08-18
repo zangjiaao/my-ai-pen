@@ -16,11 +16,14 @@ import { join } from "node:path";
 import {
   appendFileInsideRoot,
   ensureSessionWorkspace,
+  LOCAL_CASE_ID,
   prepareHostWritePath,
   resolveCaseDir,
   resolveExpertDir,
   resolvePiInstanceDir,
   resolveSessionWorkspaceDir,
+  resolveWorkspaceLayout,
+  workspaceCaseId,
 } from "./session-workspace.js";
 import {
   BrowserSandboxRuntime,
@@ -52,6 +55,15 @@ function ok(): SandboxExecResult {
   assert(pi.startsWith(resolveExpertDir("/tmp/ws", "c1", "e1")), "pi under expert");
   assert(resolveExpertDir("/tmp/ws", "c1", "e1").startsWith(resolveCaseDir("/tmp/ws", "c1")), "expert under case");
   assert(pi.includes("pi-sid-9"), pi);
+}
+
+{
+  assert(workspaceCaseId("") === LOCAL_CASE_ID, "empty case is local");
+  assert(workspaceCaseId("  ") === LOCAL_CASE_ID, "blank case is local");
+  assert(workspaceCaseId("c1") === "c1", "real case id");
+  const layout = resolveWorkspaceLayout("/tmp/ws", workspaceCaseId(""), "pentest", "sid");
+  assert(layout.caseDir.includes("case-local"), layout.caseDir);
+  assert(!layout.piDir.includes("task-"), layout.piDir);
 }
 
 // --- ensure creates subdirs ---

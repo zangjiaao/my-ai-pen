@@ -7,10 +7,10 @@ import { prepareHostWritePath } from "./session-workspace.js";
  * the session offline (OMP-like post-run inspectability).
  */
 export async function writePostRunInspectArtifacts(options: {
-  taskDir: string;
-  /** Case-shared findings/evidence/surfaces. Defaults to taskDir (standalone). */
+  piDir: string;
+  /** Case-shared findings/evidence/surfaces. Defaults to piDir (standalone). */
   caseDir?: string;
-  /** Expert sandbox (scripts / cookies). Defaults to taskDir (standalone). */
+  /** Expert sandbox (scripts / cookies). Defaults to piDir (standalone). */
   sessionDir?: string;
   taskId: string;
   terminalStatus: string;
@@ -20,20 +20,20 @@ export async function writePostRunInspectArtifacts(options: {
   stopReason: string;
   bookedFindingCount: number;
 }): Promise<{ manifestPath: string; transcriptPath: string }> {
-  const { taskDir } = options;
-  const caseDir = options.caseDir || taskDir;
-  const sessionDir = options.sessionDir || taskDir;
-  await mkdir(taskDir, { recursive: true });
+  const { piDir } = options;
+  const caseDir = options.caseDir || piDir;
+  const sessionDir = options.sessionDir || piDir;
+  await mkdir(piDir, { recursive: true });
 
-  const transcriptPath = await prepareHostWritePath(join(taskDir, "transcript.jsonl"), taskDir);
+  const transcriptPath = await prepareHostWritePath(join(piDir, "transcript.jsonl"), piDir);
   const lines = (options.messages || []).map((m) => JSON.stringify(m));
   await writeFile(transcriptPath, lines.length ? `${lines.join("\n")}\n` : "", "utf8");
 
   const present: string[] = [];
   const checks: Array<{ name: string; dir: string }> = [
-    { name: "events.jsonl", dir: taskDir },
-    { name: "transcript.jsonl", dir: taskDir },
-    { name: "agent-summary.json", dir: taskDir },
+    { name: "events.jsonl", dir: piDir },
+    { name: "transcript.jsonl", dir: piDir },
+    { name: "agent-summary.json", dir: piDir },
     { name: "findings", dir: caseDir },
     { name: "evidence", dir: caseDir },
     { name: "surfaces", dir: caseDir },
@@ -77,7 +77,7 @@ export async function writePostRunInspectArtifacts(options: {
     inspect:
       "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
   };
-  const manifestPath = await prepareHostWritePath(join(taskDir, "session-manifest.json"), taskDir);
+  const manifestPath = await prepareHostWritePath(join(piDir, "session-manifest.json"), piDir);
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
   return { manifestPath, transcriptPath };
 }

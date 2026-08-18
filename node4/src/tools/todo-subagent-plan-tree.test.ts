@@ -50,7 +50,7 @@ const parentTask = {
 const mainRuntime = {
   task: parentTask,
   workspaceDir: "/tmp",
-  taskDir: "/tmp",
+  piDir: "/tmp",
   platform: {
     send: async (msg: Record<string, unknown>) => {
       platformMessages.push(msg);
@@ -94,7 +94,7 @@ platformMessages.length = 0;
 const subRuntime = {
   task: { ...parentTask, taskId: "t1/sub/sub_1" },
   workspaceDir: "/tmp",
-  taskDir: "/tmp/sub",
+  piDir: "/tmp/sub",
   platform: {
     send: async (msg: Record<string, unknown>) => {
       platformMessages.push(msg);

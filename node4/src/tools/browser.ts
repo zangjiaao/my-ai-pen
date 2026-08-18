@@ -100,7 +100,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         return textResult(`error: action must be one of ${ACTIONS.join("|")}`);
       }
 
-      await mkdir(join(runtime.taskDir, "browser"), { recursive: true });
+      await mkdir(join(runtime.piDir, "browser"), { recursive: true });
       const run = (args: string[], timeoutMs?: number) =>
         runBrowserCommand(runtime, args, timeoutMs);
 
@@ -254,7 +254,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const pathHint =
           params.path != null
             ? String(params.path)
-            : join(runtime.taskDir, "browser", `shot_${Date.now()}.png`);
+            : join(runtime.piDir, "browser", `shot_${Date.now()}.png`);
         const args = ["screenshot"];
         if (params.selector) args.push(String(params.selector));
         // In sandbox, path is inside container; keep basename under /tmp
@@ -300,7 +300,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const r = await run(["cookies", "get", "--json"], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const jar = parseCookiesJson(r.stdout || r.text);
-        const sessionRoot = resolveRuntimeSessionDir(runtime) || runtime.taskDir;
+        const sessionRoot = resolveRuntimeSessionDir(runtime) || runtime.piDir;
         const dir = join(sessionRoot, "session", "actors", actor);
         await mkdir(dir, { recursive: true });
         const jarPath = join(dir, "cookies.json");

@@ -126,7 +126,7 @@ Operators can see **Worker rows** on Agent collaboration (`panel_agents`) and Ta
 |------|--------|
 | Key | Case-global stable **`agent_id`** (subagent id) |
 | Storage | **Platform Case** participants / panel metadata — **platform owns writes** |
-| Not SoT | Browser-only storage; Node `taskDir`; rewriting Package handoff text |
+| Not SoT | Browser-only storage; Node host workspace files; rewriting Package handoff text |
 | Resolve (single rule) | `user_display_name(agent_id) ?? panel_agents.name ?? "Worker N"` |
 | Write API | Case-scoped write (REST or WS equivalent): conversation/case id + `agent_id` + `display_name` |
 | Clear | Empty string clears override → fallback |
@@ -189,7 +189,7 @@ Package LLM sessions (**Graph and free**) that today call `createBoundNode4Sessi
 | Rule | Detail |
 |------|--------|
 | SoT for dialog rebuild | **Case-persisted** messages + participants/panel + display_name overrides |
-| Not SoT | Live Node process; idle pool; `taskDir/subagents/` disk |
+| Not SoT | Live Node process; idle pool; sibling `pi-*` package dirs |
 | Record when dialog closed | **Yes** — frames persist even if no client has the dialog open |
 | Reload / re-enter Case | Dialog reconstructs from Case only (no Node required) |
 | Pre-Spec Cases | Honest empty process; no fabrication |

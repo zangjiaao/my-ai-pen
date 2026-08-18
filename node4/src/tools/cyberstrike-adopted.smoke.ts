@@ -52,7 +52,7 @@ const goals = new GoalStore();
 const runtime: ToolRuntime = {
   task,
   workspaceDir: root,
-  taskDir,
+  piDir: taskDir,
   platform,
   todo: new TodoStore(),
   evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -64,7 +64,7 @@ const runtime: ToolRuntime = {
 };
 runtime.subagents = new SubagentHost({
   task,
-  taskDir,
+  piDir: taskDir,
   evidence: runtime.evidence,
   platform,
   goals,

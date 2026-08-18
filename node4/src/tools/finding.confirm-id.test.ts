@@ -56,7 +56,7 @@ async function makeRuntime(opts: {
       scope: { allow: ["host"] },
     },
     workspaceDir: opts.dir,
-    taskDir: opts.dir,
+    piDir: opts.dir,
     platform: {
       send: async (msg: Record<string, unknown>) => {
         opts.platformMessages.push(msg);

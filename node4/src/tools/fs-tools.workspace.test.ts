@@ -34,7 +34,7 @@ function ok(cond: unknown, msg: string): void {
   const root = mkdtempSync(join(tmpdir(), "ws-root-"));
   const expert = join(root, "case-c", "expert-e");
   const pi = join(expert, "pi-sid");
-  const runtimeLike = { sessionDir: expert, taskDir: pi };
+  const runtimeLike = { sessionDir: expert, piDir: pi };
   assert.equal(sessionWorkspaceRoot(runtimeLike), expert);
   const stripped = normalizeWorkspaceRel(join(expert, "scripts", "x.py"), runtimeLike);
   assert.equal(stripped.replace(/\\/g, "/"), "scripts/x.py");
@@ -55,7 +55,7 @@ function ok(cond: unknown, msg: string): void {
   const runtime = {
     task,
     workspaceDir: root,
-    taskDir: pi,
+    piDir: pi,
     sessionDir: expert,
     platform: { send: async () => undefined },
     todo: { snapshot: () => [] },

@@ -73,10 +73,10 @@ export function truncateStreamsForModel(
 
 /**
  * When truncated (or forceArchive), write full stdout/stderr under
- * taskDir/tool-output/<stamp>-<tool>.txt for agent re-read via `read`.
+ * piDir/tool-output/<stamp>-<tool>.txt for agent re-read via `read`.
  */
 export async function archiveAndGovernToolOutput(options: {
-  taskDir: string;
+  piDir: string;
   tool: string;
   stdout: string;
   stderr: string;
@@ -104,7 +104,7 @@ export async function archiveAndGovernToolOutput(options: {
     };
   }
 
-  const dir = join(options.taskDir, "tool-output");
+  const dir = join(options.piDir, "tool-output");
   await mkdir(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const tool = String(options.tool || "tool").replace(/[^\w.-]+/g, "_").slice(0, 40);
@@ -115,7 +115,7 @@ export async function archiveAndGovernToolOutput(options: {
     .digest("hex")
     .slice(0, 10);
   const rel = `tool-output/${stamp}-${tool}-${hash}.txt`;
-  const abs = join(options.taskDir, rel);
+  const abs = join(options.piDir, rel);
   const header = [
     `# tool-output archive`,
     `tool: ${options.tool}`,

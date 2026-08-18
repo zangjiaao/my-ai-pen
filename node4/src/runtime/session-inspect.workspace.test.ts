@@ -24,7 +24,7 @@ try {
   await writeFile(join(pi, "agent-summary.json"), "{}", "utf8");
 
   const dump = await writePostRunInspectArtifacts({
-    taskDir: pi,
+    piDir: pi,
     caseDir,
     sessionDir: expert,
     taskId: "task-1",

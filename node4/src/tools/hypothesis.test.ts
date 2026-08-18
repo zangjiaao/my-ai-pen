@@ -21,7 +21,7 @@ function makeRuntime(opts: {
       scope: {},
     },
     workspaceDir: "/tmp",
-    taskDir: "/tmp",
+    piDir: "/tmp",
     platform: { send: async () => {} },
     todo: {} as any,
     evidence: {} as any,

@@ -963,7 +963,7 @@ async function main() {
   const runtime: ToolRuntime = {
     task,
     workspaceDir: root,
-    taskDir,
+    piDir: taskDir,
     platform,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -974,7 +974,7 @@ async function main() {
   };
   runtime.subagents = new SubagentHost({
     task,
-    taskDir,
+    piDir: taskDir,
     evidence: runtime.evidence,
     platform,
     goals: goalStore,
@@ -986,7 +986,7 @@ async function main() {
     assignment: "echo hello from child",
     goalId: goal.id,
     worker: async (ctx) => {
-      const r = await runShell("echo subagent-proof && pwd", ctx.taskDir, 5000);
+      const r = await runShell("echo subagent-proof && pwd", ctx.piDir, 5000);
       return {
         ok: r.exitCode === 0,
         summary: "child ran shell",
@@ -1323,7 +1323,7 @@ async function main() {
   const obsRuntime: ToolRuntime = {
     task: obsTask,
     workspaceDir: root,
-    taskDir,
+    piDir: taskDir,
     platform: obsPlatform,
     todo: obsTodo,
     evidence: runtime.evidence,
@@ -1519,7 +1519,7 @@ async function main() {
 
   await writeFile(join(taskDir, "events.jsonl"), "{}\n", "utf8");
   const dump = await writePostRunInspectArtifacts({
-    taskDir,
+    piDir: taskDir,
     taskId,
     terminalStatus: harnessStatus,
     summary: "done",
@@ -1572,7 +1572,7 @@ async function main() {
         dual_actor_session: true,
         browser_tool: true,
         captcha_tool: true,
-        taskDir,
+        piDir: taskDir,
       },
       null,
       2,

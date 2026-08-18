@@ -138,7 +138,7 @@ export type ToolRuntime = {
    * `{workspace}/case-{caseId}/expert-{expertId}/pi-{sessionId}`.
    * Not a Task package id. Park continue reuses it; Reset mints a new one.
    */
-  taskDir: string;
+  piDir: string;
   /** `{workspace}/case-{caseId}` — Case-shared findings/evidence/surfaces. */
   caseDir?: string;
   /** `{workspace}/case-{caseId}/expert-{expertId}` — Session sandbox + cookies. */

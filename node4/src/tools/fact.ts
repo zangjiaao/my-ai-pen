@@ -1,6 +1,6 @@
 /**
  * Process-fact + Host notebook (Intel) — one Agent tool.
- * Local taskDir/facts stays for Graph process keys. Durable clues hang on Host/Service.
+ * Local pi-{sessionId}/facts stays for Graph process keys. Durable clues hang on Host/Service.
  * Attack surface is the `surface` tool; harness may mirror deposits into facts/.
  */
 import { Type } from "typebox";

@@ -26,7 +26,7 @@ assert(cut.stdout.includes("omitted") || cut.stdout.includes("truncated"), "omit
 const root = await mkdtemp(join(tmpdir(), "node4-outgov-"));
 try {
   const governed = await archiveAndGovernToolOutput({
-    taskDir: root,
+    piDir: root,
     tool: "shell",
     command: "yes | head -c 200000",
     stdout: bigOut,
@@ -42,7 +42,7 @@ try {
   assert(governed.stdout.includes(governed.archived_path!), "model text points at archive");
 
   const tiny = await archiveAndGovernToolOutput({
-    taskDir: root,
+    piDir: root,
     tool: "shell",
     stdout: "ok",
     stderr: "",

@@ -1,7 +1,7 @@
 /**
  * Process-cognition facts (CyberStrike A2/A5 adapted) — separate from finding booking.
  *
- * Stored under taskDir/facts/<safe_key>.json. Never creates platform host assets
+ * Stored under pi-{sessionId}/facts/<safe_key>.json. Never creates platform host assets
  * (IP/domain rows remain user-created only per PRD).
  *
  * Index inject = key + summary only; full body via get / read tool.

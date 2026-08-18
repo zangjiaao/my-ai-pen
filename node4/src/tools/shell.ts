@@ -77,10 +77,10 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
       const timeoutMs = timeoutSec * 1000;
       const startedMs = Date.now();
       const shellOpts = await resolveStickyShellOpts(runtime);
-      const result = await runShell(command, runtime.taskDir, timeoutMs, combined, shellOpts);
+      const result = await runShell(command, runtime.piDir, timeoutMs, combined, shellOpts);
       const durationMs = Date.now() - startedMs;
       const governed = await archiveAndGovernToolOutput({
-        taskDir: runtime.taskDir,
+        piDir: runtime.piDir,
         tool: "shell",
         command,
         stdout: result.stdout,

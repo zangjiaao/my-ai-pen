@@ -162,7 +162,7 @@ try {
   };
 
   const recorded = await recordToolingHealthAtTaskStart({
-    taskDir,
+    piDir: taskDir,
     platform,
     task,
     probe: () =>
@@ -193,7 +193,7 @@ try {
     },
   };
   const r2 = await recordToolingHealthAtTaskStart({
-    taskDir: taskDir2,
+    piDir: taskDir2,
     platform: boomPlatform,
     task,
     probe: () =>
@@ -217,7 +217,7 @@ try {
   let r3: ToolingHealthReport | null = null;
   try {
     r3 = await recordToolingHealthAtTaskStart({
-      taskDir: taskDir2,
+      piDir: taskDir2,
       platform,
       task,
       probe: () => {

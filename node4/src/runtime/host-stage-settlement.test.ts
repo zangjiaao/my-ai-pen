@@ -56,7 +56,7 @@ function makeRuntime(opts?: {
       workspaceDir: dir,
     },
     workspaceDir: dir,
-    taskDir: dir,
+    piDir: dir,
     platform: { send: async () => {} },
     todo: {} as any,
     evidence: {} as any,

@@ -4,14 +4,14 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
 import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
 import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
 import { formatWorkerName, resolveSubagentGoal } from "./panel-agents.js";
-import { resolvePiInstanceDir } from "./session-workspace.js";
+import { resolvePiInstanceDir, workspaceCaseId } from "./session-workspace.js";
 
 export type SubagentResult = {
   ok: boolean;
@@ -34,7 +34,7 @@ export type SubagentContext = {
   subagentId: string;
   assignment: string;
   goalId?: string;
-  taskDir: string;
+  piDir: string;
   workDir: string;
   task: TaskEnvelope;
 };
@@ -43,7 +43,7 @@ export type SubagentWorker = (ctx: SubagentContext) => Promise<{ summary: string
 
 export type SubagentHostOptions = {
   task: TaskEnvelope;
-  taskDir: string;
+  piDir: string;
   workspaceDir?: string;
   evidence: EvidenceStoreLike;
   platform: PlatformSink;
@@ -289,13 +289,11 @@ export class SubagentHost {
     planNodeId?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
-    const conv = String(this.opts.task.conversationId || "").trim();
-    const exp = String(this.opts.task.expertId || "").trim();
+    const exp = String(this.opts.task.expertId || "").trim() || "default";
     const ws = String(this.opts.workspaceDir || "").trim();
-    const workDir =
-      ws && conv && exp
-        ? resolvePiInstanceDir(ws, conv, exp, subagentId)
-        : join(this.opts.taskDir, "subagents", subagentId);
+    const workDir = ws
+      ? resolvePiInstanceDir(ws, workspaceCaseId(this.opts.task.conversationId), exp, subagentId)
+      : join(dirname(this.opts.piDir), `pi-${subagentId}`);
     await mkdir(workDir, { recursive: true });
 
     if (options.goalId) {
@@ -346,7 +344,7 @@ export class SubagentHost {
         subagentId,
         assignment: options.assignment,
         goalId: options.goalId,
-        taskDir: this.opts.taskDir,
+        piDir: this.opts.piDir,
         workDir,
         task: this.opts.task,
       });

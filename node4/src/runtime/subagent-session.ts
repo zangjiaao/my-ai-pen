@@ -371,7 +371,7 @@ async function runWarmPackage(args: {
   warm.agentId = agentId;
 
   const sessionSeed = await seedChildSessionFromParent(
-    input.parent.sessionDir || input.parent.taskDir,
+    input.parent.sessionDir || input.parent.piDir,
     workDir,
   );
   const userPrompt = buildUserPrompt(input.assignment, sessionSeed.seeded, true);
@@ -436,7 +436,7 @@ async function runWarmPackage(args: {
 
   const sessionPromote = await promoteChildSessionToParent(
     workDir,
-    input.parent.sessionDir || input.parent.taskDir,
+    input.parent.sessionDir || input.parent.piDir,
   );
   // Spec #116 I0.4: salvage ≠ package success
   const ok = isPackageSuccess({
@@ -531,7 +531,7 @@ async function runColdPackage(args: {
   await ensureChildDirs(workDir);
 
   // Prefer parent session jars so packages need not re-login every time.
-  const sessionSeed = await seedChildSessionFromParent(parent.sessionDir || parent.taskDir, workDir);
+  const sessionSeed = await seedChildSessionFromParent(parent.sessionDir || parent.piDir, workDir);
 
   const dry =
     process.env.NODE4_SUBAGENT_DRY === "1" ||
@@ -601,7 +601,7 @@ async function runColdPackage(args: {
   const childRuntime: ToolRuntime = {
     task: childTask,
     workspaceDir: parent.workspaceDir,
-    taskDir: workDir,
+    piDir: workDir,
     caseDir: parent.caseDir,
     sessionDir: parent.sessionDir,
     platform: parent.platform,
@@ -692,7 +692,7 @@ async function runColdPackage(args: {
 
   const sessionPromote = await promoteChildSessionToParent(
     workDir,
-    parent.sessionDir || parent.taskDir,
+    parent.sessionDir || parent.piDir,
   );
   // Spec #116 I0.4: salvage ≠ package success
   const ok = isPackageSuccess({

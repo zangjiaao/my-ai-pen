@@ -87,7 +87,7 @@ export async function runBrowserCommand(
       const msg = e instanceof Error ? e.message : String(e);
       const host = await runAgentBrowser(args, {
         taskId: seatKey,
-        taskDir: runtime.taskDir,
+        piDir: runtime.piDir,
         timeoutMs,
         env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(seatKey) },
       });
@@ -108,7 +108,7 @@ export async function runBrowserCommand(
 
   const host = await runAgentBrowser(args, {
     taskId: seatKey,
-    taskDir: runtime.taskDir,
+    piDir: runtime.piDir,
     timeoutMs,
     env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(seatKey) },
   });

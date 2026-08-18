@@ -12,7 +12,7 @@ import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 function jarRoot(runtime: ToolRuntime): string {
-  return resolveRuntimeSessionDir(runtime) || runtime.taskDir;
+  return resolveRuntimeSessionDir(runtime) || runtime.piDir;
 }
 
 type JarMap = Record<string, string>;

@@ -605,7 +605,7 @@ async function runSubagentPackage(
       if (command) {
         const shellOut = await runShell(
           command,
-          ctx.taskDir,
+          ctx.piDir,
           pkg.timeout_seconds * 1000,
           runtime.lifecycle.abortSignal,
         );
@@ -626,7 +626,7 @@ async function runSubagentPackage(
           data: {
             kind: "shell",
             command,
-            cwd: ctx.taskDir,
+            cwd: ctx.piDir,
             workDir: ctx.workDir,
             exitCode: shellOut.exitCode,
             stdout: shellOut.stdout.slice(0, 80_000),
@@ -699,7 +699,7 @@ async function runSubagentPackage(
     if (result.artifactPath) {
       await promoteChildSessionToParent(
         dirname(result.artifactPath),
-        runtime.sessionDir || runtime.taskDir,
+        runtime.sessionDir || runtime.piDir,
       );
     }
   } catch {

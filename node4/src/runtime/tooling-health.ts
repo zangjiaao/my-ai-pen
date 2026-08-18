@@ -311,18 +311,18 @@ export function shouldEmitToolingHealth(opts: {
 }
 
 /**
- * Best-effort: write taskDir/tooling-health.json + status_update.
+ * Best-effort: write piDir/tooling-health.json + status_update.
  * Never throws; never blocks product flow.
  */
 export async function recordToolingHealthAtTaskStart(opts: {
-  taskDir: string;
+  piDir: string;
   platform: PlatformSink;
   task: TaskEnvelope;
   probe?: () => ToolingHealthReport;
 }): Promise<ToolingHealthReport | null> {
   try {
     const report = opts.probe ? opts.probe() : probeToolingHealth();
-    const path = join(opts.taskDir, "tooling-health.json");
+    const path = join(opts.piDir, "tooling-health.json");
     try {
       await writeFile(path, JSON.stringify(report, null, 2), "utf8");
     } catch {

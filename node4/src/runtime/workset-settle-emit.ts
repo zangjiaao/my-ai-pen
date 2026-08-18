@@ -68,12 +68,12 @@ export async function buildWorksetSettleEmitPackage(options: {
 
 /** Best-effort write for offline inspect (non-blocking on failure). */
 export async function writeAttackSurfaceCandidatesArtifact(
-  taskDir: string,
+  piDir: string,
   attackSurfaceCandidates: AttackSurfaceCandidate[],
 ): Promise<void> {
   try {
     await writeFile(
-      join(taskDir, "attack_surface_candidates.json"),
+      join(piDir, "attack_surface_candidates.json"),
       JSON.stringify(attackSurfaceCandidates, null, 2),
       "utf8",
     );

@@ -80,7 +80,7 @@ assert.doesNotMatch(
 const dir = await mkdtemp(join(tmpdir(), "closeout-"));
 const sent: unknown[] = [];
 await writeEngagementCloseout({
-  taskDir: dir,
+  caseDir: dir,
   platform: { send: async (m) => { sent.push(m); } },
   task,
   closeout,

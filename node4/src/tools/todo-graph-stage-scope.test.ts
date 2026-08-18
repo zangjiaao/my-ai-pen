@@ -57,7 +57,7 @@ function makeGraphRuntime(opts: {
   return {
     task: parentTask,
     workspaceDir: "/tmp",
-    taskDir: "/tmp",
+    piDir: "/tmp",
     platform: {
       send: async (msg: Record<string, unknown>) => {
         platformMessages.push(msg);
@@ -91,7 +91,7 @@ function makeFreeRuntime(opts?: {
   return {
     task: parentTask,
     workspaceDir: "/tmp",
-    taskDir: "/tmp",
+    piDir: "/tmp",
     platform: {
       send: async (msg: Record<string, unknown>) => {
         platformMessages.push(msg);

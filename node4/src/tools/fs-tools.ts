@@ -6,9 +6,9 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
-/** Session sandbox root: expertDir (`/workspace`), not the pi-instance taskDir. */
-export function sessionWorkspaceRoot(runtime: Pick<ToolRuntime, "sessionDir" | "taskDir">): string {
-  const raw = String(runtime.sessionDir || runtime.taskDir || "").trim();
+/** Session sandbox root: expertDir (`/workspace`), not the pi-instance dir. */
+export function sessionWorkspaceRoot(runtime: Pick<ToolRuntime, "sessionDir" | "piDir">): string {
+  const raw = String(runtime.sessionDir || runtime.piDir || "").trim();
   return resolve(raw || ".");
 }
 
@@ -20,12 +20,12 @@ export function toSandboxPath(rel: string): string {
 /** Strip /workspace/ or a known host root so agents can pass either style. */
 export function normalizeWorkspaceRel(
   rawPath: string,
-  roots: { sessionDir?: string; taskDir?: string } = {},
+  roots: { sessionDir?: string; piDir?: string } = {},
 ): string {
   let p = String(rawPath || "").trim().replace(/\\/g, "/");
   if (p.startsWith("/workspace/")) p = p.slice("/workspace/".length);
   else if (p === "/workspace") p = "";
-  for (const root of [roots.sessionDir, roots.taskDir]) {
+  for (const root of [roots.sessionDir, roots.piDir]) {
     if (!root) continue;
     const absRoot = resolve(root).replace(/\\/g, "/");
     const absP = p.startsWith("/") ? p : "";
@@ -40,10 +40,10 @@ export function normalizeWorkspaceRel(
   return p;
 }
 
-function safeUnderTask(taskDir: string, rawPath: string): string {
-  const base = resolve(taskDir);
-  const rel = normalizeWorkspaceRel(rawPath, { taskDir });
-  const target = resolve(taskDir, rel);
+function safeUnderTask(root: string, rawPath: string): string {
+  const base = resolve(root);
+  const rel = normalizeWorkspaceRel(rawPath, { piDir: root });
+  const target = resolve(root, rel);
   const check = relative(base, target);
   if (check.startsWith("..") || check === "..") throw new Error("path escape blocked");
   return target;
@@ -93,7 +93,7 @@ export function createWriteTool(runtime: ToolRuntime): AgentTool<any> {
       const root = sessionWorkspaceRoot(runtime);
       const rel = normalizeWorkspaceRel(String(params.path || ""), {
         sessionDir: runtime.sessionDir,
-        taskDir: runtime.taskDir,
+        piDir: runtime.piDir,
       });
       const file = safeUnderTask(root, rel);
       const content = String(params.content ?? "");
@@ -143,7 +143,7 @@ export function createReadTool(runtime: ToolRuntime): AgentTool<any> {
         sessionWorkspaceRoot(runtime),
         normalizeWorkspaceRel(String(params.path || ""), {
           sessionDir: runtime.sessionDir,
-          taskDir: runtime.taskDir,
+          piDir: runtime.piDir,
         }),
       );
       let text = await readFile(file, "utf8");
@@ -172,7 +172,7 @@ export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
         sessionWorkspaceRoot(runtime),
         normalizeWorkspaceRel(String(params.path || ""), {
           sessionDir: runtime.sessionDir,
-          taskDir: runtime.taskDir,
+          piDir: runtime.piDir,
         }),
       );
       const oldStr = String(params.old_string ?? "");
@@ -189,7 +189,7 @@ export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
         path: toSandboxPath(
           normalizeWorkspaceRel(String(params.path || ""), {
             sessionDir: runtime.sessionDir,
-            taskDir: runtime.taskDir,
+            piDir: runtime.piDir,
           }),
         ),
         bytes: st.size,

@@ -138,14 +138,10 @@ export async function runParkedWorkingContinue(options: {
   const runtimeForObs = parked.runtime || {
     task,
     workspaceDir: options.config.workspaceDir,
-    taskDir:
-      String(parked.runtime?.taskDir || "").trim() ||
-      `${options.config.workspaceDir}/${task.taskId}`,
+    piDir: "",
     platform,
     todo: parked.todo,
-    findingsDir:
-      String(parked.runtime?.findingsDir || "").trim() ||
-      `${options.config.workspaceDir}/${task.taskId}/findings`,
+    findingsDir: "",
     lifecycle: {},
   };
   const obsCtx: ObservabilityContext = {
@@ -326,19 +322,17 @@ export async function runParkedWorkingContinue(options: {
   );
 
   // Spec #311 parity with Free settle (shared helper).
-  const findingsDir =
-    String(parked.runtime?.findingsDir || "").trim() ||
-    join(options.config.workspaceDir, task.taskId, "findings");
-  const taskDir =
-    String(parked.runtime?.taskDir || "").trim() ||
-    join(options.config.workspaceDir, task.taskId);
+  const findingsDir = String(parked.runtime?.findingsDir || "").trim();
+  const piDir = String(parked.runtime?.piDir || "").trim();
   const worksetSource = workMode === "graph" ? "hard_settle" : "free_settle";
   const settlePkg = await buildWorksetSettleEmitPackage({
     task,
     findingsDir,
     source: worksetSource,
   });
-  await writeAttackSurfaceCandidatesArtifact(taskDir, settlePkg.attackSurfaceCandidates);
+  if (piDir) {
+    await writeAttackSurfaceCandidatesArtifact(piDir, settlePkg.attackSurfaceCandidates);
+  }
 
   const goals = (parked.runtime?.goals as GoalStore | undefined) || obsCtx.goals;
   const goalModeOn = Boolean(goals?.isActive?.() || task.goalObjective);

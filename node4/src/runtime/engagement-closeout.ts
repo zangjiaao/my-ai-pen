@@ -192,12 +192,12 @@ export function buildEngagementCloseout(input: {
 }
 
 export async function writeEngagementCloseout(options: {
-  taskDir: string;
+  caseDir: string;
   platform: PlatformSink;
   task: TaskEnvelope;
   closeout: EngagementCloseout;
 }): Promise<{ path: string }> {
-  const dir = join(options.taskDir, "hard-graph");
+  const dir = join(options.caseDir, "hard-graph");
   await mkdir(dir, { recursive: true });
   const path = join(dir, "engagement-closeout.json");
   const body = JSON.stringify(options.closeout, null, 2);

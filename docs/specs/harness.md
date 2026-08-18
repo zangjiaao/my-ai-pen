@@ -108,7 +108,7 @@ Platform data tools: see [`Node default + ledger tools (shipped)`](Node default 
 | `browser` | SPA/DOM assist when API recon is insufficient |
 | `script` | Optional multi-file helper |
 | `finding` | Only product conclusion path when bookingMode=finding; proof-gated (body/stdout + PoC) |
-| `fact` | Process cognition (ports/auth/deadends) under `taskDir/facts/` — **not** product vulns; index inject short |
+| `fact` | Process cognition (ports/auth/deadends) under `pi-{sessionId}/facts/` — **not** product vulns; index inject short |
 | `subagent` | Separable work package — **required handoff fields**; nest ban |
 | `goal` | Long-task objective; continuation while active |
 | `skill` | Progressive load of methodology (`list` short / `load` one body) — **not** a permission ACL |
@@ -138,7 +138,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 |-------|----------|
 | Capture | Process streams capped while running (`STDOUT_CAP` / `STDERR_CAP`) |
 | Model-facing | Soft truncate (~48k combined) with head+tail |
-| Archive | When truncated, full text under `taskDir/tool-output/<stamp>-shell-*.txt`; path returned for `read` |
+| Archive | When truncated, full text under `pi-{sessionId}/tool-output/<stamp>-shell-*.txt`; path returned for `read` |
 
 ### Permissions vs skills (B2 / E2)
 
@@ -159,7 +159,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 
 ### Process facts (A2 / A3 / A5)
 
-- Path: `taskDir/facts/<key>.json` via `fact` tool (`upsert` / `list` / `get`).
+- Path: `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/facts/<key>.json` via `fact` tool (`upsert` / `list` / `get`).
 - Inject: short **index** (key + summary) at session start; full body on demand — do not invent from summaries.
 - Write-as-you-go when cognition is confirmed; still book product issues only via `finding(confirm)`.
 - **Does not create host IP/domain assets** (PRD: user-created only).
@@ -171,7 +171,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 | Mechanism | Behavior |
 |-----------|----------|
 | `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
-| `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
+| `subagent` | Child is a sibling `pi-{subagentId}/` under the same expert; evidence is Case-shared |
 | Work mode | **Free** (Default seat only) vs **Expert Graph** (product `app_assessment` / `redteam_deep` → Hard Graph runner; Soft retired #76; C1 continue-chat after complete) |
 
 ### OMP subagent scheduling
@@ -194,7 +194,7 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 
 Lab Main-act strip (non-product): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Expert Graph configs: `experts/pentest/graphs/hard/`. Resolve: `resolveHardGraph`.
 
-**Surface ledger:** `taskDir/surfaces/ledger.sqlite` (Node SQLite working store; Graph gates + `surface` tool) — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/specs/task-graph.md`). Legacy `ledger.json` migrates once on open.
+**Surface ledger:** `workspace/case-{caseId}/surfaces/ledger.sqlite` (Node SQLite working store; Graph gates + `surface` tool) — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/specs/task-graph.md`). Legacy `ledger.json` migrates once on open.
 
 **Parallel batch (Spec #302 Grok-like limits):** `subagent({ packages: [...] })` — `NODE4_SUBAGENT_CONCURRENCY` (default **8**, clamp 1–16) is **scheduler pool size only**: packages beyond the window **queue**, never `never_started` solely because the pool is full. **No hard path-dispatch kill** — same target URL may fan out many packages; path counts are observability only (Agent judgment + prior-avoid / honest-partial rules still apply). **Per-task cumulative admitted package budget** default **128** (`NODE4_SUBAGENT_TASK_BUDGET`, clamp max **1024**); counts packages admitted after validation; exhaustion → clear tool error (already-running/finished work stays honest partial). **Batch length safety ceiling** `MAX_SUBAGENT_BATCH` (**32**): hard error if `packages[]` exceeds it (abuse rail, not agent thinking limit). **Nest depth = 1** unchanged (Worker cannot spawn subagent). Non-normative comparison: `docs/wayfinder/research-grok-build-subagent-limits.md`. **Session promote/seed** parent↔child. **Worker keep-alive (OMP):** idle by `agent_id` after package (incl. soft-fail); warm with `resume_agent_id` + same-path affinity; **release** via idle TTL (~420s), maxIdle, `op=release`, or task end (`NODE4_SUBAGENT_IDLE_*`). Orthogonal paths cold-fan-out. Missing intentional structured settlement may be salvaged **for evidence only** — does not count as package success. Package attempt budget ≤2 per package (not stage pool; orthogonal to task spawn budget). **Stage Feedback** is host settlement (Store + package terminals + surface ledger); agent `result.json` is **not** gate SoT (Spec #125). Host declares package failures — honest partial may pass; silent partial forbidden. **L0 honesty vs advance / repair / blocked booking-tail:** Spec #139 **NC-Honesty-Advance** and `docs/specs/task-graph.md` (boss loop, separate stage vs L1 budgets, booking-only tail, `blocked_with_unbooked_feedback_ok`). After packages start this stage, Main orchestrates+settles only (no serial erase of package failure). UI interrupt parks captain session (turn cancel); continue is same Case — not dispose+summary reseed.
 
@@ -255,7 +255,7 @@ Prefer act density over todo thrash, but **do not** leave finished categories op
 - System creates one linked Case evidence row from `proof` — agent does **not** hunt opaque `evidence_ids`
 - One strong proof is enough to trust + reproduce; quote claim-specific observation per finding
 - Platform stores `proof_excerpts` / folds proof into the vuln description for report UIs
-- Multi-expert: next pack reads `case_context` findings + linked proof snippets (not prior taskDir)
+- Multi-expert: next pack reads `case_context` findings + linked proof snippets (not a prior Task directory)
 
 Typical terminal policy (harness; refine in code carefully):
 
@@ -306,7 +306,7 @@ Same conversation = shared Case. Joining experts receive `task_assign.case_conte
 | `evidence_snippets[]` | Prefer **finding-linked** / `role=proof` rows: id, kind, path_or_url, excerpt |
 | `artifact_hints[]` | Path crumbs (not full trees) |
 
-Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** prior `taskDir`.  
+Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** a prior Task directory.  
 `write` of material files emits `file_artifact` (path + preview). `read` does not book Case evidence.  
 Details (shipped behavior in code + `prd.md`); historical plan: git history.
 

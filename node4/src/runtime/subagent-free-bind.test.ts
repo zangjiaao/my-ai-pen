@@ -43,7 +43,7 @@ const goals = new GoalStore();
 
 const host = new SubagentHost({
   task,
-  taskDir: "/tmp/subagent-free-bind",
+  piDir: "/tmp/subagent-free-bind",
   evidence: {
     create: async () => ({ id: "ev1", path: "" }),
     read: async () => undefined,
@@ -114,7 +114,7 @@ failTodo.apply({
 const failId = todoTaskNodeId("Tasks", "Will fail package");
 const failHost = new SubagentHost({
   task,
-  taskDir: "/tmp/subagent-free-fail",
+  piDir: "/tmp/subagent-free-fail",
   evidence: {
     create: async () => ({ id: "evf", path: "" }),
     read: async () => undefined,
@@ -173,7 +173,7 @@ freeOnly.apply({
 });
 const graphHost = new SubagentHost({
   task,
-  taskDir: "/tmp/subagent-graph-bind",
+  piDir: "/tmp/subagent-graph-bind",
   evidence: {
     create: async () => ({ id: "ev2", path: "" }),
     read: async () => undefined,

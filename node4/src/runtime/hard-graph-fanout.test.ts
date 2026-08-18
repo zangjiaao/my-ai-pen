@@ -69,7 +69,7 @@ async function runtime(): Promise<ToolRuntime> {
       graphDiscipline: "hard",
     },
     workspaceDir: root,
-    taskDir,
+    piDir: taskDir,
     platform,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
