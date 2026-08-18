@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import { node4Root } from "../config.js";
@@ -94,10 +93,10 @@ import {
   appendFileInsideRoot,
   ensureWorkspaceLayout,
   mintPiSessionId,
-  prepareHostWritePath,
   resolveCaseDir,
   resolveWorkspaceLayout,
   workspaceCaseId,
+  writeFileInsideRoot,
   type WorkspaceLayout,
 } from "./session-workspace.js";
 
@@ -944,51 +943,53 @@ export async function runNode4Task(
       goal_objective: task.goalObjective || undefined,
     });
 
-    await writeFile(
-      await prepareHostWritePath(join(piDir, "agent-summary.json"), hostWriteRoot),
-      JSON.stringify(
-        {
-          taskId: task.taskId,
-          phase: "finished",
-          terminalStatus: emitStatus,
-          stopReason,
-          continueCount,
-          bookedFindings: booked.count,
-          rolePack: pack.id,
-          roleSource: roleResolved.source,
-          openGoals: goals.snapshot().openCount,
-          goals: goals.snapshot().goals,
-          llm_usage: llmUsage,
-          startedAt,
-          endTime,
-          attackSurfaceCandidates,
-          nextScopeCandidates: sideCandidates,
-          worksetCandidates,
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    await writeFile(
-      await prepareHostWritePath(join(piDir, "goals-snapshot.json"), hostWriteRoot),
-      JSON.stringify(goals.snapshot(), null, 2),
-      "utf8",
-    );
-
-    await writePostRunInspectArtifacts({
-      piDir,
-      caseDir,
-      sessionDir,
-      taskId: task.taskId,
-      terminalStatus: emitStatus,
-      summary,
-      messages,
-      continueCount,
-      stopReason,
-      bookedFindingCount: booked.count,
-    });
+    try {
+      await writeFileInsideRoot(
+        join(piDir, "agent-summary.json"),
+        hostWriteRoot,
+        JSON.stringify(
+          {
+            taskId: task.taskId,
+            phase: "finished",
+            terminalStatus: emitStatus,
+            stopReason,
+            continueCount,
+            bookedFindings: booked.count,
+            rolePack: pack.id,
+            roleSource: roleResolved.source,
+            openGoals: goals.snapshot().openCount,
+            goals: goals.snapshot().goals,
+            llm_usage: llmUsage,
+            startedAt,
+            endTime,
+            attackSurfaceCandidates,
+            nextScopeCandidates: sideCandidates,
+            worksetCandidates,
+          },
+          null,
+          2,
+        ),
+      );
+      await writeFileInsideRoot(
+        join(piDir, "goals-snapshot.json"),
+        hostWriteRoot,
+        JSON.stringify(goals.snapshot(), null, 2),
+      );
+      await writePostRunInspectArtifacts({
+        piDir,
+        caseDir,
+        sessionDir,
+        taskId: task.taskId,
+        terminalStatus: emitStatus,
+        summary,
+        messages,
+        continueCount,
+        stopReason,
+        bookedFindingCount: booked.count,
+      });
+    } catch {
+      /* inspect dumps must not fail a settled burst */
+    }
 
     return { terminalStatus: emitStatus, piDir };
   } finally {

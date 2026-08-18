@@ -4,7 +4,7 @@
  * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -20,7 +20,12 @@ import {
   parseBrowserNetworkList,
 } from "../runtime/traffic-collect.js";
 import type { ToolRuntime } from "../types.js";
-import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
+import {
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  resolveRuntimeSessionDir,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 /**
@@ -302,22 +307,23 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const jar = parseCookiesJson(r.stdout || r.text);
         const sessionRoot = resolveRuntimeSessionDir(runtime) || runtime.piDir;
         const dir = join(sessionRoot, "session", "actors", actor);
-        await mkdir(dir, { recursive: true });
+        await ensureDirInsideRoot(dir, sessionRoot);
         const jarPath = join(dir, "cookies.json");
         let existing: Record<string, string> = {};
         try {
-          existing = JSON.parse(await readFile(jarPath, "utf8")) as Record<string, string>;
+          const raw = await readFileInsideRoot(jarPath, sessionRoot);
+          if (raw) existing = JSON.parse(raw) as Record<string, string>;
         } catch {
           existing = {};
         }
         const merged = { ...existing, ...jar };
-        await writeFile(jarPath, JSON.stringify(merged, null, 2), "utf8");
+        await writeFileInsideRoot(jarPath, sessionRoot, JSON.stringify(merged, null, 2));
         if (actor === "default") {
-          await mkdir(join(sessionRoot, "session"), { recursive: true });
-          await writeFile(
+          await ensureDirInsideRoot(join(sessionRoot, "session"), sessionRoot);
+          await writeFileInsideRoot(
             join(sessionRoot, "session", "cookies.json"),
+            sessionRoot,
             JSON.stringify(merged, null, 2),
-            "utf8",
           );
         }
         recordActObservation(runtime, "browser", `export cookies → session actor=${actor}`, {

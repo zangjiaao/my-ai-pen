@@ -3,12 +3,18 @@
  * Dual-identity: actor=user_a|user_b|browser|default — each has its own jar.
  */
 
-import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
-import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
+import {
+  appendFileInsideRoot,
+  ensureDirInsideRoot,
+  readFileInsideRoot,
+  resolveRuntimeSessionDir,
+  writeFileInsideRoot,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 function jarRoot(runtime: ToolRuntime): string {
@@ -67,11 +73,12 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: any) {
       const op = String(params.op || "request").trim().toLowerCase();
       const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
-      const paths = actorPaths(jarRoot(runtime), actor);
-      await mkdir(paths.dir, { recursive: true });
+      const root = jarRoot(runtime);
+      const paths = actorPaths(root, actor);
+      await ensureDirInsideRoot(paths.dir, root);
 
       if (op === "list_actors") {
-        const actors = await listActors(jarRoot(runtime));
+        const actors = await listActors(root);
         return jsonResult({
           ok: true,
           op,
@@ -81,7 +88,7 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
       }
 
       if (op === "jar_get") {
-        const jar = await loadJar(paths.jar);
+        const jar = await loadJar(paths.jar, root);
         return jsonResult({
           ok: true,
           op,
@@ -91,16 +98,16 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
       if (op === "jar_clear") {
-        await saveJar(paths.jar, {});
+        await saveJar(paths.jar, {}, root);
         return jsonResult({ ok: true, op, actor, cookies: {} });
       }
       if (op === "jar_set") {
-        const jar = await loadJar(paths.jar);
+        const jar = await loadJar(paths.jar, root);
         const incoming = params.cookies && typeof params.cookies === "object" ? params.cookies : {};
         for (const [k, v] of Object.entries(incoming)) {
           if (k) jar[String(k)] = String(v);
         }
-        await saveJar(paths.jar, jar);
+        await saveJar(paths.jar, jar, root);
         return jsonResult({ ok: true, op, actor, cookies: jar });
       }
       if (op === "jar_copy") {
@@ -109,15 +116,15 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         );
         const to = sanitizeActor(String(params.to_actor || params.actor_b || ""));
         if (!to || to === from) return textResult("error: jar_copy needs from_actor and to_actor (distinct)");
-        const src = await loadJar(actorPaths(jarRoot(runtime), from).jar);
-        const destPaths = actorPaths(jarRoot(runtime), to);
-        await mkdir(destPaths.dir, { recursive: true });
-        await saveJar(destPaths.jar, { ...src });
+        const src = await loadJar(actorPaths(root, from).jar, root);
+        const destPaths = actorPaths(root, to);
+        await ensureDirInsideRoot(destPaths.dir, root);
+        await saveJar(destPaths.jar, { ...src }, root);
         return jsonResult({ ok: true, op, from_actor: from, to_actor: to, cookies: src });
       }
       if (op === "history") {
         const limit = Math.min(Math.max(Number(params.limit || 20), 1), 100);
-        const rows = await loadHistory(paths.hist, limit);
+        const rows = await loadHistory(paths.hist, limit, root);
         return jsonResult({ ok: true, op, actor, count: rows.length, rows });
       }
 
@@ -129,12 +136,12 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         const body = params.body != null ? String(params.body) : undefined;
         const headers = params.headers;
         const timeout_seconds = params.timeout_seconds;
-        const aPaths = actorPaths(jarRoot(runtime), actor);
-        const bPaths = actorPaths(jarRoot(runtime), actorB);
-        await mkdir(aPaths.dir, { recursive: true });
-        await mkdir(bPaths.dir, { recursive: true });
-        let jarA = await loadJar(aPaths.jar);
-        let jarB = await loadJar(bPaths.jar);
+        const aPaths = actorPaths(root, actor);
+        const bPaths = actorPaths(root, actorB);
+        await ensureDirInsideRoot(aPaths.dir, root);
+        await ensureDirInsideRoot(bPaths.dir, root);
+        let jarA = await loadJar(aPaths.jar, root);
+        let jarB = await loadJar(bPaths.jar, root);
         const ra = await doRequest(runtime, {
           method,
           url: String(params.url),
@@ -155,13 +162,13 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         });
         if (ra.ok) {
           jarA = ra.jar;
-          await saveJar(aPaths.jar, jarA);
-          await appendHistory(aPaths.hist, histRow(actor, ra));
+          await saveJar(aPaths.jar, jarA, root);
+          await appendHistory(aPaths.hist, histRow(actor, ra), root);
         }
         if (rb.ok) {
           jarB = rb.jar;
-          await saveJar(bPaths.jar, jarB);
-          await appendHistory(bPaths.hist, histRow(actorB, rb));
+          await saveJar(bPaths.jar, jarB, root);
+          await appendHistory(bPaths.hist, histRow(actorB, rb), root);
         }
         recordActObservation(
           runtime,
@@ -194,7 +201,7 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
         if (!steps.length) return textResult("error: chain requires steps[]");
         if (steps.length > 12) return textResult("error: chain max 12 steps");
         const results: unknown[] = [];
-        let jar = await loadJar(paths.jar);
+        let jar = await loadJar(paths.jar, root);
         for (const step of steps) {
           const one = await doRequest(runtime, {
             method: String(step.method || "GET"),
@@ -215,9 +222,9 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
             set_cookie_keys: one.set_cookie_keys,
             body_preview: one.body_preview,
           });
-          await appendHistory(paths.hist, histRow(actor, one));
+          await appendHistory(paths.hist, histRow(actor, one), root);
         }
-        await saveJar(paths.jar, jar);
+        await saveJar(paths.jar, jar, root);
         recordActObservation(runtime, "session", `session chain actor=${actor} x${results.length}`, {
           actor,
           steps: results,
@@ -237,7 +244,7 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
           "error: op must be request|chain|jar_get|jar_set|jar_clear|jar_copy|list_actors|compare|history",
         );
       }
-      let jar = await loadJar(paths.jar);
+      let jar = await loadJar(paths.jar, root);
       const one = await doRequest(runtime, {
         method: String(params.method || "GET"),
         url: String(params.url || ""),
@@ -249,8 +256,8 @@ export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
       });
       if (!one.ok) return textResult(`error: ${one.error}`);
       jar = one.jar;
-      await saveJar(paths.jar, jar);
-      await appendHistory(paths.hist, histRow(actor, one));
+      await saveJar(paths.jar, jar, root);
+      await appendHistory(paths.hist, histRow(actor, one), root);
       return jsonResult({
         ok: true,
         op: "request",
@@ -293,7 +300,7 @@ function actorPaths(taskDir: string, actor: string): { dir: string; jar: string;
 async function listActors(taskDir: string): Promise<string[]> {
   const names = new Set<string>(["default"]);
   try {
-    await readFile(join(taskDir, "session", "cookies.json"), "utf8");
+    await readFileInsideRoot(join(taskDir, "session", "cookies.json"), taskDir);
   } catch {
     /* default may be empty */
   }
@@ -475,9 +482,10 @@ function mergeSetCookie(jar: JarMap, headers: Headers): string[] {
   return keys;
 }
 
-async function loadJar(path: string): Promise<JarMap> {
+async function loadJar(path: string, root: string): Promise<JarMap> {
+  const raw = await readFileInsideRoot(path, root);
+  if (raw == null) return {};
   try {
-    const raw = await readFile(path, "utf8");
     const o = JSON.parse(raw) as unknown;
     if (!o || typeof o !== "object" || Array.isArray(o)) return {};
     const jar: JarMap = {};
@@ -490,17 +498,18 @@ async function loadJar(path: string): Promise<JarMap> {
   }
 }
 
-async function saveJar(path: string, jar: JarMap): Promise<void> {
-  await writeFile(path, JSON.stringify(jar, null, 2), "utf8");
+async function saveJar(path: string, jar: JarMap, root: string): Promise<void> {
+  await writeFileInsideRoot(path, root, JSON.stringify(jar, null, 2));
 }
 
-async function appendHistory(path: string, row: HistoryRow): Promise<void> {
-  await writeFile(path, `${JSON.stringify(row)}\n`, { encoding: "utf8", flag: "a" });
+async function appendHistory(path: string, row: HistoryRow, root: string): Promise<void> {
+  await appendFileInsideRoot(path, root, `${JSON.stringify(row)}\n`);
 }
 
-async function loadHistory(path: string, limit: number): Promise<HistoryRow[]> {
+async function loadHistory(path: string, limit: number, root: string): Promise<HistoryRow[]> {
+  const text = await readFileInsideRoot(path, root);
+  if (text == null) return [];
   try {
-    const text = await readFile(path, "utf8");
     const lines = text.split(/\r?\n/).filter(Boolean);
     const slice = lines.slice(-limit);
     return slice.map((l) => JSON.parse(l) as HistoryRow);

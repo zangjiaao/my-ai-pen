@@ -18,6 +18,7 @@ import {
   ensureSessionWorkspace,
   LOCAL_CASE_ID,
   prepareHostWritePath,
+  readFileInsideRoot,
   resolveCaseDir,
   resolveExpertDir,
   resolvePiInstanceDir,
@@ -232,11 +233,13 @@ try {
       const leaf = join(root, "events.jsonl");
       writeFileSync(join(outside, "target"), "secret\n");
       symlinkSync(join(outside, "target"), leaf);
-      await prepareHostWritePath(leaf, root);
-      assert(!existsSync(leaf) || !lstatSync(leaf).isSymbolicLink(), "leaf symlink removed");
       await appendFileInsideRoot(leaf, root, "ok\n");
+      assert(!lstatSync(leaf).isSymbolicLink(), "leaf is regular file");
       assert(readFileSync(leaf, "utf8") === "ok\n", "wrote regular file");
       assert(readFileSync(join(outside, "target"), "utf8") === "secret\n", "outside unchanged");
+      assert((await readFileInsideRoot(leaf, root)) === "ok\n", "read regular file");
+      symlinkSync(join(outside, "target"), join(root, "cookies.json"));
+      assert((await readFileInsideRoot(join(root, "cookies.json"), root)) === null, "read skips symlink");
 
       let blocked = false;
       try {

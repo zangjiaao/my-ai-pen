@@ -8,7 +8,8 @@
  * Task package id is not a directory. Park continue stays on the same pi-* dir;
  * Session Reset mints a new piSessionId → new pi-* dir under the same expert.
  */
-import { appendFile, lstat, mkdir, unlink } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, open, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export function safeWorkspaceSegment(raw: string): string {
@@ -167,25 +168,25 @@ export function resolveRuntimeCaseDir(runtime: {
   return String(runtime.piDir || "");
 }
 
-/**
- * Host I/O under the sandbox mount must not follow agent-planted symlinks.
- * Unlink a symlink leaf (so the next write creates a regular file); refuse
- * symlink ancestors that would redirect the write outside `rootAbs`.
- */
-export async function prepareHostWritePath(absPath: string, rootAbs: string): Promise<string> {
+function resolvedInsideRoot(absPath: string, rootAbs: string): { root: string; target: string } {
   const root = resolve(String(rootAbs || "").trim() || ".");
   const target = resolve(absPath);
   const rel = relative(root, target);
   if (rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(`host write outside workspace root: ${target}`);
+    throw new Error(`host I/O outside workspace root: ${target}`);
   }
-  let cur = target;
+  return { root, target };
+}
+
+/** Refuse symlink ancestors (leaf may be missing or a symlink we will not follow). */
+export async function prepareHostWritePath(absPath: string, rootAbs: string): Promise<string> {
+  const { root, target } = resolvedInsideRoot(absPath, rootAbs);
+  let cur = dirname(target);
   while (true) {
     try {
       const st = await lstat(cur);
       if (st.isSymbolicLink()) {
-        if (cur === target) await unlink(cur);
-        else throw new Error(`host write blocked: symlink ancestor ${cur}`);
+        throw new Error(`host I/O blocked: symlink ancestor ${cur}`);
       }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -199,11 +200,87 @@ export async function prepareHostWritePath(absPath: string, rootAbs: string): Pr
   return target;
 }
 
+export async function ensureDirInsideRoot(dirAbs: string, rootAbs: string): Promise<void> {
+  const { root, target } = resolvedInsideRoot(dirAbs, rootAbs);
+  const rel = relative(root, target);
+  if (!rel || rel === ".") return;
+  let cur = root;
+  for (const part of rel.split(/[/\\]/).filter(Boolean)) {
+    cur = join(cur, part);
+    try {
+      const st = await lstat(cur);
+      if (st.isSymbolicLink()) throw new Error(`host I/O blocked: symlink ancestor ${cur}`);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        await mkdir(cur);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function openNoFollow(target: string, flags: number): Promise<Awaited<ReturnType<typeof open>>> {
+  try {
+    return await open(target, flags | fsConstants.O_NOFOLLOW);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      await unlink(target).catch(() => {});
+      return open(target, flags | fsConstants.O_NOFOLLOW);
+    }
+    throw err;
+  }
+}
+
+export async function writeFileInsideRoot(
+  absPath: string,
+  rootAbs: string,
+  data: string,
+): Promise<void> {
+  const target = await prepareHostWritePath(absPath, rootAbs);
+  await ensureDirInsideRoot(dirname(target), rootAbs);
+  const fh = await openNoFollow(
+    target,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+  );
+  try {
+    await fh.writeFile(data, "utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
 export async function appendFileInsideRoot(
   absPath: string,
   rootAbs: string,
   data: string,
 ): Promise<void> {
   const target = await prepareHostWritePath(absPath, rootAbs);
-  await appendFile(target, data, "utf8");
+  await ensureDirInsideRoot(dirname(target), rootAbs);
+  const fh = await openNoFollow(
+    target,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND,
+  );
+  try {
+    await fh.writeFile(data, "utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Read a regular file only. Symlink leaf / ancestor → null (do not follow). */
+export async function readFileInsideRoot(absPath: string, rootAbs: string): Promise<string | null> {
+  try {
+    const target = await prepareHostWritePath(absPath, rootAbs);
+    const fh = await open(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      return await fh.readFile("utf8");
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return null;
+  }
 }

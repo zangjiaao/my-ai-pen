@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
-import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
+import { readFileInsideRoot, resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
@@ -170,7 +170,8 @@ async function loadActorJar(taskDir: string, actor: string): Promise<JarMap> {
   ];
   for (const p of paths) {
     try {
-      const raw = await readFile(p, "utf8");
+      const raw = await readFileInsideRoot(p, taskDir);
+      if (raw == null) continue;
       const o = JSON.parse(raw) as unknown;
       if (o && typeof o === "object" && !Array.isArray(o)) {
         const jar: JarMap = {};

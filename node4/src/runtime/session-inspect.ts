@@ -1,6 +1,6 @@
-import { mkdir, writeFile, readdir, access } from "node:fs/promises";
+import { mkdir, readdir, access } from "node:fs/promises";
 import { join } from "node:path";
-import { prepareHostWritePath } from "./session-workspace.js";
+import { writeFileInsideRoot } from "./session-workspace.js";
 
 /**
  * After the agent disposes, write inspectable artifacts so operators can query
@@ -25,9 +25,9 @@ export async function writePostRunInspectArtifacts(options: {
   const sessionDir = options.sessionDir || piDir;
   await mkdir(piDir, { recursive: true });
 
-  const transcriptPath = await prepareHostWritePath(join(piDir, "transcript.jsonl"), piDir);
+  const transcriptPath = join(piDir, "transcript.jsonl");
   const lines = (options.messages || []).map((m) => JSON.stringify(m));
-  await writeFile(transcriptPath, lines.length ? `${lines.join("\n")}\n` : "", "utf8");
+  await writeFileInsideRoot(transcriptPath, piDir, lines.length ? `${lines.join("\n")}\n` : "");
 
   const present: string[] = [];
   const checks: Array<{ name: string; dir: string }> = [
@@ -77,8 +77,8 @@ export async function writePostRunInspectArtifacts(options: {
     inspect:
       "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
   };
-  const manifestPath = await prepareHostWritePath(join(piDir, "session-manifest.json"), piDir);
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  const manifestPath = join(piDir, "session-manifest.json");
+  await writeFileInsideRoot(manifestPath, piDir, JSON.stringify(manifest, null, 2));
   return { manifestPath, transcriptPath };
 }
 
