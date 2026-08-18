@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ensureSessionWorkspace,
+  resolveCaseDir,
+  resolveExpertDir,
+  resolvePiInstanceDir,
   resolveSessionWorkspaceDir,
 } from "./session-workspace.js";
 import {
@@ -28,13 +31,17 @@ function ok(): SandboxExecResult {
 // --- path layout ---
 {
   const p = resolveSessionWorkspaceDir("/tmp/ws", "conv-abc", "exp-1");
-  assert(p.includes("sessions"), "under sessions/");
-  assert(p.endsWith(join("sessions", "conv-abc", "exp-1")) || p.includes("conv-abc"), "per seat");
+  assert(p.includes("case-conv-abc"), p);
+  assert(p.includes("expert-exp-1"), p);
   assert(
     resolveSessionWorkspaceDir("/tmp/ws", "c", "a") !==
       resolveSessionWorkspaceDir("/tmp/ws", "c", "b"),
     "experts isolated",
   );
+  const pi = resolvePiInstanceDir("/tmp/ws", "c1", "e1", "sid-9");
+  assert(pi.startsWith(resolveExpertDir("/tmp/ws", "c1", "e1")), "pi under expert");
+  assert(resolveExpertDir("/tmp/ws", "c1", "e1").startsWith(resolveCaseDir("/tmp/ws", "c1")), "expert under case");
+  assert(pi.includes("pi-sid-9"), pi);
 }
 
 // --- ensure creates subdirs ---
@@ -43,7 +50,7 @@ function ok(): SandboxExecResult {
   try {
     const dir = resolveSessionWorkspaceDir(root, "c1", "e1");
     const abs = await ensureSessionWorkspace(dir);
-    for (const sub of ["scripts", "evidence", "findings", "credentials", "exports", "notes"]) {
+    for (const sub of ["scripts", "notes", "credentials", "exports", "session"]) {
       assert(existsSync(join(abs, sub)), `subdir ${sub}`);
     }
   } finally {

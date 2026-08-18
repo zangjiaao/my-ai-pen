@@ -138,10 +138,14 @@ export async function runParkedWorkingContinue(options: {
   const runtimeForObs = parked.runtime || {
     task,
     workspaceDir: options.config.workspaceDir,
-    taskDir: `${options.config.workspaceDir}/${task.taskId}`,
+    taskDir:
+      String(parked.runtime?.taskDir || "").trim() ||
+      `${options.config.workspaceDir}/${task.taskId}`,
     platform,
     todo: parked.todo,
-    findingsDir: `${options.config.workspaceDir}/${task.taskId}/findings`,
+    findingsDir:
+      String(parked.runtime?.findingsDir || "").trim() ||
+      `${options.config.workspaceDir}/${task.taskId}/findings`,
     lifecycle: {},
   };
   const obsCtx: ObservabilityContext = {
@@ -325,7 +329,9 @@ export async function runParkedWorkingContinue(options: {
   const findingsDir =
     String(parked.runtime?.findingsDir || "").trim() ||
     join(options.config.workspaceDir, task.taskId, "findings");
-  const taskDir = join(options.config.workspaceDir, task.taskId);
+  const taskDir =
+    String(parked.runtime?.taskDir || "").trim() ||
+    join(options.config.workspaceDir, task.taskId);
   const worksetSource = workMode === "graph" ? "hard_settle" : "free_settle";
   const settlePkg = await buildWorksetSettleEmitPackage({
     task,

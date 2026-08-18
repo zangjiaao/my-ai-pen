@@ -7,6 +7,11 @@
 
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  ensurePiInstanceWorkspace,
+  mintPiSessionId,
+  resolvePiInstanceDir,
+} from "./session-workspace.js";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
@@ -242,6 +247,8 @@ export function buildHardGraphStageChildRuntime(options: {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
     taskDir: workDir,
+    caseDir: parent.caseDir,
+    sessionDir: parent.sessionDir,
     platform: parent.platform,
     platformApi: parent.platformApi,
     todo: new TodoStore(),
@@ -356,16 +363,24 @@ export function createHardGraphStageExecutor(options: {
   const task = parentRuntime.task;
 
   return async (input: StageExecutorInput): Promise<StageExecutorOutput> => {
-    const workDir = join(
-      parentRuntime.taskDir,
-      "hard-graph",
-      input.graphId,
-      `stage-${input.stageIndex}-${input.stage.id}`,
-    );
-    await mkdir(workDir, { recursive: true });
+    const expertId = String(task.expertId || pack.id || "").trim();
+    const stageSid = mintPiSessionId();
+    const workDir =
+      parentRuntime.workspaceDir && task.conversationId && expertId
+        ? resolvePiInstanceDir(
+            parentRuntime.workspaceDir,
+            task.conversationId,
+            expertId,
+            stageSid,
+          )
+        : join(
+            parentRuntime.taskDir,
+            "hard-graph",
+            input.graphId,
+            `stage-${input.stageIndex}-${input.stage.id}`,
+          );
+    await ensurePiInstanceWorkspace(workDir);
     await mkdir(join(workDir, "evidence"), { recursive: true });
-    await mkdir(join(workDir, "facts"), { recursive: true });
-    await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 
     // Spec #116 I0.6: new stage attempt resets non-success package attempt budgets
     const stageAttempt = Math.max(1, Math.floor(input.stageAttempt || 1));
@@ -379,7 +394,7 @@ export function createHardGraphStageExecutor(options: {
     }
 
     // A4: cookies from prior stages → this stage workDir (best-effort)
-    await seedChildSessionFromParent(parentRuntime.taskDir, workDir).catch(() => ({
+    await seedChildSessionFromParent(parentRuntime.sessionDir || parentRuntime.taskDir, workDir).catch(() => ({
       seeded: false,
       detail: "seed failed",
     }));
@@ -438,7 +453,7 @@ export function createHardGraphStageExecutor(options: {
     const promoteSession = async () => {
       if (sessionPromoted) return;
       sessionPromoted = true;
-      await promoteChildSessionToParent(workDir, parentRuntime.taskDir).catch(() => ({
+      await promoteChildSessionToParent(workDir, parentRuntime.sessionDir || parentRuntime.taskDir).catch(() => ({
         promoted: false,
         detail: "promote failed",
       }));
@@ -805,6 +820,7 @@ export function createHardGraphStageExecutor(options: {
         systemPrompt,
         // Match free Expert non-chat default (not silent "low").
         thinkingLevel: "medium" as const,
+        sessionId: stageSid,
       };
       const { session } = boundSessionFactory
         ? await boundSessionFactory(boundOpts)
