@@ -36,6 +36,7 @@ import {
   PlatformTextStream,
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
+  stampPanelConfiguredModel,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -787,6 +788,7 @@ export function createHardGraphStageExecutor(options: {
       });
 
       const stageUsage = createUsageLedgerFromEnv();
+      stampPanelConfiguredModel(panel, stageUsage);
       const textStream = new PlatformTextStream(parentRuntime.platform, task);
       const checkpointThrottle = new CheckpointThrottle();
       const obsCounters = {

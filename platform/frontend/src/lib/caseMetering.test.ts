@@ -52,6 +52,11 @@ assert.equal(
   "1 req · 30 tok",
 );
 
+assert.equal(
+  formatAgentUsageLine({ model: "deepseek-v4-flash", usage: {} }),
+  "deepseek-v4-flash",
+);
+
 // Zero / missing → quiet, not work-content narration
 assert.equal(formatAgentUsageLine({ usage: {} }), "—");
 assert.equal(formatAgentUsageLine({ role: "subagent", parent_id: "m", usage: {} }), "");

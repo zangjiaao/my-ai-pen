@@ -107,6 +107,17 @@ export class LlmUsageLedger {
 
   constructor(private readonly rates: LlmCostRates = ZERO_RATES) {}
 
+  /**
+   * Seat model id from Node config (`PI_MODEL`) — available before the first
+   * assistant `message_end`. Does not invent request/token counts.
+   * A later recorded assistant model wins when the provider reports one.
+   */
+  setConfiguredModel(modelId: string | null | undefined): void {
+    const id = String(modelId || "").trim();
+    if (!id || this.model) return;
+    this.model = id.slice(0, 128);
+  }
+
   /** Record usage from a Pi assistant message (message_end). */
   recordAssistantMessage(message: unknown): boolean {
     if (!message || typeof message !== "object") return false;

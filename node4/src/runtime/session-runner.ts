@@ -61,6 +61,7 @@ import {
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
   PlatformTextStream,
+  stampPanelConfiguredModel,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import {
@@ -234,6 +235,7 @@ export async function runNode4Task(
   // Free path: main row shows Free (Graph path sets graph badge in hard-graph-task).
   panel.setWorkMode({ work_mode: "free" });
   const usage = createUsageLedgerFromEnv();
+  stampPanelConfiguredModel(panel, usage);
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
   // Pack-scoped skills under experts/<id>/skills (catalog or install copy)

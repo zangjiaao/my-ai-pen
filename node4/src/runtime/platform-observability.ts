@@ -53,8 +53,18 @@ export type ObservabilityContext = {
   streamHealth?: LlmStreamHealth;
 };
 
-export function createUsageLedgerFromEnv(): LlmUsageLedger {
-  return new LlmUsageLedger(loadLlmCostRatesFromEnv());
+export function createUsageLedgerFromEnv(env: NodeJS.ProcessEnv = process.env): LlmUsageLedger {
+  const ledger = new LlmUsageLedger(loadLlmCostRatesFromEnv(env));
+  // Spec #324: configured seat model is known at Session start — do not wait for message_end.
+  const configured = String(env.PI_MODEL || "").trim();
+  if (configured) ledger.setConfiguredModel(configured);
+  return ledger;
+}
+
+/** Copy configured/recorded model onto the live Main panel row. */
+export function stampPanelConfiguredModel(panel: PanelAgentTracker, usage: LlmUsageLedger): void {
+  const model = String(usage.snapshot().model || "").trim();
+  if (model) panel.setModel(model);
 }
 
 export class CheckpointThrottle {
@@ -530,6 +540,11 @@ export function buildNode4Checkpoint(
   const mode = goalSnap.mode;
 
   const agentSessionId = String(ctx.agentSessionId || "").trim();
+  const panelAgents = ctx.panel.list({ terminal: options?.terminal });
+  const usageModel = String(usage.model || "").trim();
+  if (usageModel && panelAgents[0] && !panelAgents[0].parent_id && !panelAgents[0].model) {
+    panelAgents[0] = { ...panelAgents[0], model: usageModel };
+  }
   return {
     runtime: "node4-pi",
     role_pack: ctx.rolePackId,
@@ -546,7 +561,7 @@ export function buildNode4Checkpoint(
       ? [{ type: "url", target: targetValue, original: targetValue }]
       : [],
     llm_usage: usage.requests > 0 || usage.total_tokens > 0 ? usage : usage,
-    panel_agents: ctx.panel.list({ terminal: options?.terminal }),
+    panel_agents: panelAgents,
     plan_tree: planPayload.plan_tree,
     todo_phases: "todo_phases" in planPayload ? planPayload.todo_phases : undefined,
     todo_open_count: planPayload.todo_open_count,
@@ -614,6 +629,8 @@ export function attachNode4SessionObservability(options: {
   if (sid) {
     obsCtx.agentSessionId = sid;
   }
+  // Spec #324: AgentRow model line should not wait for first assistant message_end.
+  stampPanelConfiguredModel(obsCtx.panel, obsCtx.usage);
   const unsubRaw = session.subscribe((event) => {
     void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
       // Never let observability break the agent loop.
