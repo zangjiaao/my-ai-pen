@@ -270,11 +270,9 @@ Exact rules live in runner settlement — docs must not invent stricter product 
 
 | Path | Content |
 |------|---------|
-| `events.jsonl` | Tool/platform events |
-| `findings/`, `evidence/`, `scripts/` | Artifacts |
-| `pi-sessions/` | Model session files |
-| `agent-summary.json` | Terminal + usage summary |
-| `tooling-health.json` | L2 sandbox/PATH/scanner readiness snapshot at task start (**observability only**, never a gate) |
+| `workspace/case-{caseId}/` | Case-shared local inspect: `findings/`, `evidence/`, `surfaces/` (not Product SOT — ledger is platform) |
+| `workspace/case-{caseId}/expert-{expertId}/` | Participant Session sandbox (pen-sandbox `/workspace`): scripts, notes, credentials, cookie `session/` |
+| `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/` | One pi-agent-core instance: `events.jsonl`, `facts/`. Park continue reuses this dir; Reset mints a new `sessionId`. Not a gate. |
 
 ### On-demand delivery reports
 

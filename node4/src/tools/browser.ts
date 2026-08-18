@@ -20,6 +20,7 @@ import {
   parseBrowserNetworkList,
 } from "../runtime/traffic-collect.js";
 import type { ToolRuntime } from "../types.js";
+import { resolveRuntimeSessionDir } from "../runtime/session-workspace.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 /**
@@ -299,7 +300,8 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const r = await run(["cookies", "get", "--json"], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const jar = parseCookiesJson(r.stdout || r.text);
-        const dir = join(runtime.taskDir, "session", "actors", actor);
+        const sessionRoot = resolveRuntimeSessionDir(runtime) || runtime.taskDir;
+        const dir = join(sessionRoot, "session", "actors", actor);
         await mkdir(dir, { recursive: true });
         const jarPath = join(dir, "cookies.json");
         let existing: Record<string, string> = {};
@@ -311,9 +313,9 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const merged = { ...existing, ...jar };
         await writeFile(jarPath, JSON.stringify(merged, null, 2), "utf8");
         if (actor === "default") {
-          await mkdir(join(runtime.taskDir, "session"), { recursive: true });
+          await mkdir(join(sessionRoot, "session"), { recursive: true });
           await writeFile(
-            join(runtime.taskDir, "session", "cookies.json"),
+            join(sessionRoot, "session", "cookies.json"),
             JSON.stringify(merged, null, 2),
             "utf8",
           );

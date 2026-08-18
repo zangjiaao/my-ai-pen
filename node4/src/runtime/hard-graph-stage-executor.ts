@@ -280,6 +280,7 @@ export function buildHardGraphStageChildRuntime(options: {
     childRuntime.subagents = new SubagentHost({
       task: parent.task,
       taskDir: workDir,
+      workspaceDir: parent.workspaceDir,
       evidence: childRuntime.evidence,
       platform: parent.platform,
       goals: childRuntime.goals!,

@@ -66,7 +66,8 @@ export async function writePostRunInspectArtifacts(options: {
     transcriptMessages: options.messages?.length ?? 0,
     artifacts: present,
     writtenAt: new Date().toISOString(),
-    inspect: "Read transcript.jsonl, events.jsonl, findings/, evidence/, pi-sessions/ offline after dispose.",
+    inspect:
+      "Read workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/events.jsonl and workspace/case-{caseId}/ (findings/, evidence/, surfaces/) after dispose.",
   };
   const manifestPath = join(taskDir, "session-manifest.json");
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");

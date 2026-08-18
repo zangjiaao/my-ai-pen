@@ -295,6 +295,7 @@ export async function runNode4Task(
   runtime.subagents = new SubagentHost({
     task,
     taskDir,
+    workspaceDir: config.workspaceDir,
     evidence: runtime.evidence,
     platform: loggingPlatform,
     goals,
