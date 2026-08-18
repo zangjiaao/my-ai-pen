@@ -197,7 +197,12 @@ def _seed_panel_usage_cursors(panel: list[dict[str, Any]]) -> list[dict[str, Any
     return out
 
 
-def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
+def merge_panel_agents(
+    prev: object,
+    incoming: object,
+    *,
+    released_ids: object = None,
+) -> list[dict[str, Any]]:
     """Merge a live burst panel into the Case participant's historical roster.
 
     Canonical write-path for Case Subagent history (frontend live merge is thinner
@@ -214,6 +219,19 @@ def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
     """
     prev_list = [dict(a) for a in (prev or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
     inc_list = [dict(a) for a in (incoming or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
+    if released_ids:
+        prev_list = [
+            a
+            for a in prev_list
+            if (not str(a.get("parent_id") or "").strip())
+            or not _worker_id_is_released(a.get("id"), released_ids)
+        ]
+        inc_list = [
+            a
+            for a in inc_list
+            if (not str(a.get("parent_id") or "").strip())
+            or not _worker_id_is_released(a.get("id"), released_ids)
+        ]
     if not inc_list:
         return prev_list
     if not prev_list:
@@ -361,6 +379,94 @@ def set_worker_display_name(
     return ctx
 
 
+def _panel_row_matches_worker(row: dict[str, Any], agent_id: str) -> bool:
+    rid = str(row.get("id") or "").strip()
+    if not rid or not agent_id:
+        return False
+    if rid == agent_id:
+        return True
+    return rid.endswith(f"-{agent_id}") or agent_id.endswith(f"-{rid}")
+
+
+def _worker_id_is_released(agent_id: object, released: object) -> bool:
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return False
+    ids = released if isinstance(released, (set, list, tuple)) else []
+    for raw in ids:
+        rid = str(raw or "").strip()
+        if not rid:
+            continue
+        if aid == rid or aid.endswith(f"-{rid}") or rid.endswith(f"-{aid}"):
+            return True
+    return False
+
+
+def released_worker_ids(context: dict | None) -> list[str]:
+    raw = _as_dict(context).get("released_worker_ids")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        s = str(item or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def mark_panel_worker_released(context: dict | None, *, agent_id: object) -> dict[str, Any]:
+    """End Worker: drop the collab-tree child and remember the id so later bursts cannot resurrect it."""
+    aid = str(agent_id or "").strip()
+    ctx = dict(context or {})
+    if not aid:
+        return ctx
+
+    remembered = released_worker_ids(ctx)
+    if aid not in remembered:
+        remembered.append(aid)
+        ctx["released_worker_ids"] = remembered
+
+    def _patch_list(raw: object) -> list[dict[str, Any]] | None:
+        if not isinstance(raw, list):
+            return None
+        out: list[dict[str, Any]] = []
+        changed = False
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            if str(row.get("parent_id") or "").strip() and _panel_row_matches_worker(row, aid):
+                changed = True
+                continue
+            out.append(row)
+        return out if changed else None
+
+    roster = participants_map(ctx)
+    if roster:
+        next_roster = dict(roster)
+        touched = False
+        for key, row in roster.items():
+            if not isinstance(row, dict):
+                continue
+            patched = _patch_list(row.get("panel_agents"))
+            if patched is None:
+                continue
+            next_roster[key] = {**row, "panel_agents": patched}
+            touched = True
+        if touched:
+            ctx["participants"] = next_roster
+
+    checkpoint = ctx.get("checkpoint")
+    if isinstance(checkpoint, dict):
+        patched = _patch_list(checkpoint.get("panel_agents"))
+        if patched is not None:
+            ctx["checkpoint"] = {**checkpoint, "panel_agents": patched}
+    return ctx
+
+
 def resolve_worker_display_name(
     *,
     agent_id: object,
@@ -445,7 +551,11 @@ def upsert_participant(
     if isinstance(panel_agents, list):
         prev_panel = prev.get("panel_agents") if isinstance(prev.get("panel_agents"), list) else []
         # Merge so a new burst's main-only panel cannot wipe prior Subagents.
-        row["panel_agents"] = merge_panel_agents(prev_panel, panel_agents)
+        row["panel_agents"] = merge_panel_agents(
+            prev_panel,
+            panel_agents,
+            released_ids=released_worker_ids(ctx),
+        )
     # panel_agents=None means leave previous tree in place (e.g. idle mark)
     if isinstance(plan_tree, list):
         stamped: list[dict[str, Any]] = []
@@ -949,6 +1059,7 @@ def agents_from_participants(
             busy_names.add(ename)
 
     active_eid = str(active_expert_id or "").strip()
+    released = released_worker_ids(context)
     out: list[dict[str, Any]] = []
     for row in participants_list(context):
         eid = str(row.get("expert_id") or "").strip()
@@ -1076,6 +1187,8 @@ def agents_from_participants(
                 child["usage"] = child_usage
                 if child_usage.get("model"):
                     child["model"] = child_usage["model"]
+            if _worker_id_is_released(item_id, released) or _worker_id_is_released(child["id"], released):
+                continue
             children.append(child)
         out.append(root)
         out.extend(children)

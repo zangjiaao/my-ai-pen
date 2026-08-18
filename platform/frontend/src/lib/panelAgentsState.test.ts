@@ -5,6 +5,7 @@
 import {
   formatAgentWorkModeBadge,
   isLegacySyntheticPhasePlan,
+  markPanelWorkerReleased,
   mergeLivePanelAgents,
   mergeSnapshotAgentsPreserveHarness,
   preferRicherPlanTree,
@@ -187,6 +188,61 @@ const liveMainOnly: StrixAgentStatus[] = [
 }
 
 {
+  // Thin mid-thinking snapshot must not flash off Case cumulative meters.
+  const prev = [
+    {
+      id: "role-expert:e1",
+      name: "渗透大师",
+      status: "running",
+      expert_id: "e1",
+      usage: { total_tokens: 202000, requests: 10, model: "deepseek-v4-flash" },
+      model: "deepseek-v4-flash",
+    },
+  ];
+  const thin = [
+    {
+      id: "role-expert:e1",
+      name: "渗透大师",
+      status: "running",
+      expert_id: "e1",
+      usage: { total_tokens: 0, requests: 0 },
+    },
+  ];
+  const merged = mergeSnapshotAgentsPreserveHarness(prev, thin);
+  assert(merged[0]!.usage?.total_tokens === 202000, "keep prior tokens when snap is zero");
+  assert(merged[0]!.usage?.requests === 10, "keep prior requests when snap is zero");
+  assert(merged[0]!.model === "deepseek-v4-flash", "keep prior model when snap omits it");
+  console.log("ok: mergeSnapshotAgentsPreserveHarness keeps usage meters");
+}
+
+{
+  // Live panel may stamp configured model before first message_end; keep Case meters.
+  const prev = [
+    {
+      ...main,
+      usage: { total_tokens: 202000, requests: 10 },
+    },
+  ];
+  const live = [
+    {
+      id: "node4-main",
+      name: "渗透大师",
+      status: "running",
+      parent_id: null,
+      task: "",
+      skills: [],
+      pending_count: 0,
+      role: "main",
+      model: "deepseek-v4-flash",
+    },
+  ];
+  const merged = mergeLivePanelAgents(prev, live, { expert_id: "e2" });
+  assert(merged[0]!.model === "deepseek-v4-flash", "live configured model stamps onto Main");
+  assert(merged[0]!.usage?.total_tokens === 202000, "live panel must not clobber Case usage");
+  console.log("ok: mergeLivePanelAgents stamps model without wiping usage");
+}
+
+{
   // Synthetic archaeology plan-phase-* must not stick as Tasks for Default chat.
   const synthetic: PlanNode[] = [
     {
@@ -231,6 +287,17 @@ const liveMainOnly: StrixAgentStatus[] = [
     "real Graph wins over leftover synthetic shells",
   );
   console.log("ok: legacy synthetic plan_tree hygiene");
+}
+
+{
+  const marked = markPanelWorkerReleased(
+    [main, sub1, { ...sub1, id: "role-expert:e2-sub_10", name: "Worker 10", status: "idle" }],
+    "sub_1",
+  );
+  assert(marked.length === 2, "released worker dropped from collab tree");
+  assert(marked.every((a) => a.id !== sub1.id && !a.id.endsWith("-sub_1")), "sub_1 gone");
+  assert(marked.some((a) => a.id === "role-expert:e2-sub_10"), "sub_10 untouched");
+  console.log("ok: markPanelWorkerReleased suffix");
 }
 
 console.log("panelAgentsState.test.ts: all passed");

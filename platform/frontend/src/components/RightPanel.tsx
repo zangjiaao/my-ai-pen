@@ -147,8 +147,6 @@ interface Props {
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
   taskContext?: Record<string, unknown>;
-  /** Spec #163 Graph engagement close-out (Product state). */
-  engagementCloseout?: Record<string, unknown>;
   /** Spec #321 Task Map history (product-state; FE view-only for archives). */
   taskMapRevisions?: TaskMapRevision[];
   liveRevisionId?: string | null;
@@ -206,7 +204,6 @@ export default function RightPanel({
   kanban,
   workflowKind,
   running = false,
-  engagementCloseout,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -243,26 +240,37 @@ export default function RightPanel({
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
   const [sessionConfirm, setSessionConfirm] = useState<null | {
-    kind: "reset" | "delete";
+    kind: "reset" | "delete" | "end-worker";
     expertId: string | null;
+    agentId?: string | null;
     label: string;
   }>(null);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
 
-  const runSessionLifecycle = async (kind: "reset" | "delete") => {
+  const runSessionLifecycle = async (kind: "reset" | "delete" | "end-worker") => {
     if (!conversationId || !sessionConfirm || sessionConfirm.kind !== kind) return;
     setSessionActionBusy(true);
     setSessionActionError(null);
     try {
-      const path =
-        kind === "reset"
-          ? `/api/conversations/${conversationId}/sessions/reset`
-          : `/api/conversations/${conversationId}/sessions/delete`;
-      await authFetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expert_id: sessionConfirm.expertId }),
-      });
+      if (kind === "end-worker") {
+        const agentId = String(sessionConfirm.agentId || "").trim();
+        if (!agentId) throw new Error("worker id required");
+        await authFetch(`/api/conversations/${conversationId}/workers/${encodeURIComponent(agentId)}/release`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expert_id: sessionConfirm.expertId }),
+        });
+      } else {
+        const path =
+          kind === "reset"
+            ? `/api/conversations/${conversationId}/sessions/reset`
+            : `/api/conversations/${conversationId}/sessions/delete`;
+        await authFetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expert_id: sessionConfirm.expertId }),
+        });
+      }
       setSessionConfirm(null);
       onSessionLifecycleDone?.();
     } catch (e) {
@@ -350,7 +358,7 @@ export default function RightPanel({
   // If the conversation is no longer running, never leave Main/Worker agents stuck on "running"
   // (stale checkpoint.panel_agents can lag behind conversation status).
   const displayAgents = normalizeAgentsForConversationRunning(orderedStrixAgents, running);
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || surfaceItems.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || surfaceItems.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens);
   // Spec #321: history selection shows frozen revision plan_tree; live stays default.
   const viewedPlanTree = planTreeForView({
     planTree,
@@ -545,6 +553,17 @@ export default function RightPanel({
                                 label: agentDisplayLabel(agent),
                               });
                             },
+                            onRequestEndWorker: (agent) => {
+                              setSessionActionError(null);
+                              const raw = String(agent.id || "").trim();
+                              const bare = raw.includes("-") ? raw.split("-").slice(-1)[0] : raw;
+                              setSessionConfirm({
+                                kind: "end-worker",
+                                expertId: String(agent.expert_id || "").trim() || null,
+                                agentId: bare || raw,
+                                label: agentDisplayLabel(agent),
+                              });
+                            },
                           }
                         : undefined
                     }
@@ -580,9 +599,6 @@ export default function RightPanel({
                 </p>
               )}
             </section>
-            {engagementCloseout && Object.keys(engagementCloseout).length > 0 && (
-              <EngagementCloseoutCard closeout={engagementCloseout} />
-            )}
             {intake && <IntakeSummary intake={intake} />}
           </div>
         )}
@@ -728,6 +744,27 @@ export default function RightPanel({
         }}
         onConfirm={() => {
           void runSessionLifecycle("delete");
+        }}
+      />
+      <ConfirmDialog
+        open={sessionConfirm?.kind === "end-worker"}
+        title="结束 Worker"
+        description={
+          sessionConfirm?.kind === "end-worker"
+            ? `确定结束「${sessionConfirm.label}」并释放其模型会话？\n该 Worker 会从右侧协作树移除。不影响 Main Session。`
+            : ""
+        }
+        confirmLabel="结束"
+        cancelLabel="取消"
+        busy={sessionActionBusy}
+        error={sessionConfirm?.kind === "end-worker" ? sessionActionError : null}
+        onCancel={() => {
+          if (sessionActionBusy) return;
+          setSessionConfirm(null);
+          setSessionActionError(null);
+        }}
+        onConfirm={() => {
+          void runSessionLifecycle("end-worker");
         }}
       />
     </aside>
@@ -1331,67 +1368,6 @@ function markdownPreview(value: string): string {
     .replace(/[#*_`>\-[\]]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/** Spec #163: compact Graph engagement close-out from Product state (not a PDF report). */
-function EngagementCloseoutCard({ closeout }: { closeout: Record<string, unknown> }) {
-  const terminal = String(closeout.terminal || "unknown");
-  const graphId = String(closeout.graphId || "");
-  const processComplete = closeout.process_complete;
-  const residual = String(closeout.residual_risk || "").trim();
-  const residualClass = closeout.residual_class ? String(closeout.residual_class) : "";
-  const findings = closeout.findings && typeof closeout.findings === "object"
-    ? (closeout.findings as Record<string, unknown>)
-    : {};
-  const bookedN = Array.isArray(findings.booked_titles) ? findings.booked_titles.length : 0;
-  const unbookedN = Array.isArray(findings.feedback_ok_unbooked) ? findings.feedback_ok_unbooked.length : 0;
-  const stages = Array.isArray(closeout.stages) ? closeout.stages : [];
-  const incomplete = processComplete === false || terminal === "blocked" || terminal === "failed";
-  return (
-    <section className="rounded-md border border-hairline bg-canvas/40 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-ink">Engagement close-out</p>
-        <p className={`font-mono text-[11px] ${incomplete ? "text-severity-high" : "text-status-success"}`}>
-          {terminal}
-        </p>
-      </div>
-      <dl className="space-y-1 text-[12px] text-ink-muted">
-        {graphId ? (
-          <div className="flex justify-between gap-2">
-            <dt>Graph</dt>
-            <dd className="font-mono text-ink">{graphId}</dd>
-          </div>
-        ) : null}
-        <div className="flex justify-between gap-2">
-          <dt>Process complete</dt>
-          <dd className="font-mono text-ink">{processComplete === false ? "no" : processComplete === true ? "yes" : "—"}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>Stages</dt>
-          <dd className="font-mono text-ink">{stages.length}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>Booked / unbooked</dt>
-          <dd className="font-mono text-ink">{bookedN} / {unbookedN}</dd>
-        </div>
-        {residualClass ? (
-          <div className="flex justify-between gap-2">
-            <dt>Residual class</dt>
-            <dd className="font-mono text-ink">{residualClass}</dd>
-          </div>
-        ) : null}
-        {closeout.booking_tail_ran ? (
-          <div className="flex justify-between gap-2">
-            <dt>Booking tail</dt>
-            <dd className="font-mono text-ink">ran</dd>
-          </div>
-        ) : null}
-      </dl>
-      {residual ? (
-        <p className="mt-2 text-[12px] leading-snug text-ink">{residual.slice(0, 280)}</p>
-      ) : null}
-    </section>
-  );
 }
 
 function isTerminalPlanStatus(status: PlanStatus | undefined): boolean {

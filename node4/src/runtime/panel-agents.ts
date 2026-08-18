@@ -40,6 +40,8 @@ export type PanelAgentRecord = {
    * stays Main/Stage Captain own usage — do not merge children here.
    */
   usage?: LlmUsageSnapshot;
+  /** Configured / last-known seat model id (Spec #324 D1). */
+  model?: string;
 };
 
 /** Map tool names → short Chinese labels (product UI language). */
@@ -136,6 +138,8 @@ export class PanelAgentTracker {
   private graphLabel = "";
   /** pi-agent-core Agent.sessionId for collab copy chrome. */
   private agentSessionId = "";
+  /** Configured seat model id — stamped before first LLM usage. */
+  private modelId = "";
 
   constructor(mainTask: string, mainName?: string) {
     this.mainTask = (mainTask || "Authorized security task").slice(0, 240);
@@ -146,6 +150,11 @@ export class PanelAgentTracker {
   /** Bind pi-agent-core Agent.sessionId onto Main panel rows (collab copy). */
   setAgentSessionId(sessionId: string | null | undefined): void {
     this.agentSessionId = String(sessionId || "").trim().slice(0, 128);
+  }
+
+  /** Bind configured seat model id onto Main panel rows (AgentRow usage line). */
+  setModel(modelId: string | null | undefined): void {
+    this.modelId = String(modelId || "").trim().slice(0, 128);
   }
 
   /** Set actual Free/Graph harness for collaboration tree main row. */
@@ -272,6 +281,19 @@ export class PanelAgentTracker {
     this.children.set(id, { ...prev, usage: { ...usage } });
   }
 
+  dropChild(id: string): boolean {
+    const key = String(id || "").trim();
+    if (!key) return false;
+    if (this.children.delete(key)) return true;
+    for (const k of [...this.children.keys()]) {
+      if (k === key || k.endsWith(`-${key}`) || key.endsWith(`-${k}`)) {
+        this.children.delete(k);
+        return true;
+      }
+    }
+    return false;
+  }
+
   noteSubagentEnd(input: { id: string; ok: boolean; summary?: string }): void {
     const prev = this.children.get(input.id);
     const status = input.ok ? "completed" : "failed";
@@ -333,6 +355,7 @@ export class PanelAgentTracker {
       graph_id: this.graphId || undefined,
       graph_label: this.graphLabel || undefined,
       ...(this.agentSessionId ? { session_id: this.agentSessionId } : {}),
+      ...(this.modelId ? { model: this.modelId } : {}),
     };
     return [main, ...this.children.values()];
   }

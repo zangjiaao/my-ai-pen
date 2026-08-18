@@ -1222,10 +1222,13 @@ def _session_lifecycle_ack_key(msg_type: str, conversation_id: object, expert_id
 def resolve_session_lifecycle_ack(msg: dict) -> None:
     """Complete any waiter for session_dispose_ack / session_reset_ack / case_session_release_ack."""
     t = str(msg.get("type") or "").strip()
-    if t not in {"session_dispose_ack", "session_reset_ack", "case_session_release_ack"}:
+    if t not in {"session_dispose_ack", "session_reset_ack", "case_session_release_ack", "worker_release_ack"}:
         return
     cid = msg.get("conversation_id") or msg.get("conversationId")
-    eid = msg.get("expert_id") or msg.get("expertId")
+    if t == "worker_release_ack":
+        eid = msg.get("agent_id") or msg.get("agentId")
+    else:
+        eid = msg.get("expert_id") or msg.get("expertId")
     key = _session_lifecycle_ack_key(t, cid, eid)
     fut = _session_lifecycle_acks.pop(key, None)
     if fut and not fut.done():
@@ -1298,8 +1301,27 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         "session_dispose_ack",
         "session_reset_ack",
         "case_session_release_ack",
+        "worker_release_ack",
     }:
         resolve_session_lifecycle_ack(msg)
+        return
+
+    if msg.get("type") == "worker_released" and conv_id:
+        aid = str(msg.get("agent_id") or msg.get("agentId") or "").strip()
+        if aid:
+            await _persist_worker_released(conv_id, aid)
+            await _broadcast_to_conversation(
+                conv_id,
+                json.dumps(
+                    {
+                        "type": "worker_released",
+                        "conversation_id": conv_id,
+                        "agent_id": aid,
+                        "released": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
         return
 
     # Node reports physical pack install state (after expert_sync / expert_install).
@@ -1619,6 +1641,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "conversation_title_updated",
             # Intel projects in Findings 线索 / asset 情报 — not a second chat list.
             "intel_upsert",
+            "worker_released",
+            "worker_release_ack",
         }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
@@ -5381,6 +5405,33 @@ async def _remember_engagement_closeout(conv_id: str, msg: dict, closeout: dict)
             await db.commit()
     except Exception as e:
         print(f"[WS] remember engagement_closeout error: {e}")
+
+
+async def _persist_worker_released(conv_id: str, agent_id: str) -> None:
+    """Spec #491: Agent op=release / operator End — drop Worker from Case collab tree."""
+    if not conv_id or not agent_id:
+        return
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_participants import mark_panel_worker_released
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            ctx = mark_panel_worker_released(
+                c.context if isinstance(c.context, dict) else {},
+                agent_id=agent_id,
+            )
+            c.context = ctx
+            flag_modified(c, "context")
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] persist worker_released error: {e}")
 
 
 async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):

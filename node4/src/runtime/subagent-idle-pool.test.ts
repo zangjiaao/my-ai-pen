@@ -9,8 +9,11 @@ import {
   resolveIdlePoolOptions,
   getOrCreateIdlePool,
   checkAffinity,
+  releaseWorkerById,
+  clearRegisteredIdlePoolsForTests,
   type IdleSubagentHandle,
 } from "./subagent-idle-pool.js";
+import { PanelAgentTracker } from "./panel-agents.js";
 
 function fakeHandle(
   agentId: string,
@@ -162,6 +165,34 @@ assert.equal(
   const life: { subagentIdlePool?: SubagentIdlePool } = {};
   assert.equal(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "0" }), undefined);
   assert.ok(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "1" }));
+}
+
+// --- Spec #491: live + idle releaseWorkerById ---
+{
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
+  const live = fakeHandle("live_1", "p-live");
+  pool.noteLive(live);
+  assert.equal(await releaseWorkerById("live_1"), true);
+  assert.equal((live as any).isDisposed(), true);
+
+  const idle = fakeHandle("idle_1", "p-idle");
+  pool.park(idle);
+  assert.equal(await releaseWorkerById("idle_1"), true);
+  assert.equal(pool.size, 0);
+  assert.equal(await releaseWorkerById("missing"), false);
+}
+
+{
+  clearRegisteredIdlePoolsForTests();
+  const panel = new PanelAgentTracker("task", "Expert");
+  panel.noteSubagentStart({ id: "sub_gone", assignment: "ping" });
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, panel);
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), true);
+  assert.equal(await pool.release("sub_gone"), false);
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), true, "session dispose keeps collab row");
+  assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), false);
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), false, "explicit End drops collab row even if session already gone");
 }
 
 console.log("subagent-idle-pool.test.ts: ok");

@@ -70,7 +70,7 @@ Case (conversation_id / CaseID)
 | L10 | Session **Delete** = dispose identity; incomplete Tasks → Case **pending handoff** holding (not fuzzy browse history). |
 | L10a | **pi-agent-core instance lifecycle:** Delete = dispose Agent + drop park; Reset = dispose Agent + mint new `Agent.sessionId` and reseed (pi `/new` style) while keeping incomplete Todo. Collab copy chrome shows **only** `Agent.sessionId` (Node-projected); never expert catalog id. Expert catalog id remains the roster/park key only (case + expert_id). **Host layout** (not Product SOT): `workspace/case-{caseId}/expert-{expertId}/pi-{sessionId}/` — events + facts; park continue reuses the dir; Reset opens a new `pi-*`. |
 | L11 | Operator RightPanel **Task Map revision selector retired** (#321 S3 UI). Process records may remain for **audit only**. |
-| L12 | Collab UI lives in RightPanel **case-collab-section**; Session cards: Delete + Reset (confirm dialogs); Sub: End only. |
+| L12 | Collab UI lives in RightPanel **case-collab-section**; Session cards: Delete + Reset (confirm dialogs); Sub: End only — dispose the Worker session **and remove it from the live collab tree** (do not keep a failed/idle zombie row). |
 
 ### #321 History FE handling (explicit)
 
@@ -175,4 +175,5 @@ Case (conversation_id / CaseID)
 - **History FE:** **Amend #321** — S3 operator revision select **out of product**; implementers should **remove or hide** `TasksMapHeader` revision UI when shipping this Spec, not leave dual requirements.  
 - **Why handoff > history browse:** operator value is continuing unfinished work, not museum mode without ownership.  
 - **Incident class:** `6eb54137-…` cold continue after stream fail.  
-- **Living doc index:** link from `docs/README.md`.
+- **Living doc index:** link from `docs/README.md`.  
+- **Sub End (S3):** shipped as collab AgentRow End + `POST .../workers/{agent_id}/release` → Node `worker_release`, and Agent `subagent(op=release)` (Spec [#491](https://github.com/zangjiaao/my-ai-pen/issues/491)). Both dispose the child session **and drop the Worker from the live collaboration tree**; later checkpoints must not resurrect a released id. Idle TTL remains the automatic backstop.

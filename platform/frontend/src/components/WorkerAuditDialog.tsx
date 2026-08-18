@@ -181,7 +181,7 @@ export default function WorkerAuditDialog({
             />
             <button
               type="button"
-              className="rounded-md bg-ink px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+              className="rounded-md bg-ink px-2.5 py-1 text-xs font-medium text-on-ink disabled:opacity-50"
               disabled={renameBusy}
               onClick={() => void submitRename()}
             >

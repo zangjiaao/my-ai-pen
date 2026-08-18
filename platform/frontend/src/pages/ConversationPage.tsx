@@ -75,10 +75,12 @@ import {
   upsertSubagentChild,
   mergeLivePanelAgents,
   mergeSnapshotAgentsPreserveHarness,
+  markPanelWorkerReleased,
   patchMainAgentActivity,
   preferRicherPlanTree,
   mergePlanTreeByOwner,
   upsertWorkerAgent,
+  omitReleasedWorkers,
 } from "../lib/panelAgentsState";
 import {
   projectStreamWithDaySeparators,
@@ -280,6 +282,8 @@ type ConversationSnapshot = {
   engagement_closeout?: Record<string, unknown>;
   /** Spec #308 Case Worker display_name overrides */
   worker_display_names?: Record<string, string>;
+  /** Spec #491 Worker ids removed from the live collab tree */
+  released_worker_ids?: string[];
   /** Spec #309 Case traffic audit store */
   traffic_exchanges?: TrafficExchange[];
   /** Spec #368 / #375 Case surface_ledger (Surface tab SoT) */
@@ -394,6 +398,7 @@ export default function ConversationPage() {
   const [viewedRevisionId, setViewedRevisionId] = useState<string | null>(null);
   /** Prior live id for selection policy (follow live after archive unless viewing history). */
   const liveRevisionIdRef = useRef<string | null>(null);
+  const releasedWorkerIdsRef = useRef<string[]>([]);
   const [strixAgents, setStrixAgents] = useState<StrixAgentStatus[]>([]);
   const [strixNotes, setStrixNotes] = useState<StrixNote[]>([]);
   const [strixRun, setStrixRun] = useState<StrixRun | undefined>();
@@ -416,8 +421,6 @@ export default function ConversationPage() {
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
-  /** Spec #163: latest Graph engagement close-out from conversation.context / WS */
-  const [engagementCloseout, setEngagementCloseout] = useState<Record<string, unknown> | undefined>();
   /** Spec #308: Case Worker display_name overrides (agent_id → name). */
   const [workerDisplayNames, setWorkerDisplayNames] = useState<Record<string, string>>({});
   /** Spec #308: open Worker audit dialog from collaboration tree. */
@@ -854,10 +857,18 @@ export default function ConversationPage() {
     }
     // Backend case_participants is SoT for Subagent history — but live Free/Graph badge
     // and pi session_id must not flash off when a mid-stream snapshot omits them.
+    const released = Array.isArray(snapshot.released_worker_ids)
+      ? snapshot.released_worker_ids.map((id) => String(id || "").trim()).filter(Boolean)
+      : Array.isArray(fallback?.released_worker_ids)
+        ? fallback.released_worker_ids.map((id) => String(id || "").trim()).filter(Boolean)
+        : releasedWorkerIdsRef.current;
+    releasedWorkerIdsRef.current = released;
     const nextAgents = snapshot.strix_agents?.length
       ? snapshot.strix_agents
       : fallback?.strix_agents || [];
-    setStrixAgents((prev) => mergeSnapshotAgentsPreserveHarness(prev, nextAgents));
+    setStrixAgents((prev) =>
+      omitReleasedWorkers(mergeSnapshotAgentsPreserveHarness(prev, nextAgents), released),
+    );
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).
     const nextRun = hasStrixRunSummary(snapshot.strix_run)
@@ -951,13 +962,6 @@ export default function ConversationPage() {
         ? snapshot.task_context
         : fallback?.task_context,
     );
-    const nextCloseout =
-      snapshot.engagement_closeout && Object.keys(snapshot.engagement_closeout).length
-        ? snapshot.engagement_closeout
-        : fallback?.engagement_closeout;
-    if (nextCloseout && Object.keys(nextCloseout).length) {
-      setEngagementCloseout(nextCloseout);
-    }
     const namesRaw =
       snapshot.worker_display_names && typeof snapshot.worker_display_names === "object"
         ? snapshot.worker_display_names
@@ -1350,6 +1354,14 @@ export default function ConversationPage() {
         return next;
       });
     },
+    worker_released: (msg) => {
+      const aid = String((msg as Record<string, unknown>).agent_id || "").trim();
+      if (!aid) return;
+      if (!releasedWorkerIdsRef.current.includes(aid)) {
+        releasedWorkerIdsRef.current = [...releasedWorkerIdsRef.current, aid];
+      }
+      setStrixAgents((prev) => markPanelWorkerReleased(prev, aid));
+    },
     asset_discovered: (msg) => {
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
@@ -1424,6 +1436,7 @@ export default function ConversationPage() {
         setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id),
           expert_name: readString(m.expert_name),
+          released_ids: releasedWorkerIdsRef.current,
         }));
       } else {
         // Legacy path: panel_agents missing. Prefer Node panel payload when present.
@@ -1459,6 +1472,7 @@ export default function ConversationPage() {
         setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id),
           expert_name: readString(m.expert_name),
+          released_ids: releasedWorkerIdsRef.current,
         }));
         return;
       }
@@ -1571,12 +1585,14 @@ export default function ConversationPage() {
         setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
+          released_ids: releasedWorkerIdsRef.current,
         })));
       } else if (Array.isArray(checkpoint.panel_agents) && checkpoint.panel_agents.length) {
         const next = checkpoint.panel_agents.filter(isStrixAgentStatus);
         setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
+          released_ids: releasedWorkerIdsRef.current,
         })));
       } else if (agentSessionId) {
         // Checkpoint without panel_agents still updates pi Session id on current Main.
@@ -1711,6 +1727,7 @@ export default function ConversationPage() {
         setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id),
           expert_name: readString(m.expert_name),
+          released_ids: releasedWorkerIdsRef.current,
         }));
       } else if (phase || activeTool || currentDetail) {
         setStrixAgents((prev) =>
@@ -1781,9 +1798,6 @@ export default function ConversationPage() {
         m.engagement_closeout && typeof m.engagement_closeout === "object" && !Array.isArray(m.engagement_closeout)
           ? (m.engagement_closeout as Record<string, unknown>)
           : null;
-      if (closeout && Object.keys(closeout).length) {
-        setEngagementCloseout(closeout);
-      }
       markMessageAutoScroll();
       const terminal = String(closeout?.terminal || m.status || "unknown");
       const processComplete = closeout?.process_complete;
@@ -2064,6 +2078,7 @@ export default function ConversationPage() {
     setPlanTree([]);
     setTaskMapRevisions([]);
     liveRevisionIdRef.current = null;
+    releasedWorkerIdsRef.current = [];
     setLiveRevisionId(null);
     setViewedRevisionId(null);
     setStrixAgents([]);
@@ -2080,7 +2095,6 @@ export default function ConversationPage() {
     setTrafficExchanges([]);
     setSurfaceLedger(emptySurfaceLedger());
     setTaskContext(undefined);
-    setEngagementCloseout(undefined);
     setWorkerDisplayNames({});
     setWorkerAuditTarget(null);
     // Spec #311: clear Case Workset on conversation switch / blank chat (no bleed).
@@ -3362,7 +3376,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               }
               assets={ownerLedgerAssets.length ? ownerLedgerAssets : assets}
               taskContext={taskContext}
-              engagementCloseout={engagementCloseout}
               conversationId={activeId}
               packageStatus={
                 conversations.find((c) => c.id === activeId)?.status ||

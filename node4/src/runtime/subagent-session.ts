@@ -439,6 +439,8 @@ async function runWarmPackage(args: {
   warm.pathKey = pk || warm.pathKey;
   warm.agentId = agentId;
 
+  pool.noteLive(warm);
+
   const sessionSeed = await seedChildSessionFromParent(
     input.parent.sessionDir || input.parent.piDir,
     workDir,
@@ -742,6 +744,23 @@ async function runColdPackage(args: {
   const workerProcess = attachWorkerProcessStream({ session, runtime: childRuntime });
   const usageMeter = attachOrReuseChildUsage(session, parent, agentId);
 
+  const handle: IdleSubagentHandle = {
+    agentId,
+    pathKey: pk,
+    nodeType: input.nodeType,
+    skillId: input.skillId,
+    session: session as IdleSubagentHandle["session"],
+    workDir,
+    segmentCounter,
+    packagesCompleted: 1,
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    childRuntime,
+    disposeWorkerAudit: () => workerProcess.dispose(),
+    usageMeter,
+  };
+  pool?.noteLive(handle);
+
   await emitWorkerPackageStart({
     platform: parent.platform,
     task: childTask,
@@ -766,9 +785,12 @@ async function runColdPackage(args: {
       await persistChildTranscript(session, workDir);
       publishChildUsage(parent, agentId, usageMeter);
       try {
-        usageMeter.dispose();
-        await workerProcess.dispose();
-        await Promise.resolve((session as any).dispose?.());
+        if (pool) await pool.release(agentId);
+        else {
+          usageMeter.dispose();
+          await workerProcess.dispose();
+          await Promise.resolve((session as { dispose?: () => unknown }).dispose?.());
+        }
       } catch {
         /* ignore */
       }
@@ -817,27 +839,14 @@ async function runColdPackage(args: {
   await persistChildTranscript(session, workDir);
   publishChildUsage(parent, agentId, usageMeter);
   if (shouldPark && pool) {
-    const handle: IdleSubagentHandle = {
-      agentId,
-      pathKey: pk,
-      nodeType: input.nodeType,
-      skillId: input.skillId,
-      session: session as IdleSubagentHandle["session"],
-      workDir,
-      segmentCounter,
-      packagesCompleted: 1,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now(),
-      childRuntime,
-      disposeWorkerAudit: () => workerProcess.dispose(),
-      usageMeter,
-    };
     pool.park(handle);
+  } else if (pool) {
+    await pool.release(agentId);
   } else {
     try {
       usageMeter.dispose();
       await workerProcess.dispose();
-      await Promise.resolve((session as any).dispose?.());
+      await Promise.resolve((session as { dispose?: () => unknown }).dispose?.());
     } catch {
       /* ignore */
     }

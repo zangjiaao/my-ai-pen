@@ -45,6 +45,8 @@ function isPackageExpert(
 export type SessionLifecycleHandlers = {
   onRequestReset?: (agent: StrixAgentStatus) => void;
   onRequestDelete?: (agent: StrixAgentStatus) => void;
+  /** Spec #354 L12 / #491: End Worker (dispose idle/live child; not Session Delete). */
+  onRequestEndWorker?: (agent: StrixAgentStatus) => void;
   busy?: boolean;
 };
 
@@ -154,10 +156,18 @@ export function StrixAgentList({
                 : undefined
             }
             sessionLifecycle={
-              // Spec #354: only real Participant Sessions (have expert_id), never synthetic node4-main.
               primary && String(agent.expert_id || "").trim()
-                ? sessionLifecycle
-                : undefined
+                ? {
+                    busy: sessionLifecycle?.busy,
+                    onRequestReset: sessionLifecycle?.onRequestReset,
+                    onRequestDelete: sessionLifecycle?.onRequestDelete,
+                  }
+                : !primary && sessionLifecycle?.onRequestEndWorker
+                  ? {
+                      busy: sessionLifecycle?.busy,
+                      onRequestEndWorker: sessionLifecycle.onRequestEndWorker,
+                    }
+                  : undefined
             }
             packageStatus={
               primary && isPackageExpert(agent, packageExpertId) ? packageStatus : undefined
@@ -293,6 +303,7 @@ function AgentRow({
   const showSessionActions =
     primary &&
     Boolean(sessionLifecycle?.onRequestReset || sessionLifecycle?.onRequestDelete);
+  const showWorkerEnd = Boolean(!primary && sessionLifecycle?.onRequestEndWorker);
   const sessionBusy = Boolean(sessionLifecycle?.busy);
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
   const fullSessionId = sessionIdFull(agent);
@@ -386,6 +397,22 @@ function AgentRow({
                 </span>
               )}
               {/* Status text badge removed — left status dot already carries runtime (Spec #354 collab chrome). */}
+              {showWorkerEnd && (
+                <button
+                  type="button"
+                  data-testid="worker-end-btn"
+                  disabled={sessionBusy}
+                  title="结束 Worker — 释放其模型会话并从协作树移除（不影响 Main Session）"
+                  aria-label="结束 Worker"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-canvas-inset hover:text-severity-critical disabled:opacity-40"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sessionLifecycle?.onRequestEndWorker?.(agent);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                </button>
+              )}
               {showSessionActions && (
                 <div className="flex items-center" data-testid="session-lifecycle-actions">
                   {sessionLifecycle?.onRequestReset && (

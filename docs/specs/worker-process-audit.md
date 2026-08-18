@@ -51,7 +51,7 @@ Operators can see **Worker rows** on Agent collaboration (`panel_agents`) and Ta
    - **Header:** display name + status + **Rename** + Close  
    - **Left:** Package turn list (ordinal · status · `this_turn_goal`)  
    - **Right:** selected turn = **Package card** → **process** (thinking / tool_call / text) → **Delivery**
-3. **V1 interaction:** read-only audit **plus rename**. No user→Worker messages, no in-dialog abort/steer.
+3. **V1 interaction:** read-only audit **plus rename**. No user→Worker messages, no **in-dialog** abort/steer. Operator **End Worker** lives on the collaboration **AgentRow** (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) L12 / [#491](https://github.com/zangjiaao/my-ai-pen/issues/491)) — not inside this dialog. End **removes** the Worker from the live collab tree (row is gone; audit of past turns remains in Case Worker transcript if already persisted).
 4. **Main chat** stays Main narrative; Worker process detail is **dialog-only**.
 
 ---
@@ -116,7 +116,7 @@ Operators can see **Worker rows** on Agent collaboration (`panel_agents`) and Ta
 |---------|---------|-----------|
 | **Main chat** | Main thinking/tools/text; Main’s **`subagent` tool_call** at Main narrative grain (goal line, ok/fail); optional **one-line** lifecycle (“dispatched/finished Worker…”) | Worker thinking; step tool stdout; process text; full Worker timeline mirror; hardcoded fake progress (AGENTS.md) |
 | **Right panel tree** | status / `current_detail` / count | substitute for process audit |
-| **Worker dialog** | Package + process + Delivery for that `agent_id` | User messages to Worker; steer/abort-one-worker (V1) |
+| **Worker dialog** | Package + process + Delivery for that `agent_id` | User messages to Worker; in-dialog steer/abort |
 
 ---
 
@@ -132,7 +132,7 @@ Operators can see **Worker rows** on Agent collaboration (`panel_agents`) and Ta
 | Clear | Empty string clears override → fallback |
 | Validation | Trim; length ~1–64; no control chars; uniqueness **not** required; last-write-wins |
 | While running | **Allowed** (presentation only; no session/handoff change) |
-| Propagate near-real-time | Collaboration tree title · dialog header · Tasks chip / `owner_agent_name` **presentation** |
+| Propagate near-real-time | Collaboration tree title · dialog header · Tasks chip **presentation** (panel/`display_name` wins over frozen plan `owner_agent_name`; Spec [#491](https://github.com/zangjiaao/my-ai-pen/issues/491)) |
 | Ordinal | System `Worker N` stays bound to first-seen `agent_id` (resume stable); rename does **not** renumber |
 | Who may rename | Any operator who can use that Case collaboration UI; any Worker on the tree |
 | Out of model | Main / non-subagent participant rows |
@@ -261,7 +261,7 @@ Implementation is done when **all** hold:
 
 - Implementing nested subagent recursion UI inside a Worker dialog  
 - Full Main message-type parity in dialog (confirm/vuln cards, etc.)  
-- User→Worker chat / in-dialog steer / abort-single-Worker  
+- User→Worker chat / in-dialog steer / abort-single-Worker (collab **End** is Spec #354 / #491, not this dialog)  
 - Cross-Case global alias library; auto-name from Package goal as requirement  
 - Cross-Case export/share product  
 - Using `taskDir` as Case replay SoT  
@@ -280,7 +280,7 @@ Implementation is done when **all** hold:
 7. Display name = Case override by `agent_id`; platform write; unified tree/dialog/Tasks.  
 8. Live fidelity = Main-parity progressive Worker channel; record even if dialog closed.  
 9. Main = narrative + light lifecycle only.  
-10. V1 = read-only + rename.
+10. V1 dialog = read-only + rename. Worker **End** is collab AgentRow (#354 / #491).
 
 ---
 

@@ -109,7 +109,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
-      "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
+      "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now and drop it from the collaboration tree; else idle TTL (~420s) / maxIdle LRU auto-releases.",
       "Cookies seed/promote. Graph rejects command=. Nested subagent DISALLOWED (depth=1).",
       "Returns agent_id, worker_status idle|released, resume_hint, candidates/acceptance.",
     ].join(" "),
@@ -200,7 +200,20 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             reason: "idle_pool_disabled",
           });
         }
-        const released = await pool.release(aid);
+        const released = await pool.release(aid, { dropFromPanel: true });
+        runtime.lifecycle.panelAgents?.dropChild(aid);
+        const convId = String(runtime.task?.conversationId || "").trim();
+        if (convId) {
+          void runtime.platform
+            .send({
+              type: "worker_released",
+              conversation_id: convId,
+              task_id: runtime.task.taskId,
+              agent_id: aid,
+              released,
+            })
+            .catch(() => {});
+        }
         return jsonResult({
           ok: true,
           op: "release",
