@@ -26,6 +26,7 @@ import { SubagentIdlePool, type IdleSubagentHandle } from "./subagent-idle-pool.
 import type { SubagentHandoffFields } from "./subagent-handoff.js";
 import { pathKey } from "./subagent-booking.js";
 import { attachChildSessionUsage } from "./child-session-usage.js";
+import { resolvePiInstanceDir, workspaceCaseId } from "./session-workspace.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -225,7 +226,7 @@ async function makeParent(dir: string, panel: PanelAgentTracker): Promise<{
   const runtime = {
     task,
     workspaceDir: dir,
-    taskDir: dir,
+    piDir: dir,
     platform: {
       send: async (m: PlatformMessage) => {
         messages.push(m);
@@ -245,7 +246,8 @@ async function makeParent(dir: string, panel: PanelAgentTracker): Promise<{
   } as ToolRuntime;
   const host = new SubagentHost({
     task,
-    taskDir: dir,
+    piDir: dir,
+    workspaceDir: dir,
     evidence: runtime.evidence,
     platform: runtime.platform,
     goals: runtime.goals,
@@ -305,7 +307,7 @@ function childRow(panel: PanelAgentTracker, id?: string) {
       `child row must carry Sub usage 30, got ${JSON.stringify(child)}`,
     );
 
-    const childDir = join(dir, "subagents", "sub_487");
+    const childDir = resolvePiInstanceDir(dir, workspaceCaseId("c-487"), "e2", "sub_487");
     const raw = await readFile(join(childDir, "transcript.jsonl"), "utf8");
     const persisted = raw
       .split("\n")

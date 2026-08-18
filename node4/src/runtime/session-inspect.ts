@@ -94,11 +94,11 @@ export async function writeChildSessionTranscript(
   workDir: string,
   messages: readonly unknown[] | undefined,
 ): Promise<string> {
-  await mkdir(workDir, { recursive: true });
+  await ensureDirInsideRoot(workDir, workDir);
   const transcriptPath = join(workDir, "transcript.jsonl");
   const list = Array.isArray(messages) ? messages : [];
   const lines = list.map((m) => JSON.stringify(m));
-  await writeFile(transcriptPath, lines.length ? `${lines.join("\n")}\n` : "", "utf8");
+  await writeFileInsideRoot(transcriptPath, workDir, lines.length ? `${lines.join("\n")}\n` : "");
   return transcriptPath;
 }
 
