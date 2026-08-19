@@ -194,6 +194,11 @@ export class SubagentIdlePool {
   private readonly byId = new Map<string, IdleSubagentHandle>();
   /** In-flight packages (taken from idle / cold spawn not yet parked). */
   private readonly live = new Map<string, IdleSubagentHandle>();
+  /**
+   * Operator End / op=release arrived after the collab row exists but before
+   * `noteLive`. Consume on noteLive/park so the package cannot re-idle.
+   */
+  private readonly pendingEnds = new Set<string>();
   private readonly opts: Required<SubagentIdlePoolOptions>;
   private panel: PanelAgentTracker | undefined;
   /** Case this pool belongs to. Empty until bound; End must pass the same id. */
@@ -301,6 +306,7 @@ export class SubagentIdlePool {
   park(handle: IdleSubagentHandle, now = Date.now()): void {
     if (handle.hardReleased) return;
     const id = String(handle.agentId || "").trim();
+    if (id && this.consumePendingEnd(id, handle)) return;
     const key = String(handle.pathKey || "").trim();
     if (!id || !key) {
       void safeDispose(handle);
@@ -346,6 +352,7 @@ export class SubagentIdlePool {
   noteLive(handle: IdleSubagentHandle): void {
     const id = String(handle.agentId || "").trim();
     if (!id) return;
+    if (this.consumePendingEnd(id, handle)) return;
     this.live.set(id, handle);
   }
 
@@ -378,8 +385,27 @@ export class SubagentIdlePool {
       if (opts?.dropFromPanel) this.panel?.dropChild(id);
       return true;
     }
-    if (opts?.dropFromPanel) this.panel?.dropChild(id);
+    if (opts?.dropFromPanel) {
+      const dropped = this.panel?.dropChild(id) ?? false;
+      if (dropped) {
+        this.pendingEnds.add(id);
+        return true;
+      }
+    }
     return false;
+  }
+
+  /** End-before-live: mark + abort now; full dispose follows. */
+  private consumePendingEnd(id: string, handle: IdleSubagentHandle): boolean {
+    if (!this.pendingEnds.delete(id)) return false;
+    handle.hardReleased = true;
+    try {
+      handle.session.abort?.();
+    } catch {
+      /* ignore */
+    }
+    void safeDispose(handle);
+    return true;
   }
 
   /** Drop expired without waiting for timer (best-effort sync). */
@@ -399,6 +425,7 @@ export class SubagentIdlePool {
     const ids = [...this.byId.keys()];
     const liveIds = [...this.live.keys()];
     await Promise.all([...ids, ...liveIds].map((id) => this.release(id)));
+    this.pendingEnds.clear();
     REGISTERED_POOLS.delete(this);
   }
 

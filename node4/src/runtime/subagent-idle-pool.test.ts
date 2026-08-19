@@ -193,8 +193,24 @@ assert.equal(
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), true);
   assert.equal(await pool.release("sub_gone"), false);
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), true, "session dispose keeps collab row");
-  assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), false);
+  assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), true, "End of panel-only child is accepted");
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), false, "explicit End drops collab row even if session already gone");
+}
+
+// End after collab row / before noteLive must not park later.
+{
+  clearRegisteredIdlePoolsForTests();
+  const panel = new PanelAgentTracker("task", "Expert");
+  panel.noteSubagentStart({ id: "sub_early", assignment: "ping" });
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, panel, "case-a");
+  assert.equal(await releaseWorkerById("sub_early", "case-a"), true);
+  assert.equal(panel.list().some((a) => a.id === "sub_early"), false);
+  const h = fakeHandle("sub_early", "p");
+  pool.noteLive(h);
+  assert.equal(h.hardReleased, true);
+  pool.park(h);
+  assert.equal(pool.size, 0);
+  assert.equal(pool.tryResume("sub_early", { pathKey: "p" }).ok, false);
 }
 
 // End must not re-park a disposed live Worker (Bugbot: zombie resume).

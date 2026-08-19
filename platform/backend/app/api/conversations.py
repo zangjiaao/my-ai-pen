@@ -619,9 +619,10 @@ async def release_worker(
     ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
     acked = bool(ack.get("released"))
     ctx_in = c.context if isinstance(c.context, dict) else {}
-    # Node End is Case-scoped. Only persist chrome drop / released ids for this Case
-    # (child already on the tree, or Node confirmed it disposed a worker in this Case).
-    if acked or case_has_child_worker(ctx_in, agent_id=aid):
+    # Persist + WS drop together. Broadcasting without released_worker_ids lets
+    # a later snapshot wipe the local End ref and resurrect the row.
+    persist_chrome = acked or case_has_child_worker(ctx_in, agent_id=aid)
+    if persist_chrome:
         ctx = mark_panel_worker_released(ctx_in, agent_id=aid)
         c.context = ctx
         flag_modified(c, "context")
@@ -635,28 +636,29 @@ async def release_worker(
         {"agent_id": aid, "expert_id": expert_id, "node": result},
     )
     await db.commit()
-    try:
-        import json as _json
+    if persist_chrome:
+        try:
+            import json as _json
 
-        await ws_router._broadcast_to_conversation(
-            conv_id,
-            _json.dumps(
-                {
-                    "type": "worker_released",
-                    "conversation_id": conv_id,
-                    "agent_id": aid,
-                    "released": acked,
-                },
-                ensure_ascii=False,
-            ),
-        )
-    except Exception as exc:
-        print(f"[API] worker_released broadcast: {exc}")
+            await ws_router._broadcast_to_conversation(
+                conv_id,
+                _json.dumps(
+                    {
+                        "type": "worker_released",
+                        "conversation_id": conv_id,
+                        "agent_id": aid,
+                        "released": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as exc:
+            print(f"[API] worker_released broadcast: {exc}")
     return {
         "ok": True,
         "agent_id": aid,
-        "released": acked,
-        "reason": ack.get("reason"),
+        "released": persist_chrome,
+        "reason": ack.get("reason") if persist_chrome else (ack.get("reason") or "not_found"),
     }
 
 
