@@ -306,7 +306,10 @@ export class SubagentIdlePool {
   park(handle: IdleSubagentHandle, now = Date.now()): void {
     if (handle.hardReleased) return;
     const id = String(handle.agentId || "").trim();
-    if (id && this.consumePendingEnd(id, handle)) return;
+    if (id && this.pendingEnds.has(id)) {
+      void this.consumePendingEnd(id, handle);
+      return;
+    }
     const key = String(handle.pathKey || "").trim();
     if (!id || !key) {
       void safeDispose(handle);
@@ -348,12 +351,16 @@ export class SubagentIdlePool {
 
   /**
    * Track an in-flight Worker so operator End can abort it (Spec #491).
+   * @returns false when operator End already claimed this id — caller must not
+   * prompt or emit package start; the handle is abort+disposed.
    */
-  noteLive(handle: IdleSubagentHandle): void {
+  async noteLive(handle: IdleSubagentHandle): Promise<boolean> {
     const id = String(handle.agentId || "").trim();
-    if (!id) return;
-    if (this.consumePendingEnd(id, handle)) return;
+    if (!id) return false;
+    if (handle.hardReleased) return false;
+    if (await this.consumePendingEnd(id, handle)) return false;
     this.live.set(id, handle);
+    return true;
   }
 
   /**
@@ -395,16 +402,11 @@ export class SubagentIdlePool {
     return false;
   }
 
-  /** End-before-live: mark + abort now; full dispose follows. */
-  private consumePendingEnd(id: string, handle: IdleSubagentHandle): boolean {
+  /** End-before-live: mark, abort, dispose; caller must not start the package. */
+  private async consumePendingEnd(id: string, handle: IdleSubagentHandle): Promise<boolean> {
     if (!this.pendingEnds.delete(id)) return false;
     handle.hardReleased = true;
-    try {
-      handle.session.abort?.();
-    } catch {
-      /* ignore */
-    }
-    void safeDispose(handle);
+    await safeDispose(handle);
     return true;
   }
 

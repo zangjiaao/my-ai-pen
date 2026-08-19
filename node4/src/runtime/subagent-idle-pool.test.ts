@@ -172,7 +172,7 @@ assert.equal(
   clearRegisteredIdlePoolsForTests();
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
   const live = fakeHandle("live_1", "p-live");
-  pool.noteLive(live);
+  assert.equal(await pool.noteLive(live), true);
   assert.equal(await releaseWorkerById("live_1"), false, "End without conversationId is fail-closed");
   assert.equal((live as any).isDisposed(), false);
   assert.equal(await releaseWorkerById("live_1", "case-a"), true);
@@ -206,7 +206,7 @@ assert.equal(
   assert.equal(await releaseWorkerById("sub_early", "case-a"), true);
   assert.equal(panel.list().some((a) => a.id === "sub_early"), false);
   const h = fakeHandle("sub_early", "p");
-  pool.noteLive(h);
+  assert.equal(await pool.noteLive(h), false, "noteLive must refuse a pending End");
   assert.equal(h.hardReleased, true);
   pool.park(h);
   assert.equal(pool.size, 0);
@@ -218,7 +218,7 @@ assert.equal(
   clearRegisteredIdlePoolsForTests();
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
   const h = fakeHandle("live_park", "p");
-  pool.noteLive(h);
+  assert.equal(await pool.noteLive(h), true);
   assert.equal(await pool.release("live_park", { dropFromPanel: true }), true);
   assert.equal(h.hardReleased, true);
   pool.park(h);
@@ -232,8 +232,8 @@ assert.equal(
   const victimPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-b");
   const attackerPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
   const victim = fakeHandle("sub_shared_looking", "p-b");
-  victimPool.noteLive(victim);
-  attackerPool.noteLive(fakeHandle("other", "p-a"));
+  await victimPool.noteLive(victim);
+  await attackerPool.noteLive(fakeHandle("other", "p-a"));
   assert.equal(await releaseWorkerById("sub_shared_looking", "case-a"), false);
   assert.equal((victim as any).isDisposed(), false);
   assert.equal(await releaseWorkerById("sub_shared_looking", "case-b"), true);

@@ -123,6 +123,49 @@ export type SubagentLlmSessionOutput = {
   data: unknown;
 };
 
+/** Operator End claimed the Worker before this package prompted. */
+function releasedBeforePromptResult(input: {
+  handoff: SubagentHandoffFields;
+  agentId: string;
+  pathKey: string;
+  nodeType?: string;
+  skillId?: string;
+  workDir: string;
+  packageTurnId?: string;
+  sessionReuseHit: boolean;
+  packagesCompleted: number;
+}): SubagentLlmSessionOutput {
+  const structured = normalizeSubagentResult(
+    { ok: false, summary: "interrupted", deadends: ["interrupted"] },
+    input.handoff.this_turn_goal,
+  );
+  return {
+    ok: false,
+    summary: structured.summary,
+    structured,
+    data: {
+      kind: "llm_session",
+      structured,
+      handoff: input.handoff,
+      node_type: input.nodeType,
+      skill_id: input.skillId,
+      agent_id: input.agentId,
+      package_turn_id: input.packageTurnId,
+      worker_status: "released",
+      workDir: input.workDir,
+      salvaged: false,
+      session_reuse: {
+        hit: input.sessionReuseHit,
+        agent_id: input.agentId,
+        path_key: input.pathKey,
+        packages_completed: input.packagesCompleted,
+        parked: false,
+        worker_status: "released",
+      },
+    },
+  };
+}
+
 function childRolePack(parentPackId: string, skillIds?: readonly string[], skillsRoot?: string): RolePack {
   return {
     id: parentPackId || "pentest",
@@ -439,7 +482,18 @@ async function runWarmPackage(args: {
   warm.pathKey = pk || warm.pathKey;
   warm.agentId = agentId;
 
-  pool.noteLive(warm);
+  if (!(await pool.noteLive(warm))) {
+    return releasedBeforePromptResult({
+      handoff: input.handoff,
+      agentId,
+      pathKey: pk,
+      nodeType: input.nodeType,
+      skillId: input.skillId,
+      workDir,
+      sessionReuseHit: true,
+      packagesCompleted: warm.packagesCompleted,
+    });
+  }
 
   const sessionSeed = await seedChildSessionFromParent(
     input.parent.sessionDir || input.parent.piDir,
@@ -754,7 +808,19 @@ async function runColdPackage(args: {
     disposeWorkerAudit: () => workerProcess.dispose(),
     usageMeter,
   };
-  pool?.noteLive(handle);
+  if (pool && !(await pool.noteLive(handle))) {
+    return releasedBeforePromptResult({
+      handoff,
+      agentId,
+      pathKey: pk,
+      nodeType: input.nodeType,
+      skillId: input.skillId,
+      workDir,
+      packageTurnId,
+      sessionReuseHit: false,
+      packagesCompleted: 1,
+    });
+  }
 
   await emitWorkerPackageStart({
     platform: parent.platform,
