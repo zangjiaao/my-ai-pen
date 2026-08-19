@@ -42,7 +42,11 @@ export type SubagentContext = {
 export type SubagentWorker = (ctx: SubagentContext) => Promise<{ summary: string; data: unknown; ok?: boolean }>;
 
 export type SubagentHostOptions = {
-  task: TaskEnvelope;
+  /**
+   * Live Task envelope. Prefer a getter so parked continue (`runtime.task = next`)
+   * is visible at spawn — do not pin the first-burst object.
+   */
+  task: TaskEnvelope | (() => TaskEnvelope);
   piDir: string;
   workspaceDir?: string;
   evidence: EvidenceStoreLike;
@@ -68,6 +72,12 @@ let subSeq = 0;
 export class SubagentHost {
   constructor(private readonly opts: SubagentHostOptions) {}
 
+  /** Current Task (continue may have rebound `runtime.task`). */
+  private task(): TaskEnvelope {
+    const t = this.opts.task;
+    return typeof t === "function" ? t() : t;
+  }
+
   /** Push Main + children so Status collaboration tree updates live. */
   private async emitPanelAgentsSnapshot(): Promise<void> {
     const panel = this.opts.panelAgents;
@@ -76,27 +86,30 @@ export class SubagentHost {
     await this.opts.platform
       .send({
         type: "status_update",
-        conversation_id: this.opts.task.conversationId,
-        task_id: this.opts.task.taskId,
+        conversation_id: this.task().conversationId,
+        task_id: this.task().taskId,
         message: "panel_agents",
         agent_phase: "subagent",
         status: "running",
         panel_agents: agents,
-        expert_id: this.opts.task.expertId,
-        expert_name: this.opts.task.expertName,
+        expert_id: this.task().expertId,
+        expert_name: this.task().expertName,
       })
       .catch(() => {});
     // Persist into checkpoint path consumers (Case participants / snapshot).
     await this.opts.platform
       .send({
         type: "checkpoint_update",
-        conversation_id: this.opts.task.conversationId,
-        task_id: this.opts.task.taskId,
+        conversation_id: this.task().conversationId,
+        task_id: this.task().taskId,
+        expert_id: this.task().expertId,
+        expert_name: this.task().expertName,
         checkpoint: {
           runtime: "node4-pi",
           panel_agents: agents,
           agent_phase: "subagent",
-          task_id: this.opts.task.taskId,
+          task_id: this.task().taskId,
+          expert_id: this.task().expertId,
         },
       })
       .catch(() => {});
@@ -177,7 +190,7 @@ export class SubagentHost {
 
     await emitHardGraphPlanTreeUpdate(
       this.opts.platform,
-      this.opts.task,
+      this.task(),
       plan,
       `subagent.${input.status}:${input.subagentId}`,
       {
@@ -248,7 +261,7 @@ export class SubagentHost {
 
     await emitTodoPlanTreeUpdate(
       this.opts.platform,
-      this.opts.task,
+      this.task(),
       todo,
       `subagent.${input.status}:${input.subagentId}`,
     ).catch(() => {});
@@ -289,10 +302,10 @@ export class SubagentHost {
     planNodeId?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
-    const exp = String(this.opts.task.expertId || "").trim() || "default";
+    const exp = String(this.task().expertId || "").trim() || "default";
     const ws = String(this.opts.workspaceDir || "").trim();
     const workDir = ws
-      ? resolvePiInstanceDir(ws, workspaceCaseId(this.opts.task.conversationId), exp, subagentId)
+      ? resolvePiInstanceDir(ws, workspaceCaseId(this.task().conversationId), exp, subagentId)
       : join(dirname(this.opts.piDir), `pi-${subagentId}`);
     await mkdir(workDir, { recursive: true });
 
@@ -327,8 +340,8 @@ export class SubagentHost {
 
     await this.opts.platform.send({
       type: "subagent_started",
-      conversation_id: this.opts.task.conversationId,
-      task_id: this.opts.task.taskId,
+      conversation_id: this.task().conversationId,
+      task_id: this.task().taskId,
       subagent_id: subagentId,
       goal_id: options.goalId,
       assignment: (options.label || options.assignment).slice(0, 500),
@@ -346,7 +359,7 @@ export class SubagentHost {
         goalId: options.goalId,
         piDir: this.opts.piDir,
         workDir,
-        task: this.opts.task,
+        task: this.task(),
       });
       summary = String(out.summary || "").trim() || "subagent finished";
       data = out.data;
@@ -387,8 +400,8 @@ export class SubagentHost {
 
     await this.opts.platform.send({
       type: "subagent_finished",
-      conversation_id: this.opts.task.conversationId,
-      task_id: this.opts.task.taskId,
+      conversation_id: this.task().conversationId,
+      task_id: this.task().taskId,
       subagent_id: subagentId,
       goal_id: options.goalId,
       ok,

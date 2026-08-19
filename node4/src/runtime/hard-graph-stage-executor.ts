@@ -278,7 +278,7 @@ export function buildHardGraphStageChildRuntime(options: {
   };
   if (allowSubagent) {
     childRuntime.subagents = new SubagentHost({
-      task: parent.task,
+      task: () => parent.task,
       piDir: workDir,
       workspaceDir: parent.workspaceDir,
       evidence: childRuntime.evidence,

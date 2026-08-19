@@ -282,7 +282,7 @@ export async function runNode4Task(
     },
   };
   runtime.subagents = new SubagentHost({
-    task,
+    task: () => runtime.task,
     piDir,
     workspaceDir: config.workspaceDir,
     evidence: runtime.evidence,
