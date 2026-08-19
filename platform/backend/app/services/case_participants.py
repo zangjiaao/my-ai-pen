@@ -417,6 +417,33 @@ def released_worker_ids(context: dict | None) -> list[str]:
     return out
 
 
+def case_has_child_worker(context: dict | None, *, agent_id: object) -> bool:
+    """True when this Case's collab tree already lists the Worker as a child row."""
+    aid = str(agent_id or "").strip()
+    if not aid:
+        return False
+    ctx = _as_dict(context)
+
+    def _in_list(raw: object) -> bool:
+        if not isinstance(raw, list):
+            return False
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("parent_id") or "").strip() and _panel_row_matches_worker(item, aid):
+                return True
+        return False
+
+    roster = participants_map(ctx)
+    for row in roster.values():
+        if isinstance(row, dict) and _in_list(row.get("panel_agents")):
+            return True
+    checkpoint = ctx.get("checkpoint")
+    if isinstance(checkpoint, dict) and _in_list(checkpoint.get("panel_agents")):
+        return True
+    return False
+
+
 def mark_panel_worker_released(context: dict | None, *, agent_id: object) -> dict[str, Any]:
     """End Worker: drop the collab-tree child and remember the id so later bursts cannot resurrect it."""
     aid = str(agent_id or "").strip()

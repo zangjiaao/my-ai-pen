@@ -529,6 +529,25 @@ def test_mark_panel_worker_released_suffix_id():
     assert not any(str(r.get("id")) == "role-e1-sub_1" for r in merged)
 
 
+def test_case_has_child_worker_not_foreign_id():
+    from app.services.case_participants import case_has_child_worker
+
+    ctx = {
+        "participants": {
+            "expert:e1": {
+                "expert_id": "e1",
+                "panel_agents": [
+                    {"id": "role-e1", "name": "Main", "parent_id": None, "status": "idle"},
+                    {"id": "role-e1-sub_1", "name": "Worker 1", "parent_id": "role-e1", "status": "idle"},
+                ],
+            }
+        }
+    }
+    assert case_has_child_worker(ctx, agent_id="sub_1") is True
+    assert case_has_child_worker(ctx, agent_id="role-e1") is False
+    assert case_has_child_worker(ctx, agent_id="other_tenant_worker") is False
+
+
 # --- Spec #324 S1: Case metering ledger ---
 
 

@@ -170,17 +170,19 @@ assert.equal(
 // --- Spec #491: live + idle releaseWorkerById ---
 {
   clearRegisteredIdlePoolsForTests();
-  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
   const live = fakeHandle("live_1", "p-live");
   pool.noteLive(live);
-  assert.equal(await releaseWorkerById("live_1"), true);
+  assert.equal(await releaseWorkerById("live_1"), false, "End without conversationId is fail-closed");
+  assert.equal((live as any).isDisposed(), false);
+  assert.equal(await releaseWorkerById("live_1", "case-a"), true);
   assert.equal((live as any).isDisposed(), true);
 
   const idle = fakeHandle("idle_1", "p-idle");
   pool.park(idle);
-  assert.equal(await releaseWorkerById("idle_1"), true);
+  assert.equal(await releaseWorkerById("idle_1", "case-a"), true);
   assert.equal(pool.size, 0);
-  assert.equal(await releaseWorkerById("missing"), false);
+  assert.equal(await releaseWorkerById("missing", "case-a"), false);
 }
 
 {
@@ -193,6 +195,33 @@ assert.equal(
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), true, "session dispose keeps collab row");
   assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), false);
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), false, "explicit End drops collab row even if session already gone");
+}
+
+// End must not re-park a disposed live Worker (Bugbot: zombie resume).
+{
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
+  const h = fakeHandle("live_park", "p");
+  pool.noteLive(h);
+  assert.equal(await pool.release("live_park", { dropFromPanel: true }), true);
+  assert.equal(h.hardReleased, true);
+  pool.park(h);
+  assert.equal(pool.size, 0, "park after End must not re-insert");
+  assert.equal(pool.tryResume("live_park", { pathKey: "p" }).ok, false);
+}
+
+// Cross-Case End must not dispose another tenant's Worker on a shared Node.
+{
+  clearRegisteredIdlePoolsForTests();
+  const victimPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-b");
+  const attackerPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
+  const victim = fakeHandle("sub_shared_looking", "p-b");
+  victimPool.noteLive(victim);
+  attackerPool.noteLive(fakeHandle("other", "p-a"));
+  assert.equal(await releaseWorkerById("sub_shared_looking", "case-a"), false);
+  assert.equal((victim as any).isDisposed(), false);
+  assert.equal(await releaseWorkerById("sub_shared_looking", "case-b"), true);
+  assert.equal((victim as any).isDisposed(), true);
 }
 
 console.log("subagent-idle-pool.test.ts: ok");

@@ -59,6 +59,11 @@ export type IdleSubagentHandle = {
     snapshot: () => import("./llm-usage.js").LlmUsageSnapshot;
     dispose: () => void;
   };
+  /**
+   * Set when `release()` abort+disposes this handle (operator End, TTL, abort).
+   * `park()` must refuse so a finished package cannot revive a zombie session.
+   */
+  hardReleased?: boolean;
 };
 
 export type IdleWorkerSnapshot = {
@@ -181,7 +186,7 @@ export function checkAffinity(
  * Keyed by agentId (not pathKey).
  *
  * Spec #491: pools register globally so operator End can release idle *or* live
- * workers without walking parked captains.
+ * workers without walking parked captains. Lookup is Case-scoped (`conversationId`).
  */
 const REGISTERED_POOLS = new Set<SubagentIdlePool>();
 
@@ -191,19 +196,28 @@ export class SubagentIdlePool {
   private readonly live = new Map<string, IdleSubagentHandle>();
   private readonly opts: Required<SubagentIdlePoolOptions>;
   private panel: PanelAgentTracker | undefined;
+  /** Case this pool belongs to. Empty until bound; End must pass the same id. */
+  conversationId = "";
 
-  constructor(opts?: SubagentIdlePoolOptions, panel?: PanelAgentTracker) {
+  constructor(opts?: SubagentIdlePoolOptions, panel?: PanelAgentTracker, conversationId?: string) {
     this.opts = {
       maxIdle: opts?.maxIdle ?? DEFAULT_MAX_IDLE,
       ttlMs: opts?.ttlMs ?? DEFAULT_TTL_MS,
       maxPackages: opts?.maxPackages ?? DEFAULT_MAX_PACKAGES,
     };
     this.panel = panel;
+    this.conversationId = String(conversationId || "").trim();
     REGISTERED_POOLS.add(this);
   }
 
   bindPanel(panel: PanelAgentTracker | undefined): void {
     if (panel) this.panel = panel;
+  }
+
+  bindConversation(conversationId: string | undefined): void {
+    const id = String(conversationId || "").trim();
+    if (!id || this.conversationId) return;
+    this.conversationId = id;
   }
 
   get size(): number {
@@ -285,6 +299,7 @@ export class SubagentIdlePool {
    * Over maxPackages → hard release instead of park.
    */
   park(handle: IdleSubagentHandle, now = Date.now()): void {
+    if (handle.hardReleased) return;
     const id = String(handle.agentId || "").trim();
     const key = String(handle.pathKey || "").trim();
     if (!id || !key) {
@@ -348,6 +363,7 @@ export class SubagentIdlePool {
     if (!id) return false;
     const idle = this.byId.get(id);
     if (idle) {
+      idle.hardReleased = true;
       this.byId.delete(id);
       this.live.delete(id);
       await safeDispose(idle);
@@ -356,6 +372,7 @@ export class SubagentIdlePool {
     }
     const live = this.live.get(id);
     if (live) {
+      live.hardReleased = true;
       this.live.delete(id);
       await safeDispose(live);
       if (opts?.dropFromPanel) this.panel?.dropChild(id);
@@ -417,25 +434,36 @@ export class SubagentIdlePool {
 export function getOrCreateIdlePool(
   lifecycle: { subagentIdlePool?: SubagentIdlePool; panelAgents?: PanelAgentTracker },
   env: NodeJS.ProcessEnv = process.env,
+  conversationId?: string,
 ): SubagentIdlePool | undefined {
   if (!resolveIdlePoolEnabled(env)) return undefined;
   if (!lifecycle.subagentIdlePool) {
     lifecycle.subagentIdlePool = new SubagentIdlePool(
       resolveIdlePoolOptions(env),
       lifecycle.panelAgents,
+      conversationId,
     );
-  } else if (lifecycle.panelAgents) {
-    lifecycle.subagentIdlePool.bindPanel(lifecycle.panelAgents);
+  } else {
+    if (lifecycle.panelAgents) {
+      lifecycle.subagentIdlePool.bindPanel(lifecycle.panelAgents);
+    }
+    lifecycle.subagentIdlePool.bindConversation(conversationId);
   }
   return lifecycle.subagentIdlePool;
 }
 
-/** Spec #491: operator End — dispose idle or live Worker and drop collab chrome. */
-export async function releaseWorkerById(agentId: string): Promise<boolean> {
+/**
+ * Spec #491: operator End — dispose idle or live Worker and drop collab chrome.
+ * Requires `conversationId` so one Case cannot abort another tenant's Worker
+ * on a shared Node process.
+ */
+export async function releaseWorkerById(agentId: string, conversationId?: string): Promise<boolean> {
   const id = String(agentId || "").trim();
-  if (!id) return false;
+  const conv = String(conversationId || "").trim();
+  if (!id || !conv) return false;
   let found = false;
   for (const pool of REGISTERED_POOLS) {
+    if (pool.conversationId !== conv) continue;
     if (await pool.release(id, { dropFromPanel: true })) found = true;
   }
   return found;

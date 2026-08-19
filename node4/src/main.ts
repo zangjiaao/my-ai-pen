@@ -287,7 +287,7 @@ client.on("worker_release", async (message) => {
   const agentId = String(message.agent_id || message.agentId || "").trim();
   const expertId = String(message.expert_id || message.expertId || "").trim();
   if (!conversationId || !agentId) return;
-  const released = await releaseWorkerById(agentId);
+  const released = await releaseWorkerById(agentId, conversationId);
   console.log(
     `[node4] worker_release conv=${conversationId.slice(0, 8)} agent=${agentId.slice(0, 24)} released=${released}`,
   );

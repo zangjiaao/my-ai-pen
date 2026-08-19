@@ -590,7 +590,7 @@ async def release_worker(
     """Spec #491 / #354 L12: End Worker — dispose idle/live child session, not Main Session."""
     from sqlalchemy.orm.attributes import flag_modified
 
-    from app.services.case_participants import mark_panel_worker_released
+    from app.services.case_participants import case_has_child_worker, mark_panel_worker_released
     from app.ws import router as ws_router
 
     c = await _get_conv(conv_id, current_user, db)
@@ -616,9 +616,15 @@ async def release_worker(
     if not result.get("delivered"):
         reason = str(result.get("reason") or "offline")
         raise HTTPException(409, f"Node unavailable ({reason})")
-    ctx = mark_panel_worker_released(c.context if isinstance(c.context, dict) else {}, agent_id=aid)
-    c.context = ctx
-    flag_modified(c, "context")
+    ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
+    acked = bool(ack.get("released"))
+    ctx_in = c.context if isinstance(c.context, dict) else {}
+    # Node End is Case-scoped. Only persist chrome drop / released ids for this Case
+    # (child already on the tree, or Node confirmed it disposed a worker in this Case).
+    if acked or case_has_child_worker(ctx_in, agent_id=aid):
+        ctx = mark_panel_worker_released(ctx_in, agent_id=aid)
+        c.context = ctx
+        flag_modified(c, "context")
     await _audit(
         db,
         uuid.UUID(current_user["user_id"]),
@@ -639,18 +645,17 @@ async def release_worker(
                     "type": "worker_released",
                     "conversation_id": conv_id,
                     "agent_id": aid,
-                    "released": True,
+                    "released": acked,
                 },
                 ensure_ascii=False,
             ),
         )
     except Exception as exc:
         print(f"[API] worker_released broadcast: {exc}")
-    ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
     return {
         "ok": True,
         "agent_id": aid,
-        "released": bool(ack.get("released", True)),
+        "released": acked,
         "reason": ack.get("reason"),
     }
 

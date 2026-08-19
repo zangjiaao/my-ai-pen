@@ -395,7 +395,7 @@ export async function runSubagentLlmSession(
 ): Promise<SubagentLlmSessionOutput> {
   const { handoff, parent, subagentId } = input;
   const pk = resolvePathKey(handoff);
-  const pool = getOrCreateIdlePool(parent.lifecycle);
+  const pool = getOrCreateIdlePool(parent.lifecycle, process.env, parent.task.conversationId);
   const abort = input.abortSignal || parent.lifecycle.abortSignal;
 
   // Warm path: tool layer already exclusive-took the handle (affinity-gated).
@@ -497,10 +497,7 @@ async function runWarmPackage(args: {
       await persistChildTranscript(warm.session, workDir);
       publishChildUsage(input.parent, agentId, usageMeter);
       try {
-        warm.clearAbort?.();
-        usageMeter.dispose();
-        await Promise.resolve(warm.disposeWorkerAudit?.());
-        await Promise.resolve(warm.session.dispose?.());
+        await pool.release(agentId);
       } catch {
         /* ignore */
       }
@@ -544,9 +541,10 @@ async function runWarmPackage(args: {
   warm.packagesCompleted += 1;
   warm.lastUsedAt = Date.now();
 
-  // OMP: finished + soft-failed stay interrogable (timeout/salvage OK). Parent abort → release.
+  // OMP: finished + soft-failed stay interrogable (timeout/salvage OK).
+  // Parent abort or operator End (hardReleased) → release, never re-park.
   const shouldPark =
-    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted && !warm.hardReleased;
 
   await persistChildTranscript(warm.session, workDir);
   publishChildUsage(input.parent, agentId, usageMeter);
@@ -554,10 +552,7 @@ async function runWarmPackage(args: {
     pool.park(warm);
   } else {
     try {
-      warm.clearAbort?.();
-      usageMeter.dispose();
-      await Promise.resolve(warm.disposeWorkerAudit?.());
-      await Promise.resolve(warm.session.dispose?.());
+      await pool.release(agentId);
     } catch {
       /* ignore */
     }
@@ -832,9 +827,9 @@ async function runColdPackage(args: {
   }).catch(() => {});
 
   // OMP keep-alive: park success + soft-fail/timeout so same agent_id can resume.
-  // Parent abort or missing identity → dispose immediately (release).
+  // Parent abort, operator End, or missing identity → dispose immediately (release).
   const shouldPark =
-    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted && !handle.hardReleased;
 
   await persistChildTranscript(session, workDir);
   publishChildUsage(parent, agentId, usageMeter);
