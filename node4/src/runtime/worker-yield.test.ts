@@ -46,6 +46,48 @@ assert.equal(
   "# SPCX OHLCV\n| 2026-08-18 | 143.34 |",
 );
 
+{
+  const warmLastTurn = lastAssistantTextFromMessages([
+    { role: "user", content: "pkg1" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "old yield report" },
+        { type: "toolCall", id: "y1", name: "yield", arguments: { result: {} } },
+      ],
+    },
+    { role: "user", content: "pkg2 resume" },
+    { role: "assistant", content: [{ type: "text", text: "new last-turn report" }] },
+  ]);
+  assert.equal(warmLastTurn, "new last-turn report", "warm last-turn must not clip to prior yield");
+}
+
+{
+  const warmYieldThenClose = lastAssistantTextFromMessages([
+    { role: "user", content: "pkg1" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "old yield report" },
+        { type: "toolCall", id: "y1", name: "yield", arguments: { result: {} } },
+      ],
+    },
+    { role: "user", content: "pkg2 resume" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "new yield report" },
+        { type: "toolCall", id: "y2", name: "yield", arguments: { result: {} } },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "见上方" }],
+    },
+  ]);
+  assert.equal(warmYieldThenClose, "new yield report", "warm yield ignores this-package closing only");
+}
+
 assert.equal(formatYieldData({ summary: "got pong" }), "got pong");
 assert.match(formatYieldData({ reply: "pong" }), /pong/);
 

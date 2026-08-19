@@ -41,15 +41,27 @@ function messageHasYieldToolCall(msg: unknown): boolean {
   return Array.isArray(content) && content.some(isYieldToolCall);
 }
 
+function lastUserIndex(messages: readonly unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    if (String((msg as { role?: string }).role || "") === "user") return i;
+  }
+  return -1;
+}
+
 /**
- * Oral report for yield({ result: {} }) is the assistant text on the yield turn.
+ * Oral report for yield({ result: {} }) is the assistant text on the yield turn
+ * of **this package** (messages after the last user prompt).
  * Ignore post-yield closings ("see above") — they are not the report body.
- * Stop without yield: last non-empty assistant text.
+ * Stop without yield: last non-empty assistant text in this package.
+ * Warm resume must not harvest a prior package's yield.
  */
 export function lastAssistantTextFromMessages(messages: readonly unknown[] | undefined | null): string {
   if (!Array.isArray(messages)) return "";
+  const start = lastUserIndex(messages) + 1;
   let end = messages.length - 1;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (let i = messages.length - 1; i >= start; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     if (String((msg as { role?: string }).role || "") !== "assistant") continue;
@@ -58,7 +70,7 @@ export function lastAssistantTextFromMessages(messages: readonly unknown[] | und
       break;
     }
   }
-  for (let i = end; i >= 0; i--) {
+  for (let i = end; i >= start; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     if (String((msg as { role?: string }).role || "") !== "assistant") continue;

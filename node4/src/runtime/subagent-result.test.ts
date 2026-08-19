@@ -214,4 +214,13 @@ assert.ok(!surfaceOk.package_gaps.some((g) => /surfaces\[\]/.test(g)));
 const classEmpty = evaluateCandidatesForAcceptance([], { nodeType: "class_probe" });
 assert.ok(classEmpty.package_gaps.some((g) => /candidates\[\]/.test(g)));
 
+const oralClass = evaluateCandidatesForAcceptance([], { nodeType: "class_probe", oralReturn: true });
+assert.equal(oralClass.package_gaps.length, 0, "oral return must not flag empty candidates[]");
+assert.doesNotMatch(oralClass.hint, /re-dispatch requiring candidates/);
+assert.match(oralClass.hint, /oral report/);
+
+const oralSurface = evaluateCandidatesForAcceptance([], { nodeType: "surface", oralReturn: true });
+assert.ok(!oralSurface.package_gaps.some((g) => /surfaces\[\]/.test(g)));
+assert.match(oralSurface.hint, /oral report/);
+
 console.log("subagent-result.test.ts: ok");

@@ -299,6 +299,11 @@ export function evaluateCandidatesForAcceptance(
     usedCommandOnly?: boolean;
     nodeType?: string;
     surfaces?: SubagentSurface[];
+    /**
+     * Spec #493 LLM packages: return body is yield/last-turn text, not
+     * candidates[] / surfaces[]. Do not steer Main to re-dispatch for empty arrays.
+     */
+    oralReturn?: boolean;
   },
 ): AcceptanceEvaluation {
   const ready_to_book: AcceptanceReadyItem[] = [];
@@ -309,6 +314,7 @@ export function evaluateCandidatesForAcceptance(
     .trim()
     .toLowerCase();
   const surfaces_accepted = surfaces.length;
+  const oralReturn = options?.oralReturn === true;
 
   if (options?.usedCommandOnly) {
     package_gaps.push(
@@ -316,15 +322,15 @@ export function evaluateCandidatesForAcceptance(
     );
   }
 
-  // Surface/recon packages must return structured surfaces[] from live recon.
-  if ((nodeType === "surface" || nodeType === "recon") && surfaces.length === 0) {
+  // Structured-list contract only when the return blob is still the channel.
+  if (!oralReturn && (nodeType === "surface" || nodeType === "recon") && surfaces.length === 0) {
     package_gaps.push(
       "node_type=surface returned no surfaces[] — re-dispatch requiring surfaces with concrete location (URL/path) from live recon (menu/forms/APIs you observed). Do not invent modules.",
     );
   }
 
   if (!candidates.length) {
-    if (!options?.usedCommandOnly) {
+    if (!oralReturn && !options?.usedCommandOnly) {
       // Surface-only packages may legitimately have zero vuln candidates.
       if (!(nodeType === "surface" || nodeType === "recon") || surfaces.length === 0) {
         if (!(nodeType === "surface" || nodeType === "recon")) {
@@ -334,13 +340,19 @@ export function evaluateCandidatesForAcceptance(
         }
       }
     }
-    const hintParts = [
-      "No ready_to_book candidates.",
-      surfaces_accepted
-        ? `Recorded ${surfaces_accepted} surface(s) into the work queue — dispatch class_probe (etc.) on open paths.`
-        : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt (poc_hint optional when proof is verbatim).",
-      "Do not invent proof files. Do not re-probe on Main when Graph hard.",
-    ];
+    const hintParts = oralReturn
+      ? [
+          "Return channel is the Worker oral report (yield / last-turn).",
+          "Main books with finding / surface from that report and the live ledger.",
+          "Empty candidates[] / surfaces[] on this tool result is expected — do not re-dispatch solely to fill those arrays.",
+        ]
+      : [
+          "No ready_to_book candidates.",
+          surfaces_accepted
+            ? `Recorded ${surfaces_accepted} surface(s) into the work queue — dispatch class_probe (etc.) on open paths.`
+            : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt (poc_hint optional when proof is verbatim).",
+          "Do not invent proof files. Do not re-probe on Main when Graph hard.",
+        ];
     if (package_gaps.length) hintParts.push(`Package: ${package_gaps.join("; ")}`);
     return {
       ready_to_book,

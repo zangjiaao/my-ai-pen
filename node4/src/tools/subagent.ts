@@ -774,6 +774,7 @@ async function runSubagentPackage(
       usedCommandOnly,
       nodeType: nt,
       surfaces: structured.surfaces,
+      oralReturn: !usedCommandOnly,
     });
     if (runtime.lifecycle.pentestGraph?.mode === "graph" && usedCommandOnly) {
       acceptance.package_gaps = [
