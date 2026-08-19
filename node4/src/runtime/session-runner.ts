@@ -302,8 +302,8 @@ export async function runNode4Task(
   });
 
   /**
-   * Spec #333 / #427: package teardown = idle pool only.
-   * Sticky pen-sandbox is **not** disposed on work-burst end (Session seat owns it).
+   * Spec #333 / #427 / #354: work-burst teardown does not dispose idle Workers
+   * or sticky pen-sandbox. Both park with the Captain Session.
    */
   const seatForHold = (() => {
     try {
@@ -317,7 +317,6 @@ export async function runNode4Task(
     if (seatForHold) releaseBrowserSandboxSeat(seatForHold);
     return runTaskResourceCleanup({
       parentTaskId: task.taskId,
-      idlePool: runtime.lifecycle.subagentIdlePool,
     });
   };
 
@@ -345,7 +344,7 @@ export async function runNode4Task(
       });
       return { terminalStatus: hardOut.harnessStatus, piDir };
     } finally {
-      // Spec #333: dispose browser sandbox (and idle pool if any) after Hard Graph task.
+      // Spec #333/#427/#354: release sandbox seat hold; idle Workers stay with Captain.
       await cleanupTaskResources().catch(() => {});
     }
   }
@@ -995,7 +994,7 @@ export async function runNode4Task(
 
     return { terminalStatus: emitStatus, piDir };
   } finally {
-    // Spec #333/#427: idle pool only; sticky pen-sandbox survives work-burst end.
+    // Spec #333/#427/#354: seat hold release only; idle Workers + sandbox survive burst end.
     await cleanupTaskResources().catch(() => {});
     // Tear down stream / active-session registration always.
     // Spec #283 I0.9: on user interrupt, park Free Main captain (do not dispose).

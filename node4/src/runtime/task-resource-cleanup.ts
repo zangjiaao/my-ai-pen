@@ -1,7 +1,8 @@
 /**
- * End-of-work-burst resource teardown (Spec #333 amended by #426 / #427).
+ * End-of-work-burst resource teardown (Spec #333 amended by #426 / #427 / #354).
  *
- * - Still disposes subagent idle pool (package-scoped).
+ * - Does **not** dispose the subagent idle pool — Workers park with the Captain
+ *   across Task settle/error/interrupt so continue can `resume_agent_id`.
  * - Does **not** dispose Session-sticky pen-sandbox (browser) — that lives until
  *   Session Delete / Case close / transfer (Spec #421).
  */
@@ -22,7 +23,7 @@ export type TaskResourceCleanupInput = {
    * Kept so call sites can still pass parentTaskId without type break.
    */
   parentTaskId?: string;
-  /** OMP idle subagent pool (optional). */
+  /** OMP idle subagent pool — ignored; Workers park with Captain (Spec #354). */
   idlePool?: TaskIdlePoolHandle | null;
   /**
    * @deprecated Ignored — sticky pen-sandbox is not torn down at task end.
@@ -35,16 +36,10 @@ export type TaskResourceCleanupInput = {
 };
 
 /**
- * Dispose package-scoped resources only (idle subagent pool).
- * Browser sticky env is intentionally left running.
+ * Burst-end cleanup: sticky browser and idle Workers both survive.
+ * Idle pool is torn down with Captain Session dispose, not here.
  */
-export async function runTaskResourceCleanup(input: TaskResourceCleanupInput): Promise<void> {
-  if (input.idlePool?.disposeAll) {
-    try {
-      await input.idlePool.disposeAll();
-    } catch {
-      /* best-effort */
-    }
-  }
+export async function runTaskResourceCleanup(_input: TaskResourceCleanupInput): Promise<void> {
   // Spec #427: do not disposeBrowserSandbox on task end / interrupt.
+  // Spec #354: do not disposeAll idle Workers on task end — continue resumes them.
 }

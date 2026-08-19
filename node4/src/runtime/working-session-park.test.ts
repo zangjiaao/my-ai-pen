@@ -16,6 +16,7 @@ import {
   DEFAULT_PARK_TTL_MS,
   disposeWorkingSession,
   disposeWorkingSessionsForCase,
+  dropParkedSession,
   harnessStatusAfterParkedContinue,
   isParkExpired,
   markPendingSessionDispose,
@@ -30,6 +31,12 @@ import {
   takeParkedSession,
   type ParkedWorkingRuntime,
 } from "./working-session-park.js";
+import {
+  clearRegisteredIdlePoolsForTests,
+  SubagentIdlePool,
+  type IdleSubagentHandle,
+} from "./subagent-idle-pool.js";
+import type { ToolRuntime } from "../types.js";
 import {
   isContinueInEnvelopeExecution,
   parseGraphExecution,
@@ -1056,6 +1063,111 @@ console.log("working-session-park.test.ts: Spec #354 fixtures ok");
   assert.equal(cont.action, "attach");
   assert.equal(disposed, 0, "attach does not dispose captain");
   clearWorkingSessionParksForTests();
+}
+
+function idleHandle(agentId: string, pathKey: string): IdleSubagentHandle {
+  let disposed = false;
+  return {
+    agentId,
+    pathKey,
+    session: {
+      prompt: async () => undefined,
+      dispose: () => {
+        disposed = true;
+      },
+    },
+    workDir: `/tmp/idle-${agentId}`,
+    segmentCounter: { tools: 0 },
+    packagesCompleted: 1,
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    ...({ isDisposed: () => disposed } as { isDisposed: () => boolean }),
+  };
+}
+
+function runtimeWithPool(pool: SubagentIdlePool): ToolRuntime {
+  return { lifecycle: { subagentIdlePool: pool } } as ToolRuntime;
+}
+
+// Idle Workers park with Captain; Session dispose / Reset / drop tear them down.
+{
+  clearWorkingSessionParksForTests();
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool(
+    { maxIdle: 4, ttlMs: 60_000, maxPackages: 4 },
+    undefined,
+    "c-idle",
+  );
+  const parked = idleHandle("sub_keep", "http://t/keep");
+  pool.park(parked);
+
+  applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-idle",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t-idle",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      runtime: runtimeWithPool(pool),
+      dispose: () => {},
+    },
+  });
+  const warm = pool.tryResume("sub_keep", { pathKey: "http://t/keep" });
+  assert.equal(warm.ok, true, "package park must not disposeAll idle Workers");
+  if (warm.ok) pool.park(warm.handle);
+
+  const gone = await disposeWorkingSession("c-idle", "exp");
+  assert.equal(gone.disposed, true);
+  assert.equal(pool.size, 0, "Session delete disposeAll idle Workers");
+  assert.equal((parked as { isDisposed: () => boolean }).isDisposed(), true);
+  const miss = pool.tryResume("sub_keep", { pathKey: "http://t/keep" });
+  assert.equal(miss.ok, false);
+
+  clearWorkingSessionParksForTests();
+  clearRegisteredIdlePoolsForTests();
+  const pool2 = new SubagentIdlePool(
+    { maxIdle: 4, ttlMs: 60_000, maxPackages: 4 },
+    undefined,
+    "c-rst-w",
+  );
+  const resetH = idleHandle("sub_rst", "http://t/rst");
+  pool2.park(resetH);
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-rst-w",
+      expertId: "exp",
+      runtime: runtimeWithPool(pool2),
+    }),
+  );
+  const rst = await resetWorkingSessionMemory("c-rst-w", "exp");
+  assert.equal(rst.ok, true);
+  assert.equal(pool2.size, 0, "Reset disposes idle Workers");
+  assert.equal((resetH as { isDisposed: () => boolean }).isDisposed(), true);
+  pool2.park(idleHandle("sub_after", "http://t/after"));
+  assert.equal(pool2.size, 1, "same pool object still parks after Reset");
+
+  clearWorkingSessionParksForTests();
+  clearRegisteredIdlePoolsForTests();
+  const pool3 = new SubagentIdlePool(
+    { maxIdle: 4, ttlMs: 60_000, maxPackages: 4 },
+    undefined,
+    "c-drop",
+  );
+  pool3.park(idleHandle("sub_drop", "http://t/drop"));
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-drop",
+      expertId: "exp",
+      runtime: runtimeWithPool(pool3),
+    }),
+  );
+  await dropParkedSession("c-drop", "exp");
+  assert.equal(pool3.size, 0, "dropParkedSession disposeAll idle Workers");
+
+  clearWorkingSessionParksForTests();
+  clearRegisteredIdlePoolsForTests();
 }
 
 clearWorkingSessionParksForTests();

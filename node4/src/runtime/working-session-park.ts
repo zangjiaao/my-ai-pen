@@ -94,7 +94,32 @@ const pendingDisposeCases = new Set<string>();
  */
 const disposedTodoSnapshots = new Map<string, ReturnType<TodoStore["snapshot"]>>();
 
-/** Participant Session key: conversation_id + expert_id (fallback conversation alone). */
+/**
+ * Captain Session death: idle Workers go with the Captain.
+ * Reset keeps the pool object registered so later parks still receive operator End.
+ */
+async function teardownParkedCaptainResources(
+  entry: {
+    dispose: () => void | Promise<void>;
+    runtime?: ToolRuntime;
+  },
+  options?: { unregisterPool?: boolean },
+): Promise<void> {
+  const pool = entry.runtime?.lifecycle?.subagentIdlePool;
+  if (pool?.disposeAll) {
+    try {
+      await pool.disposeAll({ unregister: options?.unregisterPool !== false });
+    } catch {
+      /* best-effort */
+    }
+  }
+  try {
+    await Promise.resolve(entry.dispose());
+  } catch {
+    /* ignore */
+  }
+}
+
 export function parkSessionKey(
   conversationId: string,
   expertId?: string | null,
@@ -351,11 +376,7 @@ export function applyCaptainEndDisposition(options: {
       options.entry.todo,
     );
   }
-  try {
-    void Promise.resolve(options.entry.dispose());
-  } catch {
-    /* ignore */
-  }
+  void teardownParkedCaptainResources(options.entry).catch(() => {});
   // Sticky pen-sandbox rm is owned solely by disposeWorkingSession / ForCase
   // (awaited single fan-in) — not fire-and-forget here (review: double-rm race).
   // Clear Session-key pending always after force/explicit dispose.
@@ -396,7 +417,7 @@ export function takeParkedSession(
   const ttlMs = options?.ttlMs ?? DEFAULT_PARK_TTL_MS;
   if (isParkExpired(entry, now, ttlMs)) {
     parks.delete(key);
-    void Promise.resolve(entry.dispose()).catch(() => {});
+    void teardownParkedCaptainResources(entry).catch(() => {});
     return { ok: false, reason: "ttl_expired" };
   }
   parks.delete(key);
@@ -413,11 +434,7 @@ export async function dropParkedSession(
   const entry = parks.get(key);
   if (!entry) return false;
   parks.delete(key);
-  try {
-    await Promise.resolve(entry.dispose());
-  } catch {
-    /* ignore */
-  }
+  await teardownParkedCaptainResources(entry);
   return true;
 }
 
@@ -540,11 +557,7 @@ export async function disposeWorkingSession(
   } catch {
     openTodos = [];
   }
-  try {
-    await Promise.resolve(entry.dispose());
-  } catch {
-    /* ignore */
-  }
+  await teardownParkedCaptainResources(entry);
   // Spec #429: Session Delete → rm sticky pen-sandbox for this seat.
   await disposeBrowserSandboxForSeat(c, e).catch(() => {});
   // Prefer live park snapshot; drop any stale stash for this key.
@@ -573,11 +586,7 @@ export async function disposeWorkingSessionsForCase(
     if (!entry) continue;
     parks.delete(key);
     stashDisposedTodos(entry.conversationId, entry.expertId, entry.todo);
-    try {
-      await Promise.resolve(entry.dispose());
-    } catch {
-      /* ignore */
-    }
+    await teardownParkedCaptainResources(entry);
   }
   // Spec #429: Case close → rm all sticky pen-sandboxes under conversation.
   await disposeBrowserSandboxForCase(c).catch(() => {});
@@ -605,13 +614,9 @@ export async function resetWorkingSessionMemory(
   } catch {
     openTodoCount = 0;
   }
-  // Dispose the live pi-agent-core instance (abort + Agent.reset + clear queues).
-  // Single teardown path — wrapAgentAsSession.dispose already includes reset().
-  try {
-    await Promise.resolve(entry.dispose());
-  } catch {
-    /* ignore */
-  }
+  // Dispose the live pi-agent-core instance (abort + Agent.reset + clear queues)
+  // and idle Workers. Keep the pool object registered for the next Agent.
+  await teardownParkedCaptainResources(entry, { unregisterPool: false });
   // New pi Agent identity for reseed (like SessionManager.newSession minting a new id).
   const nextAgentSessionId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -656,7 +661,7 @@ export function parkNeedsAgentReseed(entry: ParkedWorkingRuntime): boolean {
 
 export function clearWorkingSessionParksForTests(): void {
   for (const entry of parks.values()) {
-    void Promise.resolve(entry.dispose()).catch(() => {});
+    void teardownParkedCaptainResources(entry).catch(() => {});
   }
   parks.clear();
   clearPendingDisposeForTests();

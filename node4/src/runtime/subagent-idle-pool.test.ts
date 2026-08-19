@@ -240,4 +240,17 @@ assert.equal(
   assert.equal((victim as any).isDisposed(), true);
 }
 
+// disposeAll({ unregister: false }) keeps operator End working on the same pool object.
+{
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-keep");
+  pool.park(fakeHandle("old", "p"));
+  await pool.disposeAll({ unregister: false });
+  assert.equal(pool.size, 0);
+  const next = fakeHandle("new", "p");
+  pool.park(next);
+  assert.equal(await releaseWorkerById("new", "case-keep"), true);
+  assert.equal((next as any).isDisposed(), true);
+}
+
 console.log("subagent-idle-pool.test.ts: ok");
