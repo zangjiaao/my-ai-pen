@@ -47,7 +47,7 @@ import {
   bumpPackageAttempt,
   ensureProcessQuality,
 } from "../runtime/package-honesty-host.js";
-import { ingestPackageCandidatesDetailed } from "../runtime/finding-store.js";
+import type { FindingStore } from "../runtime/finding-store.js";
 import { applyPriorAvoidOnPackage } from "../runtime/prior-seed.js";
 import {
   packageItemSchema,
@@ -56,6 +56,17 @@ import {
   type ResolvedPackage,
 } from "./subagent-package.js";
 import { dirname } from "node:path";
+
+/**
+ * Spec #493: Worker return path must not auto-ingest salvage/file candidates.
+ * Main books via finding / surface after reading the oral report.
+ */
+export function ingestWorkerReturnCandidates(
+  _store: FindingStore | null | undefined,
+  _candidates: unknown[] | undefined,
+): { ids: string[]; skipped: true } {
+  return { ids: [], skipped: true };
+}
 
 export type SubagentPackageResult = {
   ok: boolean;
@@ -67,6 +78,8 @@ export type SubagentPackageResult = {
   node_type?: string;
   skill_id?: string;
   summary: string;
+  /** Spec #493: oral report (yield body or last assistant text). */
+  report?: string;
   candidates: SubagentCandidate[];
   surfaces: SubagentSurface[];
   acceptance: AcceptanceEvaluation;
@@ -402,6 +415,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           agent_id: one.agent_id,
           worker_status: one.worker_status,
           summary: one.summary,
+          report: one.report || one.summary,
           node_type: one.node_type,
           skill_id: one.skill_id,
           structured: {
@@ -734,30 +748,14 @@ async function runSubagentPackage(
     // Spec #371: SQLite is coverage SoT; legacy JSON only when sqlite missing (tests).
     const sqlite = runtime.surfaceSqlite;
     const legacy = runtime.surfaceLedger;
+    // Spec #493: do not upsert return-blob surfaces[] or mark probed from return candidates.
+    // Worker may still fill the ledger via the surface tool during the session.
     if (sqlite) {
       await sqlite.open().catch(() => {});
-      if (structured.surfaces?.length) {
-        await sqlite.upsertFromRecon(structured.surfaces, {
-          source_subagent_id: result.subagentId,
-        });
-      }
-      const candLocs = structured.candidates
-        .map((c) => c.location)
-        .filter((x): x is string => Boolean(x && String(x).trim()));
-      if (candLocs.length) await sqlite.markProbed(candLocs);
       if (nt && SURFACE_CONSUMER_NODES.has(nt) && handoff.handoff.target) {
         await sqlite.markInProbe([handoff.handoff.target]);
       }
     } else if (legacy) {
-      if (structured.surfaces?.length) {
-        await legacy.upsertFromRecon(structured.surfaces, {
-          source_subagent_id: result.subagentId,
-        });
-      }
-      const candLocs = structured.candidates
-        .map((c) => c.location)
-        .filter((x): x is string => Boolean(x && String(x).trim()));
-      if (candLocs.length) await legacy.markProbed(candLocs);
       if (nt && SURFACE_CONSUMER_NODES.has(nt) && handoff.handoff.target) {
         await legacy.markInProbe([handoff.handoff.target]);
       }
@@ -863,28 +861,9 @@ async function runSubagentPackage(
       salvaged,
       subagentId: result.subagentId,
     });
-    // Upsert candidates into Finding Store (Store-first) + L0 Feedback (production path)
+    // Spec #493: Main books — do not auto-ingest Worker return candidates.
     const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
-    let severity_rejected: Array<{ title?: string; location?: string; reason: string }> = [];
-    if (structured.candidates?.length) {
-      const ing = ingestPackageCandidatesDetailed(fstore, structured.candidates, {
-        package_id: result.subagentId,
-        plan_node_id: pkg.plan_node_id,
-        stage_id: runtime.lifecycle.hardGraphRun?.stageId,
-        agent_id: agentId,
-        fallback_location: handoff.handoff.target,
-      });
-      severity_rejected = ing.rejected;
-      if (severity_rejected.length) {
-        acceptance.package_gaps = [
-          ...(acceptance.package_gaps || []),
-          ...severity_rejected.map(
-            (r) =>
-              `candidate rejected (${r.reason}): ${r.title || "?"} @ ${r.location || "?"} — set severity=critical|high|medium|low|info`,
-          ),
-        ];
-      }
-    }
+    ingestWorkerReturnCandidates(fstore, structured.candidates);
 
     // Spec #116 I0.1: count package attempts against plan_node_id budget
     bumpPackageAttempt(runtime, pkg.plan_node_id);
@@ -897,6 +876,7 @@ async function runSubagentPackage(
       node_type: nt,
       skill_id: skillId,
       summary: result.summary,
+      report: result.summary,
       candidates: structured.candidates,
       surfaces: structured.surfaces,
       acceptance,

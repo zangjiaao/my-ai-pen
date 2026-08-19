@@ -197,6 +197,10 @@ export type ToolRuntime = {
       workerOrdinal?: number;
     } | null;
     /**
+     * Spec #493: last Worker `yield` this package (child sessions only).
+     */
+    workerYield?: import("./runtime/worker-yield.js").WorkerYieldRecord;
+    /**
      * Optional pentest scenario Graph (Free vs Graph mode).
      * Set by session-runner when pack is pentest.
      */

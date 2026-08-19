@@ -42,10 +42,12 @@ const n3 = normalizeSubagentResult(null, "fallback summary");
 assert.equal(n3.summary, "fallback summary");
 assert.equal(n3.candidates.length, 0);
 
-assert.match(formatSubagentReturnContractPrompt(), /settlement\.json/);
-assert.match(formatSubagentReturnContractPrompt(), /Finding Store|host\/Store/i);
-assert.match(formatSubagentReturnContractPrompt(), /finding/);
-assert.match(formatSubagentReturnContractPrompt(), /non-empty/);
+const returnPrompt = formatSubagentReturnContractPrompt();
+assert.match(returnPrompt, /yield/);
+assert.match(returnPrompt, /last assistant/i);
+assert.match(returnPrompt, /finding/);
+assert.doesNotMatch(returnPrompt, /must write settlement\.json/i);
+assert.match(returnPrompt, /Do not write settlement\.json/);
 
 // Nested structured candidates (llm_session payload shape from lab)
 const nested = normalizeSubagentResult({

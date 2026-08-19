@@ -100,7 +100,7 @@
 - 平台 WebSocket：`task_assign` → 工具事件 / `vuln_found` / evidence → harness `task_complete`（产品路径实现见 `node4/`）。
 - Standalone CLI 便于 lab 调试（`node4` standalone）。
 - **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
-- 工具与循环语义遵循 `docs/specs/harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
+- 工具与循环语义遵循 `docs/specs/harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；Worker 另有 **yield** 回传，Main 登记；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
 - **Pentest Default free / Expert Graph：** 无 Graph 模板时为 free OMP；显式 `app_assessment`（产品 Expert Graph）走 Hard Graph runner（阶段 + fail-closed Feedback）。Soft 场景图产品模式已退役（#68 / #76）。见 `docs/specs/task-graph.md`。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
 - **Case 共享 evidence**：`task_assign.case_context` 含 findings + `evidence_snippets`（path/excerpt），供多专家接力（如 pentest 源码泄露 → code-audit）；实现见绑定候选的 booking / harness。
