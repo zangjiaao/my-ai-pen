@@ -1,8 +1,8 @@
 # Spec: LLM stream liveness + fail-closed incomplete streams
 
 **Status:** Implemented (product contract) — Runtime stream health + fail-closed incomplete/idle + diagnosis package; FE projects `llm_stalled`  
-**Tracker:** [#353](https://github.com/zangjiaao/my-ai-pen/issues/353)  
-**Decision source:** Live diagnosis of Case `6eb54137-6b8e-47b5-9548-1d7baedbb69d` — thinking done → ~16 min silence at `llm_waiting` → terminal `模型调用失败：Stream ended without finish_reason`; operator could not distinguish hang vs work; post-hoc forensics could not prove tool-arg vs empty stream vs proxy (observability blind zone).
+**Tracker:** [#353](https://github.com/zangjiaao/my-ai-pen/issues/353); idle-arm while siblings run: [#497](https://github.com/zangjiaao/my-ai-pen/issues/497)  
+**Decision source:** Live diagnosis of Case `6eb54137-6b8e-47b5-9548-1d7baedbb69d` — thinking done → ~16 min silence at `llm_waiting` → terminal `模型调用失败：Stream ended without finish_reason`; operator could not distinguish hang vs work; post-hoc forensics could not prove tool-arg vs empty stream vs proxy (observability blind zone). Case `2c0d58aa-…` (#497): first of several parallel `tool_execution_end` armed idle abort while a Worker package was still running → Main `Request was aborted` when tools finally returned.
 
 **Product path:** Node4 Graph × Pi + platform conversation UI (ADR 0001).  
 **Amends (thin):**  
@@ -101,7 +101,7 @@ Incident class: Case `6eb54137-…` (task `3917753b-…`): last progressive acti
 
 ## Implementation Decisions
 
-1. **Primary seam (S1) — LLM stream lifecycle:** Session/task-scoped stream health for the Main model turn: open → activity → stall → terminal (success | incomplete | aborted). Prefer extending the existing observability / agent-event bridge (tool_execution_end → llm_waiting path) rather than a second parallel kernel.  
+1. **Primary seam (S1) — LLM stream lifecycle:** Session/task-scoped stream health for the Main model turn: open → activity → stall → terminal (success | incomplete | aborted). Prefer extending the existing observability / agent-event bridge (`tool_execution_end` → `llm_waiting` path) rather than a second parallel kernel. **#497:** `tool_execution_end` opens health / emits `llm_waiting` only when in-flight tool count hits zero. Overlapping tools (e.g. fast `http` + long `subagent`) keep health **closed** (`tool_running`); stall and idle abort must not arm until the last sibling finishes. Sequential single-tool turns unchanged.  
 2. **Secondary seam (S2) — Diagnosis package on terminal LLM failure:** On `LlmTurnError` / incomplete-stream class failures, attach structured fields (see sketch) to the same user-visible failure path and to task/events diagnostics.  
 3. **Tertiary seam (S3) — UI projection:** Status/timeline project Runtime stall + failed states only; no FE-only “N seconds then guess stuck.”  
 4. **Stall threshold:** Default **45s** idle after last stream activity (`NODE4_LLM_STALL_MS`). Stall emits Runtime `agent_phase=llm_stalled` + `stream_health` snapshot + panel detail; it does not invent thinking prose or reseed #276 pending.  
@@ -120,8 +120,16 @@ Incident class: Case `6eb54137-…` (task `3917753b-…`): last progressive acti
 ```
 stream: closed | open | stalled | terminal
 
-on provider stream open:
+on provider stream open (turn_start, or last in-flight tool_execution_end):
   health = open; last_activity = now
+
+on tool_execution_start:
+  health = closed; in_flight += 1
+
+on tool_execution_end:
+  in_flight = max(0, in_flight - 1)
+  if in_flight == 0: open as provider stream wait
+  else: stay closed (siblings still executing)
 
 on provider chunk (any):
   last_activity = now
@@ -161,7 +169,7 @@ on stream end:
 
 | Seam | Example external behaviors |
 |------|----------------------------|
-| **S1** | After last activity + stall threshold → stall signal; activity resumes → stall clears; healthy multi-chunk turn → no stall. |
+| **S1** | After last activity + stall threshold → stall signal; activity resumes → stall clears; healthy multi-chunk turn → no stall. Overlapping tools: first end does not stall/abort; last end opens wait. |
 | **S2** | Incomplete stream end → user-visible LLM failure + diagnosis package fields present; idle abort → same channel with idle class. |
 | **S3** | Projection uses Runtime fields; no FE-only stall without Runtime frame. |
 
