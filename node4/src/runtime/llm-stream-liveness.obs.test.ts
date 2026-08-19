@@ -241,4 +241,80 @@ assert.match(
   /Stream ended without finish_reason/,
 );
 
+// --- S1: overlapping tools — first end must not arm idle abort (#497) ---
+
+{
+  let now = 60_000_000;
+  let aborted = false;
+  const health = new LlmStreamHealth({
+    stallThresholdMs: 2_000,
+    abortThresholdMs: 5_000,
+    now: () => now,
+  });
+  const platform = fakePlatform();
+  const ctx = makeCtx(platform, health);
+  const textStream = new PlatformTextStream(platform, ctx.task);
+  const throttle = new CheckpointThrottle();
+  const tick = () =>
+    applyStreamHealthTick(ctx, health, {
+      onIdleAbort: () => {
+        aborted = true;
+      },
+    });
+
+  await handleNode4SessionEvent(ctx, textStream, throttle, { type: "turn_start" });
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_start",
+    toolName: "http",
+    toolCallId: "http-1",
+  });
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_start",
+    toolName: "subagent",
+    toolCallId: "sub-1",
+  });
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_end",
+    toolName: "http",
+    toolCallId: "http-1",
+  });
+  assert.equal(health.state, "closed", "sibling still running — health stays closed");
+  assert.equal(ctx.counters.phase, "tool_running");
+  const waitingAfterFirstEnd = platform.messages.filter(
+    (m) => m.type === "status_update" && (m as { agent_phase?: string }).agent_phase === "llm_waiting",
+  );
+  assert.equal(waitingAfterFirstEnd.length, 1, "only turn_start opened llm_waiting so far");
+
+  now += 6_000;
+  assert.equal(await tick(), "ok", "idle abort must not fire while a sibling tool runs");
+  assert.equal(aborted, false);
+
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_end",
+    toolName: "subagent",
+    toolCallId: "sub-1",
+  });
+  assert.equal(health.state, "open", "last tool end re-enters model wait");
+  assert.equal(ctx.counters.phase, "llm_waiting");
+}
+
+// Sequential single tool still opens health on end (unchanged #353).
+{
+  const health = new LlmStreamHealth({ abortThresholdMs: null });
+  const platform = fakePlatform();
+  const ctx = makeCtx(platform, health);
+  const textStream = new PlatformTextStream(platform, ctx.task);
+  const throttle = new CheckpointThrottle();
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_start",
+    toolName: "http",
+  });
+  await handleNode4SessionEvent(ctx, textStream, throttle, {
+    type: "tool_execution_end",
+    toolName: "http",
+  });
+  assert.equal(health.state, "open");
+  assert.equal(ctx.counters.phase, "llm_waiting");
+}
+
 console.log("llm-stream-liveness.obs.test.ts: ok");

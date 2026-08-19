@@ -45,6 +45,11 @@ export type ObservabilityContext = {
     toolCallCount: number;
     activeTool?: string;
     phase: string;
+    /**
+     * Overlapping `tool_execution_*` for this Main turn.
+     * Spec #497: stream health / idle abort arm only when this hits 0.
+     */
+    toolsInFlight?: number;
   };
   /**
    * Spec #353: session-scoped LLM stream health (Runtime SoT).
@@ -773,6 +778,7 @@ export async function handleNode4SessionEvent(
   if (event.type === "tool_execution_start") {
     // Spec #353: tool execution is not an LLM stream wait — close health watch.
     health?.close();
+    ctx.counters.toolsInFlight = (ctx.counters.toolsInFlight ?? 0) + 1;
     ctx.counters.toolCallCount += 1;
     ctx.counters.activeTool = String(event.toolName || event.tool_name || "tool");
     ctx.counters.phase = "tool_running";
@@ -798,32 +804,39 @@ export async function handleNode4SessionEvent(
   }
 
   if (event.type === "tool_execution_end") {
-    // Spec #353: re-enter model wait — open stream health (S1).
-    health?.open();
-    ctx.counters.phase = "llm_waiting";
-    ctx.counters.activeTool = undefined;
-    // Clear active tool; lastTool is retained for "分析…结果" detail.
-    ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
+    ctx.counters.toolsInFlight = Math.max(0, (ctx.counters.toolsInFlight ?? 0) - 1);
     panelChanged = true;
-    await ctx.platform.send({
-      type: "status_update",
-      conversation_id: ctx.task.conversationId,
-      task_id: ctx.task.taskId,
-      // User-visible (not opaque llm_waiting token) so re-wait / reattempt is scannable.
-      message: "正在请求模型…",
-      active_tool: "",
-      agent_phase: "llm_waiting",
-      current_detail: ctx.panel.list()[0]?.current_detail,
-      status: "running",
-      stream_health: health?.snapshot(),
-      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-      panel_agents: ctx.panel.list(),
-    } as PlatformMessage);
-    // Spec #305: textStream.handle(tool_execution_end) opens T1 empty running thinking
-    // so chat is not silent during llm_waiting after tools (before thinking_* tokens).
+    if ((ctx.counters.toolsInFlight ?? 0) > 0) {
+      // Spec #497: sibling tools still running — do not arm stall / idle abort.
+      ctx.counters.phase = "tool_running";
+    } else {
+      // Spec #353: last in-flight tool done — re-enter model wait (S1).
+      health?.open();
+      ctx.counters.phase = "llm_waiting";
+      ctx.counters.activeTool = undefined;
+      // Clear active tool; lastTool is retained for "分析…结果" detail.
+      ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
+      await ctx.platform.send({
+        type: "status_update",
+        conversation_id: ctx.task.conversationId,
+        task_id: ctx.task.taskId,
+        // User-visible (not opaque llm_waiting token) so re-wait / reattempt is scannable.
+        message: "正在请求模型…",
+        active_tool: "",
+        agent_phase: "llm_waiting",
+        current_detail: ctx.panel.list()[0]?.current_detail,
+        status: "running",
+        stream_health: health?.snapshot(),
+        llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+        panel_agents: ctx.panel.list(),
+      } as PlatformMessage);
+      // Spec #305: textStream.handle(tool_execution_end) opens T1 empty running thinking
+      // so chat is not silent during llm_waiting after tools (before thinking_* tokens).
+    }
   }
 
   if (event.type === "turn_start") {
+    ctx.counters.toolsInFlight = 0;
     health?.open();
     ctx.counters.phase = "llm_waiting";
     ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });

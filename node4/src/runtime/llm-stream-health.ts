@@ -196,7 +196,7 @@ export class LlmStreamHealth {
   }
 
   /**
-   * Provider stream / model turn open (turn_start, tool_execution_end → llm_waiting).
+   * Provider stream / model turn open (turn_start, last in-flight tool_execution_end → llm_waiting).
    * Re-arms after a prior terminal so outer continues can track the next stream.
    * Mid-turn re-open (after tools) keeps cumulative counters for diagnosis.
    */
