@@ -445,11 +445,11 @@ export function buildParentObservationBlob(structured: SubagentStructuredResult)
 export function formatSubagentReturnContractPrompt(): string {
   return [
     "## Return contract (Spec #493 — yield / last-turn report)",
-    "When this_turn_goal is done or blocked, submit the report with the Worker-only `yield` tool:",
-    "- Success: yield({ result: { data: <markdown or object> } })",
-    "- Omit data after you already wrote the report in chat: yield({ result: {} }) — host uses your last assistant message.",
-    "- Failure: yield({ result: { error: \"what blocked you\" } })",
-    "If you stop without yield, the host still uses your last non-empty assistant message as the report.",
+    "Main receives exactly one report body: the assistant text in the same turn as yield.",
+    "When this_turn_goal is done or blocked, write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield.",
+    "Never set result.data. If data is set, it replaces the chat report — a short status or \"see above\" means Main never sees the excerpt.",
+    "Failure: yield({ result: { error: \"what blocked you\" } }).",
+    "If you stop without yield, the host still uses your last non-empty assistant message.",
     "Do not write settlement.json or result.json as the return channel. Missing those files does not fail the package.",
     "Do not invent booked findings. Parent (Main) books via finding / surface after reading your report. You never finding(confirm).",
     "Prefer session/http; re-login only if seeded cookies fail. Never call subagent.",

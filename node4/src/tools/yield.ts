@@ -26,19 +26,30 @@ export function createYieldTool(runtime: ToolRuntime): AgentTool<any> {
     name: "yield",
     label: "Submit Result",
     description: [
-      "Submit this package's result to the parent. Omit data to use your last assistant message as the report.",
-      "Success: yield({ result: { data: <markdown or object> } }) or yield({ result: {} }) after you already wrote the report in chat.",
+      "Submit this package's result to the parent.",
+      "Write the complete report in this assistant turn, then yield({ result: {} }) with no data — Main uses that same-turn text. Do not write another message after yield.",
+      "Never set result.data. If data is set it replaces the chat report; a short status or \"see above\" hides the excerpt from Main.",
       "Failure: yield({ result: { error: \"what blocked you\" } }).",
       "Do not write settlement.json / result.json as the return channel. Parent books findings — you never finding(confirm).",
     ].join(" "),
     parameters: Type.Object({
       result: Type.Optional(
         Type.Object({
-          data: Type.Optional(Type.Unknown()),
+          data: Type.Optional(
+            Type.Unknown({
+              description:
+                "Do not set. If set, this replaces the last assistant message as the only report Main sees.",
+            }),
+          ),
           error: Type.Optional(Type.String()),
         }),
       ),
-      data: Type.Optional(Type.Unknown()),
+      data: Type.Optional(
+        Type.Unknown({
+          description:
+            "Do not set. If set, this replaces the last assistant message as the only report Main sees.",
+        }),
+      ),
       error: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: any) {
@@ -56,8 +67,8 @@ export function createYieldTool(runtime: ToolRuntime): AgentTool<any> {
           record.status === "error"
             ? "Host will mark this package failed and pass the error to Main."
             : record.useLastTurn
-              ? "Host will use your last assistant message as the report to Main."
-              : "Host will pass this yield payload to Main. Stop unless more work remains.",
+              ? "Host will use the assistant text from this yield turn as the report to Main. Do not write another message."
+              : "Host will pass this yield payload to Main as the only report (it replaces the chat text). Stop unless more work remains.",
       });
     },
   };

@@ -64,6 +64,16 @@ function runtime(depth: number): ToolRuntime {
   assert.equal(rt.lifecycle.workerYield?.error, "blocked");
 }
 
+{
+  const tool = createYieldTool(runtime(1));
+  assert.match(tool.description, /yield\(\{ result: \{\} \}\)/);
+  assert.match(tool.description, /Do not write another message after yield/);
+  assert.doesNotMatch(
+    tool.description,
+    /Success: yield\(\{ result: \{ data:/,
+  );
+}
+
 assert.equal(typeof ALL_NODE4_TOOL_FACTORIES.yield, "function");
 assert.ok(SUBAGENT_CHILD_TOOL_NAMES.includes("yield"));
 assert.ok(!(NODE4_TOOL_NAMES as readonly string[]).includes("yield"), "Main bare pack has no yield");

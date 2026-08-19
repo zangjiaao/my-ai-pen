@@ -27,9 +27,38 @@ export type WorkerHarvest = {
   salvaged: false;
 };
 
+function isYieldToolCall(item: unknown): boolean {
+  if (!item || typeof item !== "object") return false;
+  const rec = item as { type?: string; name?: string };
+  const t = String(rec.type || "");
+  if (t !== "toolCall" && t !== "tool_use" && t !== "toolcall") return false;
+  return String(rec.name || "") === "yield";
+}
+
+function messageHasYieldToolCall(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") return false;
+  const content = (msg as { content?: unknown }).content;
+  return Array.isArray(content) && content.some(isYieldToolCall);
+}
+
+/**
+ * Oral report for yield({ result: {} }) is the assistant text on the yield turn.
+ * Ignore post-yield closings ("see above") — they are not the report body.
+ * Stop without yield: last non-empty assistant text.
+ */
 export function lastAssistantTextFromMessages(messages: readonly unknown[] | undefined | null): string {
   if (!Array.isArray(messages)) return "";
+  let end = messages.length - 1;
   for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    if (String((msg as { role?: string }).role || "") !== "assistant") continue;
+    if (messageHasYieldToolCall(msg)) {
+      end = i;
+      break;
+    }
+  }
+  for (let i = end; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     if (String((msg as { role?: string }).role || "") !== "assistant") continue;

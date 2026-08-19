@@ -19,6 +19,33 @@ assert.equal(
   "**pong**",
 );
 
+assert.equal(
+  lastAssistantTextFromMessages([
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "# SPCX OHLCV\n| 2026-08-18 | 143.34 |" },
+        { type: "toolCall", id: "y1", name: "yield", arguments: { result: {} } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "yield",
+      content: [{ type: "text", text: '{"ok":true,"use_last_turn":true}' }],
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "任务已完成并交付。原始响应文件均已在上方报告中列出。",
+        },
+      ],
+    },
+  ]),
+  "# SPCX OHLCV\n| 2026-08-18 | 143.34 |",
+);
+
 assert.equal(formatYieldData({ summary: "got pong" }), "got pong");
 assert.match(formatYieldData({ reply: "pong" }), /pong/);
 

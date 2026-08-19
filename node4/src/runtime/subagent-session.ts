@@ -184,14 +184,14 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
       "Prefer session/http over browser unless DOM/JS interaction is required.",
       "If session cookies were seeded from parent, try them first — re-login only when auth fails.",
       "Write process facts with fact(upsert) when cognition is confirmed.",
-      "When done or blocked, yield the report (or stop after writing it in chat). Do not write settlement.json as the return channel.",
+      "When done or blocked, write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
       "Parent books findings — you never finding(confirm).",
       "Never call subagent. Never book product findings (no finding tool).",
     ],
     toolNames: [...SUBAGENT_CHILD_TOOL_NAMES],
     bookingMode: "none",
     settlementNote:
-      "Child yields or leaves a last-turn report; Main books. Missing settlement files do not fail the package (Spec #493).",
+      "Child writes the complete report in chat then yield({ result: {} }); host uses that yield-turn text (not a later closing). Stop without yield still uses last-turn. Main books. Missing settlement files do not fail the package (Spec #493).",
     skillIds: skillIds?.length ? skillIds : undefined,
     skillsRoot,
   };
@@ -359,7 +359,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
           "Hard boundaries for THIS package:",
           "- this_turn_goal is the ONLY objective; ignore prior candidates/deadends unless listed in already_done.",
           "- Do not re-probe orthogonal paths; stay on target.",
-          "- Yield this package's report (or stop after writing it in chat). Do not write settlement.json as the return channel.",
+          "- Write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
           "- Prefer session cookies already present; re-login only on auth failure.",
           "",
         ].join("\n")
@@ -377,7 +377,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
     formatSubagentReturnContractPrompt(),
     "",
     "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
-    "Before you stop: yield the report or leave a last assistant message. Do not write settlement.json as the return channel.",
+    "Before you stop: write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
   ];
   return parts.filter(Boolean).join("\n");
 }

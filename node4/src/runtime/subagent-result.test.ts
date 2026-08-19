@@ -43,9 +43,15 @@ assert.equal(n3.summary, "fallback summary");
 assert.equal(n3.candidates.length, 0);
 
 const returnPrompt = formatSubagentReturnContractPrompt();
-assert.match(returnPrompt, /yield/);
-assert.match(returnPrompt, /last assistant/i);
+assert.match(returnPrompt, /yield\(\{ result: \{\} \}\)/);
+assert.match(returnPrompt, /last non-empty assistant/i);
+assert.match(returnPrompt, /exactly one report body/);
+assert.match(returnPrompt, /same turn as yield/);
+assert.match(returnPrompt, /Do not write another message after yield/);
+assert.match(returnPrompt, /Never set result\.data/);
 assert.match(returnPrompt, /finding/);
+assert.doesNotMatch(returnPrompt, /Success: yield\(\{ result: \{ data:/);
+assert.doesNotMatch(returnPrompt, /or yield\(\{ result: \{\} \}\) after you already wrote/);
 assert.doesNotMatch(returnPrompt, /must write settlement\.json/i);
 assert.match(returnPrompt, /Do not write settlement\.json/);
 
