@@ -19,9 +19,9 @@ export type PackageAttemptRecord = {
   /** Attempts used so far (optional for settlement honesty checks). */
   attempts?: number;
   terminal: PackageAttemptTerminal;
-  /** True when structured result was salvage-only (no valid child result.json). */
+  /** True when leftover settlement/result files were salvaged (evidence only; Spec #493). */
   salvaged?: boolean;
-  /** Valid structured settlement present. */
+  /** Valid yield or last-turn report present. */
   has_valid_result?: boolean;
 };
 
@@ -33,17 +33,17 @@ export function mayRetryPackage(attemptsUsed: number): boolean {
 }
 
 /**
- * I0.4 — package success requires valid structured settlement; salvage ≠ success.
+ * I0.4 (Spec #493) — package success is yield or last-turn report.
+ * Salvaged settlement.json / result.json files are evidence only and do not fail the package.
  */
 export function isPackageSuccess(input: {
   ok?: boolean;
   salvaged?: boolean;
   has_valid_result?: boolean;
 }): boolean {
-  if (input.salvaged) return false;
+  void input.salvaged;
   if (input.has_valid_result === false) return false;
   if (input.ok === false) return false;
-  // After ok≠false: success when valid structured result present, else trust ok flag
   if (input.has_valid_result === true) return true;
   return Boolean(input.ok);
 }

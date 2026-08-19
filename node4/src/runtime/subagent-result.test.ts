@@ -42,10 +42,18 @@ const n3 = normalizeSubagentResult(null, "fallback summary");
 assert.equal(n3.summary, "fallback summary");
 assert.equal(n3.candidates.length, 0);
 
-assert.match(formatSubagentReturnContractPrompt(), /settlement\.json/);
-assert.match(formatSubagentReturnContractPrompt(), /Finding Store|host\/Store/i);
-assert.match(formatSubagentReturnContractPrompt(), /finding/);
-assert.match(formatSubagentReturnContractPrompt(), /non-empty/);
+const returnPrompt = formatSubagentReturnContractPrompt();
+assert.match(returnPrompt, /yield\(\{ result: \{\} \}\)/);
+assert.match(returnPrompt, /last non-empty assistant/i);
+assert.match(returnPrompt, /exactly one report body/);
+assert.match(returnPrompt, /same turn as yield/);
+assert.match(returnPrompt, /Do not write another message after yield/);
+assert.match(returnPrompt, /Never set result\.data/);
+assert.match(returnPrompt, /finding/);
+assert.doesNotMatch(returnPrompt, /Success: yield\(\{ result: \{ data:/);
+assert.doesNotMatch(returnPrompt, /or yield\(\{ result: \{\} \}\) after you already wrote/);
+assert.doesNotMatch(returnPrompt, /must write settlement\.json/i);
+assert.match(returnPrompt, /Do not write settlement\.json/);
 
 // Nested structured candidates (llm_session payload shape from lab)
 const nested = normalizeSubagentResult({
@@ -205,5 +213,14 @@ assert.ok(!surfaceOk.package_gaps.some((g) => /surfaces\[\]/.test(g)));
 
 const classEmpty = evaluateCandidatesForAcceptance([], { nodeType: "class_probe" });
 assert.ok(classEmpty.package_gaps.some((g) => /candidates\[\]/.test(g)));
+
+const oralClass = evaluateCandidatesForAcceptance([], { nodeType: "class_probe", oralReturn: true });
+assert.equal(oralClass.package_gaps.length, 0, "oral return must not flag empty candidates[]");
+assert.doesNotMatch(oralClass.hint, /re-dispatch requiring candidates/);
+assert.match(oralClass.hint, /oral report/);
+
+const oralSurface = evaluateCandidatesForAcceptance([], { nodeType: "surface", oralReturn: true });
+assert.ok(!oralSurface.package_gaps.some((g) => /surfaces\[\]/.test(g)));
+assert.match(oralSurface.hint, /oral report/);
 
 console.log("subagent-result.test.ts: ok");

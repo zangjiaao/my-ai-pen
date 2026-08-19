@@ -299,6 +299,11 @@ export function evaluateCandidatesForAcceptance(
     usedCommandOnly?: boolean;
     nodeType?: string;
     surfaces?: SubagentSurface[];
+    /**
+     * Spec #493 LLM packages: return body is yield/last-turn text, not
+     * candidates[] / surfaces[]. Do not steer Main to re-dispatch for empty arrays.
+     */
+    oralReturn?: boolean;
   },
 ): AcceptanceEvaluation {
   const ready_to_book: AcceptanceReadyItem[] = [];
@@ -309,6 +314,7 @@ export function evaluateCandidatesForAcceptance(
     .trim()
     .toLowerCase();
   const surfaces_accepted = surfaces.length;
+  const oralReturn = options?.oralReturn === true;
 
   if (options?.usedCommandOnly) {
     package_gaps.push(
@@ -316,15 +322,15 @@ export function evaluateCandidatesForAcceptance(
     );
   }
 
-  // Surface/recon packages must return structured surfaces[] from live recon.
-  if ((nodeType === "surface" || nodeType === "recon") && surfaces.length === 0) {
+  // Structured-list contract only when the return blob is still the channel.
+  if (!oralReturn && (nodeType === "surface" || nodeType === "recon") && surfaces.length === 0) {
     package_gaps.push(
       "node_type=surface returned no surfaces[] — re-dispatch requiring surfaces with concrete location (URL/path) from live recon (menu/forms/APIs you observed). Do not invent modules.",
     );
   }
 
   if (!candidates.length) {
-    if (!options?.usedCommandOnly) {
+    if (!oralReturn && !options?.usedCommandOnly) {
       // Surface-only packages may legitimately have zero vuln candidates.
       if (!(nodeType === "surface" || nodeType === "recon") || surfaces.length === 0) {
         if (!(nodeType === "surface" || nodeType === "recon")) {
@@ -334,13 +340,19 @@ export function evaluateCandidatesForAcceptance(
         }
       }
     }
-    const hintParts = [
-      "No ready_to_book candidates.",
-      surfaces_accepted
-        ? `Recorded ${surfaces_accepted} surface(s) into the work queue — dispatch class_probe (etc.) on open paths.`
-        : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt (poc_hint optional when proof is verbatim).",
-      "Do not invent proof files. Do not re-probe on Main when Graph hard.",
-    ];
+    const hintParts = oralReturn
+      ? [
+          "Return channel is the Worker oral report (yield / last-turn).",
+          "Main books with finding / surface from that report and the live ledger.",
+          "Empty candidates[] / surfaces[] on this tool result is expected — do not re-dispatch solely to fill those arrays.",
+        ]
+      : [
+          "No ready_to_book candidates.",
+          surfaces_accepted
+            ? `Recorded ${surfaces_accepted} surface(s) into the work queue — dispatch class_probe (etc.) on open paths.`
+            : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt (poc_hint optional when proof is verbatim).",
+          "Do not invent proof files. Do not re-probe on Main when Graph hard.",
+        ];
     if (package_gaps.length) hintParts.push(`Package: ${package_gaps.join("; ")}`);
     return {
       ready_to_book,
@@ -444,25 +456,14 @@ export function buildParentObservationBlob(structured: SubagentStructuredResult)
 /** Instructions embedded in the child worker prompt (childRolePack already bans nested sub / finding book). */
 export function formatSubagentReturnContractPrompt(): string {
   return [
-    "## Return contract (Spec #125 — host/Store settlement)",
-    "When this_turn_goal is done or blocked, emit **intentional structured settlement** so the host can ingest surfaces/candidates into Finding Store.",
-    "Optional on-disk artifact (not a booking or stage-Feedback channel): write `./settlement.json` with:",
-    "```json",
-    '{',
-    '  "ok": true,',
-    '  "summary": "one paragraph",',
-    '  "surfaces": [{ "location": "URL/path YOU observed", "kind": "form|api|upload|page|other", "params": ["id"], "auth": "none|session|basic" }],',
-    '  "candidates": [{ "title": "...", "location": "URL/path", "claim": "impact", "severity": "critical|high|medium|low|info", "proof_excerpt": "VERBATIM tool quote (~32+ chars)", "poc_hint": "steps + observed result" }],',
-    '  "facts": [{ "key": "optional", "summary": "cognition" }],',
-    '  "deadends": ["vector exhausted because ..."],',
-    '  "artifacts": ["relative paths"]',
-    "}",
-    "```",
-    "- Package **success** = valid intentional structured settlement into host/Finding Store — not the mere presence of a file name.",
-    "- Missing intentional settlement may salvage tool-output for **evidence only**; salvage ≠ package success and cannot L2-done package rows.",
-    "- Surface/recon: `surfaces` from **live** recon only — never invent modules.",
-    "- Any vuln claim → non-empty `candidates` with `location` + real `proof_excerpt` (not paraphrase-only).",
-    "- `poc_hint`: reproduce steps AND observed result. Parent books via finding(confirm, finding_id) after Store L0 — you never book.",
-    "- Prefer session/http; re-login only if seeded cookies fail. Never call subagent. Never invent booked findings.",
+    "## Return contract (Spec #493 — yield / last-turn report)",
+    "Main receives exactly one report body: the assistant text in the same turn as yield.",
+    "When this_turn_goal is done or blocked, write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield.",
+    "Never set result.data. If data is set, it replaces the chat report — a short status or \"see above\" means Main never sees the excerpt.",
+    "Failure: yield({ result: { error: \"what blocked you\" } }).",
+    "If you stop without yield, the host still uses your last non-empty assistant message.",
+    "Do not write settlement.json or result.json as the return channel. Missing those files does not fail the package.",
+    "Do not invent booked findings. Parent (Main) books via finding / surface after reading your report. You never finding(confirm).",
+    "Prefer session/http; re-login only if seeded cookies fail. Never call subagent.",
   ].join("\n");
 }

@@ -123,18 +123,46 @@ export function ChatComposerSkeleton() {
 export type ComposerSubmitKeyEvent = {
   key: string;
   shiftKey: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
   isComposing?: boolean;
   keyCode?: number;
 };
 
-/** Enter sends; Shift+Enter newlines; IME confirm / processing must not send. Spec #490. */
+function composerEnterIsIme(event: ComposerSubmitKeyEvent, composing: boolean): boolean {
+  return composing || event.isComposing === true || event.keyCode === 229;
+}
+
+/** Enter sends; Shift/⌘/Ctrl+Enter newlines; IME confirm / processing must not send. Spec #490. */
 export function shouldSubmitComposerOnEnter(
   event: ComposerSubmitKeyEvent,
   composing = false,
 ): boolean {
-  if (event.key !== "Enter" || event.shiftKey) return false;
-  if (composing || event.isComposing === true || event.keyCode === 229) return false;
+  if (event.key !== "Enter") return false;
+  if (event.shiftKey || event.metaKey || event.ctrlKey) return false;
+  if (composerEnterIsIme(event, composing)) return false;
   return true;
+}
+
+/** ⌘/Ctrl+Enter inserts a newline (Shift+Enter is native textarea). IME confirm must not insert. */
+export function shouldInsertComposerNewline(
+  event: ComposerSubmitKeyEvent,
+  composing = false,
+): boolean {
+  if (event.key !== "Enter") return false;
+  if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return false;
+  if (composerEnterIsIme(event, composing)) return false;
+  return true;
+}
+
+export function insertComposerNewlineAtCaret(
+  value: string,
+  start: number,
+  end: number,
+): { next: string; caret: number } {
+  const lo = Math.max(0, Math.min(start, value.length));
+  const hi = Math.max(lo, Math.min(end, value.length));
+  return { next: `${value.slice(0, lo)}\n${value.slice(hi)}`, caret: lo + 1 };
 }
 
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
@@ -418,25 +446,38 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
             onCompositionStart={beginImeComposition}
             onCompositionEnd={endImeCompositionSoon}
             onKeyDown={(e) => {
-              if (
-                shouldSubmitComposerOnEnter(
-                  {
-                    key: e.key,
-                    shiftKey: e.shiftKey,
-                    isComposing: e.nativeEvent.isComposing,
-                    keyCode: e.nativeEvent.keyCode,
-                  },
-                  imeComposingRef.current,
-                )
-              ) {
+              const keyEvent = {
+                key: e.key,
+                shiftKey: e.shiftKey,
+                metaKey: e.metaKey,
+                ctrlKey: e.ctrlKey,
+                isComposing: e.nativeEvent.isComposing,
+                keyCode: e.nativeEvent.keyCode,
+              };
+              const composing = imeComposingRef.current;
+              if (shouldSubmitComposerOnEnter(keyEvent, composing)) {
                 e.preventDefault();
                 submit();
+                return;
+              }
+              if (shouldInsertComposerNewline(keyEvent, composing)) {
+                e.preventDefault();
+                const el = e.currentTarget;
+                const { next, caret } = insertComposerNewlineAtCaret(
+                  el.value,
+                  el.selectionStart,
+                  el.selectionEnd,
+                );
+                commitTypedInput("ChatComposer", () => setInput(next));
+                requestAnimationFrame(() => {
+                  el.selectionStart = el.selectionEnd = caret;
+                });
               }
             }}
             rows={3}
             placeholder={
               activePartner
-                ? `向 ${activePartner.label || activePartner.name} 描述任务…（Shift+Enter 换行）`
+                ? `向 ${activePartner.label || activePartner.name} 描述任务…（Shift+Enter 或 ⌘/Ctrl+Enter 换行）`
                 : "请先在专家管理创建专家，或从下方选择对话对象…"
             }
             className={`relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent text-transparent caret-ink placeholder:text-ink-muted focus:outline-none ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}

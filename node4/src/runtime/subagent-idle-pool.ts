@@ -9,7 +9,8 @@
  * - maxIdle LRU release
  * - maxPackages → refuse re-park / release
  * - explicit release(agent_id)
- * - disposeAll on task end / abort
+ * - Session dispose (Case close / Session delete / Reset / expert transfer) — not Task end
+ * - operator End (`worker_release`)
  *
  * Disable: NODE4_SUBAGENT_IDLE=0.
  */
@@ -182,7 +183,7 @@ export function checkAffinity(
 }
 
 /**
- * In-memory worker registry for one parent task lifecycle.
+ * In-memory worker registry for one parent Session (parks across Task bursts).
  * Keyed by agentId (not pathKey).
  *
  * Spec #491: pools register globally so operator End can release idle *or* live
@@ -334,6 +335,7 @@ export class SubagentIdlePool {
     clearIdleTimer(handle);
     this.live.delete(id);
     this.byId.set(id, handle);
+    REGISTERED_POOLS.add(this);
     this.armIdleTimer(handle);
 
     while (this.byId.size > this.opts.maxIdle) {
@@ -422,13 +424,15 @@ export class SubagentIdlePool {
     return n;
   }
 
-  /** Dispose all idle workers (task end / abort). */
-  async disposeAll(): Promise<void> {
+  /** Dispose idle + live workers. Session teardown may unregister this pool. */
+  async disposeAll(options?: { unregister?: boolean }): Promise<void> {
     const ids = [...this.byId.keys()];
     const liveIds = [...this.live.keys()];
     await Promise.all([...ids, ...liveIds].map((id) => this.release(id)));
     this.pendingEnds.clear();
-    REGISTERED_POOLS.delete(this);
+    if (options?.unregister !== false) {
+      REGISTERED_POOLS.delete(this);
+    }
   }
 
   private armIdleTimer(handle: IdleSubagentHandle): void {
@@ -473,6 +477,7 @@ export function getOrCreateIdlePool(
       conversationId,
     );
   } else {
+    REGISTERED_POOLS.add(lifecycle.subagentIdlePool);
     if (lifecycle.panelAgents) {
       lifecycle.subagentIdlePool.bindPanel(lifecycle.panelAgents);
     }

@@ -10,7 +10,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  readFileInsideRoot,
   unlinkInsideRoot,
   writeFileInsideRoot,
 } from "./session-workspace.js";
@@ -30,7 +29,10 @@ import {
   type SubagentStructuredResult,
 } from "./subagent-result.js";
 import type { SubagentHandoffFields } from "./subagent-handoff.js";
-import { salvageSubagentResult } from "./subagent-salvage.js";
+import {
+  harvestWorkerReport,
+  lastAssistantTextFromMessages,
+} from "./worker-yield.js";
 import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
@@ -80,6 +82,7 @@ export const SUBAGENT_CHILD_TOOL_NAMES = [
   "fact",
   "surface",
   "skill",
+  "yield",
 ] as const;
 
 export type SubagentLlmSessionInput = {
@@ -181,40 +184,21 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
       "Prefer session/http over browser unless DOM/JS interaction is required.",
       "If session cookies were seeded from parent, try them first — re-login only when auth fails.",
       "Write process facts with fact(upsert) when cognition is confirmed.",
-      "When done or blocked, emit intentional structured settlement (optional ./settlement.json) per return contract, then stop (no tools).",
-      "Optional settlement file is not a booking channel — host/Finding Store settle the package (Spec #125).",
+      "When done or blocked, write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
+      "Parent books findings — you never finding(confirm).",
       "Never call subagent. Never book product findings (no finding tool).",
     ],
     toolNames: [...SUBAGENT_CHILD_TOOL_NAMES],
     bookingMode: "none",
     settlementNote:
-      "Child stops after intentional structured return; host settles into Finding Store. Salvage ≠ success.",
+      "Child writes the complete report in chat then yield({ result: {} }); host uses that yield-turn text (not a later closing). Stop without yield still uses last-turn. Main books. Missing settlement files do not fail the package (Spec #493).",
     skillIds: skillIds?.length ? skillIds : undefined,
     skillsRoot,
   };
 }
 
-/**
- * Intentional structured settlement files (Spec #125).
- * Prefer settlement.json; result.json accepted for legacy package artifacts only.
- * Neither is stage Feedback SoT — host/Finding Store settle the package.
- */
+/** Leftover settlement/result files are not the return channel (Spec #493). */
 const INTENTIONAL_STRUCTURED_FILES = ["settlement.json", "result.json"] as const;
-
-async function readIntentionalStructuredFile(
-  workDir: string,
-): Promise<unknown | undefined> {
-  for (const name of INTENTIONAL_STRUCTURED_FILES) {
-    try {
-      const raw = await readFileInsideRoot(join(workDir, name), workDir);
-      if (raw == null) continue;
-      return JSON.parse(raw);
-    } catch {
-      /* try next */
-    }
-  }
-  return undefined;
-}
 
 async function clearIntentionalStructuredFiles(workDir: string): Promise<void> {
   for (const name of INTENTIONAL_STRUCTURED_FILES) {
@@ -332,60 +316,38 @@ async function raceSessionPrompt(
 }
 
 async function collectStructuredResult(input: {
-  workDir: string;
-  handoff: SubagentHandoffFields;
-  toolsUsed: number;
   aborted: boolean;
+  timedOut?: boolean;
   promptError?: string;
-}): Promise<{ structured: SubagentStructuredResult; salvaged: boolean }> {
-  if (input.promptError && !input.aborted) {
-    const existing = await readIntentionalStructuredFile(input.workDir);
-    const structured = normalizeSubagentResult(
-      existing ?? {
-        ok: false,
-        summary: input.promptError,
-        deadends: ["session_error"],
-      },
-      input.promptError,
-    );
-    if (!existing) {
-      await writeFileInsideRoot(
-        join(input.workDir, "settlement.json"),
-        input.workDir,
-        JSON.stringify(structured, null, 2),
-      );
-    }
-    return { structured, salvaged: false };
-  }
-
-  // Intentional structured settlement (optional artifact — not business SoT file ritual).
-  const fileResult = await readIntentionalStructuredFile(input.workDir);
-  if (fileResult) {
-    return {
-      structured: normalizeSubagentResult(fileResult, input.handoff.this_turn_goal),
-      salvaged: false,
-    };
-  }
-
-  const structured = await salvageSubagentResult({
-    workDir: input.workDir,
-    handoff: input.handoff,
-    toolsUsed: input.toolsUsed,
+  workerYield?: import("./worker-yield.js").WorkerYieldRecord | null;
+  messages?: readonly unknown[] | null;
+}): Promise<{ structured: SubagentStructuredResult; salvaged: false; ok: boolean }> {
+  const harvest = harvestWorkerReport({
+    yield: input.workerYield,
+    lastAssistantText: lastAssistantTextFromMessages(input.messages),
     aborted: input.aborted,
-    fallbackSummary: input.aborted
-      ? "subagent aborted"
-      : input.toolsUsed > 0
-        ? "subagent finished without intentional structured settlement (salvage path)"
-        : "subagent stopped without tools or intentional structured settlement",
+    timedOut: input.timedOut,
+    promptError: input.promptError,
   });
-  // Salvage path always ≠ package success (even when no candidates were recovered).
-  const salvaged = true;
-  await writeFileInsideRoot(
-    join(input.workDir, "salvage-evidence.json"),
-    input.workDir,
-    JSON.stringify({ ...structured, salvaged: true }, null, 2),
+  const structured = normalizeSubagentResult(
+    {
+      ok: harvest.ok,
+      summary: harvest.summary,
+      candidates: [],
+      surfaces: [],
+      facts: [],
+      deadends: [],
+      artifacts: [],
+    },
+    harvest.summary,
   );
-  return { structured, salvaged };
+  structured.ok = harvest.ok;
+  structured.summary = harvest.summary;
+  return {
+    structured,
+    salvaged: false,
+    ok: isPackageSuccess(harvest),
+  };
 }
 
 function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boolean): string {
@@ -397,7 +359,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
           "Hard boundaries for THIS package:",
           "- this_turn_goal is the ONLY objective; ignore prior candidates/deadends unless listed in already_done.",
           "- Do not re-probe orthogonal paths; stay on target.",
-          "- Emit intentional structured settlement for THIS package only (prior package artifacts are obsolete).",
+          "- Write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
           "- Prefer session cookies already present; re-login only on auth failure.",
           "",
         ].join("\n")
@@ -415,7 +377,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
     formatSubagentReturnContractPrompt(),
     "",
     "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
-    "Before you stop: emit intentional structured settlement (surfaces/candidates as required) so host/Store can settle — optional ./settlement.json, not a booking channel.",
+    "Before you stop: write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -481,6 +443,9 @@ async function runWarmPackage(args: {
   warm.skillId = input.skillId || warm.skillId;
   warm.pathKey = pk || warm.pathKey;
   warm.agentId = agentId;
+  if (warm.childRuntime?.lifecycle) {
+    warm.childRuntime.lifecycle.workerYield = undefined;
+  }
 
   if (!(await pool.noteLive(warm))) {
     return releasedBeforePromptResult({
@@ -559,24 +524,18 @@ async function runWarmPackage(args: {
     }
   }
 
-  const { structured, salvaged } = await collectStructuredResult({
-    workDir,
-    handoff: input.handoff,
-    toolsUsed: warm.segmentCounter.tools,
+  const { structured, salvaged, ok } = await collectStructuredResult({
     aborted: race.aborted,
+    timedOut: race.timedOut,
     promptError: race.error,
+    workerYield: warm.childRuntime?.lifecycle.workerYield,
+    messages: (warm.session as { messages?: unknown[] }).messages,
   });
 
   const sessionPromote = await promoteChildSessionToParent(
     workDir,
     input.parent.sessionDir || input.parent.piDir,
   );
-  // Spec #116 I0.4: salvage ≠ package success
-  const ok = isPackageSuccess({
-    ok: structured.ok && !race.aborted && !race.timedOut,
-    salvaged,
-    has_valid_result: !salvaged && structured.ok,
-  });
 
   const deliveryStatus = mapDeliveryStatus({
     aborted: race.aborted,
@@ -859,24 +818,18 @@ async function runColdPackage(args: {
     }
   }
 
-  const { structured, salvaged } = await collectStructuredResult({
-    workDir,
-    handoff,
-    toolsUsed: segmentCounter.tools,
+  const { structured, salvaged, ok } = await collectStructuredResult({
     aborted: race.aborted,
+    timedOut: race.timedOut,
     promptError: race.error,
+    workerYield: childRuntime.lifecycle.workerYield,
+    messages: (session as { messages?: unknown[] }).messages,
   });
 
   const sessionPromote = await promoteChildSessionToParent(
     workDir,
     parent.sessionDir || parent.piDir,
   );
-  // Spec #116 I0.4: salvage ≠ package success
-  const ok = isPackageSuccess({
-    ok: structured.ok && !race.aborted && !race.timedOut,
-    salvaged,
-    has_valid_result: !salvaged && structured.ok,
-  });
 
   const deliveryStatus = mapDeliveryStatus({
     aborted: race.aborted,

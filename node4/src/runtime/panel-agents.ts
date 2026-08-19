@@ -76,6 +76,7 @@ export function humanizeToolName(tool: string): string {
     todo: "更新任务清单",
     skill: "加载技能",
     subagent: "启动子代理",
+    yield: "提交结果",
     goal: "更新目标",
     captcha: "处理验证码",
   };

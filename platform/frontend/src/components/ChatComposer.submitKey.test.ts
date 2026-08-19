@@ -1,12 +1,16 @@
 /**
- * Spec #490: composer Enter submits; IME confirm / Shift+Enter must not.
+ * Spec #490: composer Enter submits; IME confirm / Shift+Enter / ⌘·Ctrl+Enter must not.
  * Run: npx tsx src/components/ChatComposer.submitKey.test.ts  (from platform/frontend)
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { shouldSubmitComposerOnEnter } from "./ChatComposer.tsx";
+import {
+  insertComposerNewlineAtCaret,
+  shouldInsertComposerNewline,
+  shouldSubmitComposerOnEnter,
+} from "./ChatComposer.tsx";
 
 {
   assert.equal(
@@ -40,11 +44,55 @@ import { shouldSubmitComposerOnEnter } from "./ChatComposer.tsx";
     "Shift+Enter newlines",
   );
   assert.equal(
+    shouldSubmitComposerOnEnter({ key: "Enter", shiftKey: false, metaKey: true }),
+    false,
+    "⌘+Enter must not send",
+  );
+  assert.equal(
+    shouldSubmitComposerOnEnter({ key: "Enter", shiftKey: false, ctrlKey: true }),
+    false,
+    "Ctrl+Enter must not send",
+  );
+  assert.equal(
     shouldSubmitComposerOnEnter({ key: "a", shiftKey: false }),
     false,
     "non-Enter keys never submit",
   );
   console.log("ok: shouldSubmitComposerOnEnter");
+}
+
+{
+  assert.equal(
+    shouldInsertComposerNewline({ key: "Enter", shiftKey: false, metaKey: true }),
+    true,
+    "⌘+Enter inserts newline",
+  );
+  assert.equal(
+    shouldInsertComposerNewline({ key: "Enter", shiftKey: false, ctrlKey: true }),
+    true,
+    "Ctrl+Enter inserts newline",
+  );
+  assert.equal(
+    shouldInsertComposerNewline({ key: "Enter", shiftKey: true }),
+    false,
+    "Shift+Enter stays native textarea newline",
+  );
+  assert.equal(
+    shouldInsertComposerNewline({ key: "Enter", shiftKey: false }),
+    false,
+    "plain Enter does not insert via modifier path",
+  );
+  assert.equal(
+    shouldInsertComposerNewline({ key: "Enter", shiftKey: false, metaKey: true, isComposing: true }),
+    false,
+    "⌘+Enter during IME must not insert",
+  );
+  assert.equal(
+    insertComposerNewlineAtCaret("ab", 1, 1).next,
+    "a\nb",
+  );
+  assert.equal(insertComposerNewlineAtCaret("ab", 1, 1).caret, 2);
+  console.log("ok: shouldInsertComposerNewline");
 }
 
 {
@@ -54,6 +102,11 @@ import { shouldSubmitComposerOnEnter } from "./ChatComposer.tsx";
     src,
     /onKeyDown=\{\(e\) => \{[\s\S]*shouldSubmitComposerOnEnter\(/,
     "textarea onKeyDown must gate submit through shouldSubmitComposerOnEnter",
+  );
+  assert.match(
+    src,
+    /shouldInsertComposerNewline\(keyEvent, composing\)/,
+    "textarea onKeyDown must insert newline on ⌘/Ctrl+Enter",
   );
   assert.match(
     src,

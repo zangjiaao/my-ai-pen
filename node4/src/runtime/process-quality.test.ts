@@ -56,10 +56,11 @@ assert.equal(mayRetryPackage(0), true);
 assert.equal(mayRetryPackage(1), true);
 assert.equal(mayRetryPackage(2), false, "I0.1: 3rd attempt forbidden");
 
-// --- I0.4 salvage ≠ success ---
-assert.equal(isPackageSuccess({ ok: true, salvaged: true, has_valid_result: true }), false, "I0.4");
+// --- I0.4 salvaged files ≠ fail when a valid report is present (Spec #493) ---
+assert.equal(isPackageSuccess({ ok: true, salvaged: true, has_valid_result: true }), true, "I0.4");
 assert.equal(isPackageSuccess({ ok: true, salvaged: false, has_valid_result: true }), true, "I0.4");
 assert.equal(isPackageSuccess({ ok: false, salvaged: false, has_valid_result: false }), false, "I0.4");
+assert.equal(isPackageSuccess({ ok: true, salvaged: true, has_valid_result: false }), false, "I0.4: no report still fails");
 
 // --- I0.2–3 honest partial ---
 const honest = evaluateHonestPartial({
@@ -509,7 +510,11 @@ assert.match(appAssessment, /micro-spawn|plan_node_id/i, "I2.1");
 assert.doesNotMatch(appAssessment, /must spawn\s+\d+/i, "I2.3");
 
 const harness = readFileSync(join(repoRoot, "docs/specs/harness.md"), "utf8");
-assert.match(harness, /Salvage without valid result\.json|salvage.*≠|not count as package success/i, "I2 harness salvage law");
+assert.match(
+  harness,
+  /does \*\*not\*\* fail the package|Package success \(Spec #493|yield.*last-turn|last non-empty assistant/i,
+  "I2 harness yield/last-turn success law (#493)",
+);
 
 const taskGraph = readFileSync(join(repoRoot, "docs/specs/task-graph.md"), "utf8");
 assert.match(taskGraph, /Finding Store|feedback_ok|surface_acted_rate/i, "I2 living docs");
