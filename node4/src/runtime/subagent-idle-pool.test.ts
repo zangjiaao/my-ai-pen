@@ -9,8 +9,11 @@ import {
   resolveIdlePoolOptions,
   getOrCreateIdlePool,
   checkAffinity,
+  releaseWorkerById,
+  clearRegisteredIdlePoolsForTests,
   type IdleSubagentHandle,
 } from "./subagent-idle-pool.js";
+import { PanelAgentTracker } from "./panel-agents.js";
 
 function fakeHandle(
   agentId: string,
@@ -162,6 +165,79 @@ assert.equal(
   const life: { subagentIdlePool?: SubagentIdlePool } = {};
   assert.equal(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "0" }), undefined);
   assert.ok(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "1" }));
+}
+
+// --- Spec #491: live + idle releaseWorkerById ---
+{
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
+  const live = fakeHandle("live_1", "p-live");
+  assert.equal(await pool.noteLive(live), true);
+  assert.equal(await releaseWorkerById("live_1"), false, "End without conversationId is fail-closed");
+  assert.equal((live as any).isDisposed(), false);
+  assert.equal(await releaseWorkerById("live_1", "case-a"), true);
+  assert.equal((live as any).isDisposed(), true);
+
+  const idle = fakeHandle("idle_1", "p-idle");
+  pool.park(idle);
+  assert.equal(await releaseWorkerById("idle_1", "case-a"), true);
+  assert.equal(pool.size, 0);
+  assert.equal(await releaseWorkerById("missing", "case-a"), false);
+}
+
+{
+  clearRegisteredIdlePoolsForTests();
+  const panel = new PanelAgentTracker("task", "Expert");
+  panel.noteSubagentStart({ id: "sub_gone", assignment: "ping" });
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, panel);
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), true);
+  assert.equal(await pool.release("sub_gone"), false);
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), true, "session dispose keeps collab row");
+  assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), true, "End of panel-only child is accepted");
+  assert.equal(panel.list().some((a) => a.id === "sub_gone"), false, "explicit End drops collab row even if session already gone");
+}
+
+// End after collab row / before noteLive must not park later.
+{
+  clearRegisteredIdlePoolsForTests();
+  const panel = new PanelAgentTracker("task", "Expert");
+  panel.noteSubagentStart({ id: "sub_early", assignment: "ping" });
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, panel, "case-a");
+  assert.equal(await releaseWorkerById("sub_early", "case-a"), true);
+  assert.equal(panel.list().some((a) => a.id === "sub_early"), false);
+  const h = fakeHandle("sub_early", "p");
+  assert.equal(await pool.noteLive(h), false, "noteLive must refuse a pending End");
+  assert.equal(h.hardReleased, true);
+  pool.park(h);
+  assert.equal(pool.size, 0);
+  assert.equal(pool.tryResume("sub_early", { pathKey: "p" }).ok, false);
+}
+
+// End must not re-park a disposed live Worker (Bugbot: zombie resume).
+{
+  clearRegisteredIdlePoolsForTests();
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
+  const h = fakeHandle("live_park", "p");
+  assert.equal(await pool.noteLive(h), true);
+  assert.equal(await pool.release("live_park", { dropFromPanel: true }), true);
+  assert.equal(h.hardReleased, true);
+  pool.park(h);
+  assert.equal(pool.size, 0, "park after End must not re-insert");
+  assert.equal(pool.tryResume("live_park", { pathKey: "p" }).ok, false);
+}
+
+// Cross-Case End must not dispose another tenant's Worker on a shared Node.
+{
+  clearRegisteredIdlePoolsForTests();
+  const victimPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-b");
+  const attackerPool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, undefined, "case-a");
+  const victim = fakeHandle("sub_shared_looking", "p-b");
+  await victimPool.noteLive(victim);
+  await attackerPool.noteLive(fakeHandle("other", "p-a"));
+  assert.equal(await releaseWorkerById("sub_shared_looking", "case-a"), false);
+  assert.equal((victim as any).isDisposed(), false);
+  assert.equal(await releaseWorkerById("sub_shared_looking", "case-b"), true);
+  assert.equal((victim as any).isDisposed(), true);
 }
 
 console.log("subagent-idle-pool.test.ts: ok");

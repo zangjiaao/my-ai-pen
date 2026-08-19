@@ -515,6 +515,11 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             if isinstance(context.get("worker_display_names"), dict)
             else {}
         ),
+        "released_worker_ids": (
+            context.get("released_worker_ids")
+            if isinstance(context.get("released_worker_ids"), list)
+            else []
+        ),
         "case_run": case_run or {},
         "work_burst": work_burst_proj or {},
         "messages": snapshot_message_items,

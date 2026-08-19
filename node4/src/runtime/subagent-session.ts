@@ -123,6 +123,49 @@ export type SubagentLlmSessionOutput = {
   data: unknown;
 };
 
+/** Operator End claimed the Worker before this package prompted. */
+function releasedBeforePromptResult(input: {
+  handoff: SubagentHandoffFields;
+  agentId: string;
+  pathKey: string;
+  nodeType?: string;
+  skillId?: string;
+  workDir: string;
+  packageTurnId?: string;
+  sessionReuseHit: boolean;
+  packagesCompleted: number;
+}): SubagentLlmSessionOutput {
+  const structured = normalizeSubagentResult(
+    { ok: false, summary: "interrupted", deadends: ["interrupted"] },
+    input.handoff.this_turn_goal,
+  );
+  return {
+    ok: false,
+    summary: structured.summary,
+    structured,
+    data: {
+      kind: "llm_session",
+      structured,
+      handoff: input.handoff,
+      node_type: input.nodeType,
+      skill_id: input.skillId,
+      agent_id: input.agentId,
+      package_turn_id: input.packageTurnId,
+      worker_status: "released",
+      workDir: input.workDir,
+      salvaged: false,
+      session_reuse: {
+        hit: input.sessionReuseHit,
+        agent_id: input.agentId,
+        path_key: input.pathKey,
+        packages_completed: input.packagesCompleted,
+        parked: false,
+        worker_status: "released",
+      },
+    },
+  };
+}
+
 function childRolePack(parentPackId: string, skillIds?: readonly string[], skillsRoot?: string): RolePack {
   return {
     id: parentPackId || "pentest",
@@ -395,7 +438,7 @@ export async function runSubagentLlmSession(
 ): Promise<SubagentLlmSessionOutput> {
   const { handoff, parent, subagentId } = input;
   const pk = resolvePathKey(handoff);
-  const pool = getOrCreateIdlePool(parent.lifecycle);
+  const pool = getOrCreateIdlePool(parent.lifecycle, process.env, parent.task.conversationId);
   const abort = input.abortSignal || parent.lifecycle.abortSignal;
 
   // Warm path: tool layer already exclusive-took the handle (affinity-gated).
@@ -438,6 +481,19 @@ async function runWarmPackage(args: {
   warm.skillId = input.skillId || warm.skillId;
   warm.pathKey = pk || warm.pathKey;
   warm.agentId = agentId;
+
+  if (!(await pool.noteLive(warm))) {
+    return releasedBeforePromptResult({
+      handoff: input.handoff,
+      agentId,
+      pathKey: pk,
+      nodeType: input.nodeType,
+      skillId: input.skillId,
+      workDir,
+      sessionReuseHit: true,
+      packagesCompleted: warm.packagesCompleted,
+    });
+  }
 
   const sessionSeed = await seedChildSessionFromParent(
     input.parent.sessionDir || input.parent.piDir,
@@ -495,10 +551,7 @@ async function runWarmPackage(args: {
       await persistChildTranscript(warm.session, workDir);
       publishChildUsage(input.parent, agentId, usageMeter);
       try {
-        warm.clearAbort?.();
-        usageMeter.dispose();
-        await Promise.resolve(warm.disposeWorkerAudit?.());
-        await Promise.resolve(warm.session.dispose?.());
+        await pool.release(agentId);
       } catch {
         /* ignore */
       }
@@ -542,9 +595,10 @@ async function runWarmPackage(args: {
   warm.packagesCompleted += 1;
   warm.lastUsedAt = Date.now();
 
-  // OMP: finished + soft-failed stay interrogable (timeout/salvage OK). Parent abort → release.
+  // OMP: finished + soft-failed stay interrogable (timeout/salvage OK).
+  // Parent abort or operator End (hardReleased) → release, never re-park.
   const shouldPark =
-    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted && !warm.hardReleased;
 
   await persistChildTranscript(warm.session, workDir);
   publishChildUsage(input.parent, agentId, usageMeter);
@@ -552,10 +606,7 @@ async function runWarmPackage(args: {
     pool.park(warm);
   } else {
     try {
-      warm.clearAbort?.();
-      usageMeter.dispose();
-      await Promise.resolve(warm.disposeWorkerAudit?.());
-      await Promise.resolve(warm.session.dispose?.());
+      await pool.release(agentId);
     } catch {
       /* ignore */
     }
@@ -742,6 +793,35 @@ async function runColdPackage(args: {
   const workerProcess = attachWorkerProcessStream({ session, runtime: childRuntime });
   const usageMeter = attachOrReuseChildUsage(session, parent, agentId);
 
+  const handle: IdleSubagentHandle = {
+    agentId,
+    pathKey: pk,
+    nodeType: input.nodeType,
+    skillId: input.skillId,
+    session: session as IdleSubagentHandle["session"],
+    workDir,
+    segmentCounter,
+    packagesCompleted: 1,
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    childRuntime,
+    disposeWorkerAudit: () => workerProcess.dispose(),
+    usageMeter,
+  };
+  if (pool && !(await pool.noteLive(handle))) {
+    return releasedBeforePromptResult({
+      handoff,
+      agentId,
+      pathKey: pk,
+      nodeType: input.nodeType,
+      skillId: input.skillId,
+      workDir,
+      packageTurnId,
+      sessionReuseHit: false,
+      packagesCompleted: 1,
+    });
+  }
+
   await emitWorkerPackageStart({
     platform: parent.platform,
     task: childTask,
@@ -766,9 +846,12 @@ async function runColdPackage(args: {
       await persistChildTranscript(session, workDir);
       publishChildUsage(parent, agentId, usageMeter);
       try {
-        usageMeter.dispose();
-        await workerProcess.dispose();
-        await Promise.resolve((session as any).dispose?.());
+        if (pool) await pool.release(agentId);
+        else {
+          usageMeter.dispose();
+          await workerProcess.dispose();
+          await Promise.resolve((session as { dispose?: () => unknown }).dispose?.());
+        }
       } catch {
         /* ignore */
       }
@@ -810,34 +893,21 @@ async function runColdPackage(args: {
   }).catch(() => {});
 
   // OMP keep-alive: park success + soft-fail/timeout so same agent_id can resume.
-  // Parent abort or missing identity → dispose immediately (release).
+  // Parent abort, operator End, or missing identity → dispose immediately (release).
   const shouldPark =
-    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted && !handle.hardReleased;
 
   await persistChildTranscript(session, workDir);
   publishChildUsage(parent, agentId, usageMeter);
   if (shouldPark && pool) {
-    const handle: IdleSubagentHandle = {
-      agentId,
-      pathKey: pk,
-      nodeType: input.nodeType,
-      skillId: input.skillId,
-      session: session as IdleSubagentHandle["session"],
-      workDir,
-      segmentCounter,
-      packagesCompleted: 1,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now(),
-      childRuntime,
-      disposeWorkerAudit: () => workerProcess.dispose(),
-      usageMeter,
-    };
     pool.park(handle);
+  } else if (pool) {
+    await pool.release(agentId);
   } else {
     try {
       usageMeter.dispose();
       await workerProcess.dispose();
-      await Promise.resolve((session as any).dispose?.());
+      await Promise.resolve((session as { dispose?: () => unknown }).dispose?.());
     } catch {
       /* ignore */
     }

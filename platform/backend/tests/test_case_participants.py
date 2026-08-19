@@ -492,6 +492,62 @@ def test_validate_worker_display_name():
     assert validate_worker_display_name("bad\nname") is None
 
 
+def test_mark_panel_worker_released_suffix_id():
+    from app.services.case_participants import mark_panel_worker_released
+
+    ctx = {
+        "participants": {
+            "expert:e1": {
+                "expert_id": "e1",
+                "panel_agents": [
+                    {"id": "role-e1", "name": "Main", "parent_id": None, "status": "idle"},
+                    {"id": "role-e1-sub_1", "name": "Worker 1", "parent_id": "role-e1", "status": "completed"},
+                    {"id": "role-e1-sub_10", "name": "Worker 10", "parent_id": "role-e1", "status": "idle"},
+                ],
+            }
+        }
+    }
+    out = mark_panel_worker_released(ctx, agent_id="sub_1")
+    panel = out["participants"]["expert:e1"]["panel_agents"]
+    by_id = {row["id"]: row for row in panel}
+    assert "role-e1-sub_1" not in by_id
+    assert by_id["role-e1-sub_10"]["status"] == "idle"
+    assert by_id["role-e1"]["status"] == "idle"
+    assert "sub_1" in out["released_worker_ids"]
+
+    # Later burst listing the same child must not resurrect it.
+    from app.services.case_participants import merge_panel_agents
+
+    merged = merge_panel_agents(
+        panel,
+        [
+            {"id": "role-e1", "name": "Main", "parent_id": None, "status": "running"},
+            {"id": "role-e1-sub_1", "name": "Worker 1", "parent_id": "role-e1", "status": "failed"},
+        ],
+        released_ids=out["released_worker_ids"],
+    )
+    assert not any(str(r.get("id")) == "role-e1-sub_1" for r in merged)
+
+
+def test_case_has_child_worker_not_foreign_id():
+    from app.services.case_participants import case_has_child_worker
+
+    ctx = {
+        "participants": {
+            "expert:e1": {
+                "expert_id": "e1",
+                "panel_agents": [
+                    {"id": "role-e1", "name": "Main", "parent_id": None, "status": "idle"},
+                    {"id": "role-e1-sub_1", "name": "Worker 1", "parent_id": "role-e1", "status": "idle"},
+                ],
+            }
+        }
+    }
+    assert case_has_child_worker(ctx, agent_id="sub_1") is True
+    assert case_has_child_worker(ctx, agent_id="role-e1") is False
+    assert case_has_child_worker(ctx, agent_id="other_tenant_worker") is False
+
+
 # --- Spec #324 S1: Case metering ledger ---
 
 
@@ -735,6 +791,24 @@ def test_s1_agents_expose_model_requests_tokens():
     assert root["usage"]["total_tokens"] == 12
     assert root["usage"]["requests"] == 3
     assert root.get("model") == "configured-model-x"
+
+
+def test_s1_configured_model_before_first_request():
+    """Spec #324: configured model may land with zero meters (before message_end)."""
+    ctx = upsert_participant(
+        {},
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        usage_snapshot={"total_tokens": 0, "cost": 0.0, "requests": 0, "model": "deepseek-v4-flash"},
+        usage_mode="lifetime",
+        last_status="running",
+    )
+    agents = agents_from_participants(ctx)
+    root = next(a for a in agents if not a.get("parent_id"))
+    assert root.get("model") == "deepseek-v4-flash"
+    assert root["usage"]["total_tokens"] == 0
+    assert root["usage"]["requests"] == 0
 
 
 def test_s1_pre_upgrade_usage_cursor_no_double_count():

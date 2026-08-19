@@ -36,6 +36,7 @@ import {
   markPendingSessionDispose,
   resetWorkingSessionMemory,
 } from "./runtime/working-session-park.js";
+import { releaseWorkerById } from "./runtime/subagent-idle-pool.js";
 import {
   installExpert,
   listInstalledPackIds,
@@ -274,6 +275,29 @@ client.on("session_reset", async (message) => {
     reason: result.reason,
     // Spec #354 L10a: new pi Agent.sessionId after Reset (operator copy chrome).
     agent_session_id: result.agentSessionId || null,
+  });
+});
+
+/**
+ * Spec #491 / #354 L12: operator End Worker — dispose idle park or live child.
+ * Does not dispose the Participant Session captain.
+ */
+client.on("worker_release", async (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  const agentId = String(message.agent_id || message.agentId || "").trim();
+  const expertId = String(message.expert_id || message.expertId || "").trim();
+  if (!conversationId || !agentId) return;
+  const released = await releaseWorkerById(agentId, conversationId);
+  console.log(
+    `[node4] worker_release conv=${conversationId.slice(0, 8)} agent=${agentId.slice(0, 24)} released=${released}`,
+  );
+  await client.send({
+    type: "worker_release_ack",
+    conversation_id: conversationId,
+    expert_id: expertId || null,
+    agent_id: agentId,
+    released,
+    reason: released ? "disposed" : "not_found",
   });
 });
 

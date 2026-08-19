@@ -636,7 +636,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 **`sidebar`** — 微暖灰色侧栏 (`{colors.surface-sidebar}`)，宽 280px，右侧 1px `{colors.hairline}`。
 
 - 「创建会话」黑色 pill (`button-primary`) 置顶，全宽。点击后立即进入对话页，不弹窗。
-- **会话列表**：所有会话统一放在同一个列表里，按最后活跃时间倒序排列。不使用"历史会话"等分组标签。
+- **会话列表**：所有会话统一放在同一个列表里，按最后活跃时间倒序排列。不使用"历史会话"等分组标签。折叠为 64px 图标轨时仍列出**全部** Case（状态圆点；区域可滚动），与展开列表同一顺序，**不得**再截成前 N 条（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。
 - 会话列表项：默认 `{colors.ink-secondary}` weight 380；当前活跃项 `{colors.ink}` weight 500 + `{colors.accent-subtle}` 背景。每项显示 AI 自动生成的标题 + 状态圆点 + 活跃时间。
 - **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题且任务信封有结构化 target/scope 时，当前 Main 经 `platform_set_conversation_title(only_if_default=true)` 生成短标题（如 "pentest · lab.example.com"），替换默认的"新会话"。无 target 不改名；用户手动重命名后不被自动覆盖。不另开命名 Session。**不**依赖平台会话 Agent 人格。
 - 次级导航入口（资产、漏洞、节点）放在会话列表下方，用 `divider` 隔开。
@@ -650,7 +650,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 
 **交互模式**：用户点击「创建会话」→ 立即进入空白对话页 → 直接在输入框用自然语言描述测试意图。**不弹窗**，不需要先填表单再开始。
 
-**`conversation-input`** — 底部输入框：白色 + hairline 边框。Placeholder 提示用户提供信息：
+**`conversation-input`** — 底部输入框：白色 + hairline 边框。Enter 发送；Shift+Enter 换行。中文等 IME 选词确认（`isComposing` / keyCode 229 / 尚未 settle 的 composition）不得发送（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。Placeholder 提示用户提供信息：
 
 > "描述你的测试需求。例如：对 https://example.com 做渗透测试，测试账号 admin/admin123（高权限）和 viewer/viewer123（低权限），重点检查权限提升和 API 鉴权绕过。也可以提供主机 IP 进行网络扫描。"
 
@@ -881,7 +881,7 @@ Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 
 ### Collapsing
 
-- **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。可手动折叠为 64px 图标轨（`localStorage.sidebar_collapsed`）。
+- **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。可手动折叠为 64px 图标轨（`localStorage.sidebar_collapsed`）。图标轨 Case 列表与展开态同一集合，溢出在会话区内滚动（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。
 - **Right Panel**（会话 Status / Surface / Findings / Traffic）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。Traffic 为 Case 流量审计表（搜索 + Source 筛选；列：# 倒序最新在上 / Method / Domain / Path / Status / Source / Time 耗时；详情 dialog 居中；见 Spec #309）。Surface 工具栏与 Traffic 对齐（同行搜索 + 下拉筛选）：**All / NEW / Untested / Findings**（覆盖视角；Findings 细类 Vuln/Key/Flag 在 Findings 页）。
 - **对话区**: 始终 flex 占满剩余空间。
 

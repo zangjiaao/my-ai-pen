@@ -63,10 +63,16 @@ export function agentDisplayName(
     return String(agent.name || agent.id || "Main Agent").trim() || "Main Agent";
   }
   const name = String(agent.name || "").trim();
-  const workerFromName = name.match(/^Worker\s+(\d+)\s*$/i);
-  if (workerFromName) return `Worker ${workerFromName[1]}`;
+  // Spec #308 / #491: custom display_name and clean Worker N win over ordinal.
+  if (
+    name &&
+    !looksLikeSubagentId(name) &&
+    !/^Subagent sub_/i.test(name) &&
+    !looksLikeHandoffPackage(name)
+  ) {
+    return name.slice(0, 64);
+  }
   if (typeof workerOrdinal === "number" && workerOrdinal >= 1) return `Worker ${workerOrdinal}`;
-  if (/^Worker\b/i.test(name)) return name.slice(0, 32);
   return "Worker";
 }
 
@@ -147,19 +153,15 @@ export function resolveTasksAgentChip(
   },
   agents?: Array<{ id: string; name?: string; role?: string }>,
 ): string {
-  const fromName = humanAgentChipName(item.owner_agent_name);
-  if (fromName) return fromName;
   const id = String(item.agent_id || item.linked_agent_id || "").trim();
-  if (!id || !agents?.length) return "";
-  const agent = findAgentByIdExact(agents, id);
-  if (!agent) return "";
-  const chip = humanAgentChipName(agent.name);
-  if (chip) return chip;
-  // Panel subagent with non-opaque name
-  if (String(agent.role || "").toLowerCase() === "subagent" && isWorkerName(String(agent.name || ""))) {
-    return String(agent.name).trim();
+  if (id && agents?.length) {
+    const agent = findAgentByIdExact(agents, id);
+    if (agent) {
+      const fromPanel = humanAgentChipName(agent.name);
+      if (fromPanel) return fromPanel;
+    }
   }
-  return "";
+  return humanAgentChipName(item.owner_agent_name);
 }
 
 /**

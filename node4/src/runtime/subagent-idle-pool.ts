@@ -14,6 +14,8 @@
  * Disable: NODE4_SUBAGENT_IDLE=0.
  */
 
+import type { PanelAgentTracker } from "./panel-agents.js";
+
 export type WorkerAffinity = {
   pathKey: string;
   nodeType?: string;
@@ -57,6 +59,11 @@ export type IdleSubagentHandle = {
     snapshot: () => import("./llm-usage.js").LlmUsageSnapshot;
     dispose: () => void;
   };
+  /**
+   * Set when `release()` abort+disposes this handle (operator End, TTL, abort).
+   * `park()` must refuse so a finished package cannot revive a zombie session.
+   */
+  hardReleased?: boolean;
 };
 
 export type IdleWorkerSnapshot = {
@@ -128,6 +135,7 @@ async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
   }
   try {
     handle.usageMeter?.dispose();
+    await Promise.resolve(handle.session.abort?.());
   } catch {
     /* ignore */
   }
@@ -176,17 +184,45 @@ export function checkAffinity(
 /**
  * In-memory worker registry for one parent task lifecycle.
  * Keyed by agentId (not pathKey).
+ *
+ * Spec #491: pools register globally so operator End can release idle *or* live
+ * workers without walking parked captains. Lookup is Case-scoped (`conversationId`).
  */
+const REGISTERED_POOLS = new Set<SubagentIdlePool>();
+
 export class SubagentIdlePool {
   private readonly byId = new Map<string, IdleSubagentHandle>();
+  /** In-flight packages (taken from idle / cold spawn not yet parked). */
+  private readonly live = new Map<string, IdleSubagentHandle>();
+  /**
+   * Operator End / op=release arrived after the collab row exists but before
+   * `noteLive`. Consume on noteLive/park so the package cannot re-idle.
+   */
+  private readonly pendingEnds = new Set<string>();
   private readonly opts: Required<SubagentIdlePoolOptions>;
+  private panel: PanelAgentTracker | undefined;
+  /** Case this pool belongs to. Empty until bound; End must pass the same id. */
+  conversationId = "";
 
-  constructor(opts?: SubagentIdlePoolOptions) {
+  constructor(opts?: SubagentIdlePoolOptions, panel?: PanelAgentTracker, conversationId?: string) {
     this.opts = {
       maxIdle: opts?.maxIdle ?? DEFAULT_MAX_IDLE,
       ttlMs: opts?.ttlMs ?? DEFAULT_TTL_MS,
       maxPackages: opts?.maxPackages ?? DEFAULT_MAX_PACKAGES,
     };
+    this.panel = panel;
+    this.conversationId = String(conversationId || "").trim();
+    REGISTERED_POOLS.add(this);
+  }
+
+  bindPanel(panel: PanelAgentTracker | undefined): void {
+    if (panel) this.panel = panel;
+  }
+
+  bindConversation(conversationId: string | undefined): void {
+    const id = String(conversationId || "").trim();
+    if (!id || this.conversationId) return;
+    this.conversationId = id;
   }
 
   get size(): number {
@@ -251,6 +287,7 @@ export class SubagentIdlePool {
 
     this.byId.delete(id);
     clearIdleTimer(handle);
+    this.live.set(id, handle);
     return { ok: true, handle };
   }
 
@@ -267,7 +304,12 @@ export class SubagentIdlePool {
    * Over maxPackages → hard release instead of park.
    */
   park(handle: IdleSubagentHandle, now = Date.now()): void {
+    if (handle.hardReleased) return;
     const id = String(handle.agentId || "").trim();
+    if (id && this.pendingEnds.has(id)) {
+      void this.consumePendingEnd(id, handle);
+      return;
+    }
     const key = String(handle.pathKey || "").trim();
     if (!id || !key) {
       void safeDispose(handle);
@@ -290,6 +332,7 @@ export class SubagentIdlePool {
     handle.clearAbort?.();
     handle.clearAbort = undefined;
     clearIdleTimer(handle);
+    this.live.delete(id);
     this.byId.set(id, handle);
     this.armIdleTimer(handle);
 
@@ -307,15 +350,62 @@ export class SubagentIdlePool {
   }
 
   /**
-   * Hard remove (OMP release): clear timer, dispose session, drop id.
-   * Returns true if the worker was present.
+   * Track an in-flight Worker so operator End can abort it (Spec #491).
+   * @returns false when operator End already claimed this id — caller must not
+   * prompt or emit package start; the handle is abort+disposed.
    */
-  async release(agentId: string): Promise<boolean> {
+  async noteLive(handle: IdleSubagentHandle): Promise<boolean> {
+    const id = String(handle.agentId || "").trim();
+    if (!id) return false;
+    if (handle.hardReleased) return false;
+    if (await this.consumePendingEnd(id, handle)) return false;
+    this.live.set(id, handle);
+    return true;
+  }
+
+  /**
+   * Hard remove (OMP release): clear timer, abort+dispose session, drop id.
+   * Works for idle park *or* in-flight live handles.
+   * Returns true if the worker was present.
+   *
+   * `dropFromPanel` is only for operator End / Agent `op=release`. Abort, TTL,
+   * LRU, and task disposeAll keep the collab row so child usage (#487) and
+   * completed Workers stay on the live tree.
+   */
+  async release(agentId: string, opts?: { dropFromPanel?: boolean }): Promise<boolean> {
     const id = String(agentId || "").trim();
     if (!id) return false;
-    const handle = this.byId.get(id);
-    if (!handle) return false;
-    this.byId.delete(id);
+    const idle = this.byId.get(id);
+    if (idle) {
+      idle.hardReleased = true;
+      this.byId.delete(id);
+      this.live.delete(id);
+      await safeDispose(idle);
+      if (opts?.dropFromPanel) this.panel?.dropChild(id);
+      return true;
+    }
+    const live = this.live.get(id);
+    if (live) {
+      live.hardReleased = true;
+      this.live.delete(id);
+      await safeDispose(live);
+      if (opts?.dropFromPanel) this.panel?.dropChild(id);
+      return true;
+    }
+    if (opts?.dropFromPanel) {
+      const dropped = this.panel?.dropChild(id) ?? false;
+      if (dropped) {
+        this.pendingEnds.add(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** End-before-live: mark, abort, dispose; caller must not start the package. */
+  private async consumePendingEnd(id: string, handle: IdleSubagentHandle): Promise<boolean> {
+    if (!this.pendingEnds.delete(id)) return false;
+    handle.hardReleased = true;
     await safeDispose(handle);
     return true;
   }
@@ -335,7 +425,10 @@ export class SubagentIdlePool {
   /** Dispose all idle workers (task end / abort). */
   async disposeAll(): Promise<void> {
     const ids = [...this.byId.keys()];
-    await Promise.all(ids.map((id) => this.release(id)));
+    const liveIds = [...this.live.keys()];
+    await Promise.all([...ids, ...liveIds].map((id) => this.release(id)));
+    this.pendingEnds.clear();
+    REGISTERED_POOLS.delete(this);
   }
 
   private armIdleTimer(handle: IdleSubagentHandle): void {
@@ -368,12 +461,44 @@ export class SubagentIdlePool {
 
 /** Lazy attach pool on parent lifecycle. */
 export function getOrCreateIdlePool(
-  lifecycle: { subagentIdlePool?: SubagentIdlePool },
+  lifecycle: { subagentIdlePool?: SubagentIdlePool; panelAgents?: PanelAgentTracker },
   env: NodeJS.ProcessEnv = process.env,
+  conversationId?: string,
 ): SubagentIdlePool | undefined {
   if (!resolveIdlePoolEnabled(env)) return undefined;
   if (!lifecycle.subagentIdlePool) {
-    lifecycle.subagentIdlePool = new SubagentIdlePool(resolveIdlePoolOptions(env));
+    lifecycle.subagentIdlePool = new SubagentIdlePool(
+      resolveIdlePoolOptions(env),
+      lifecycle.panelAgents,
+      conversationId,
+    );
+  } else {
+    if (lifecycle.panelAgents) {
+      lifecycle.subagentIdlePool.bindPanel(lifecycle.panelAgents);
+    }
+    lifecycle.subagentIdlePool.bindConversation(conversationId);
   }
   return lifecycle.subagentIdlePool;
+}
+
+/**
+ * Spec #491: operator End — dispose idle or live Worker and drop collab chrome.
+ * Requires `conversationId` so one Case cannot abort another tenant's Worker
+ * on a shared Node process.
+ */
+export async function releaseWorkerById(agentId: string, conversationId?: string): Promise<boolean> {
+  const id = String(agentId || "").trim();
+  const conv = String(conversationId || "").trim();
+  if (!id || !conv) return false;
+  let found = false;
+  for (const pool of REGISTERED_POOLS) {
+    if (pool.conversationId !== conv) continue;
+    if (await pool.release(id, { dropFromPanel: true })) found = true;
+  }
+  return found;
+}
+
+/** Test helper: drop constructor registrations. */
+export function clearRegisteredIdlePoolsForTests(): void {
+  REGISTERED_POOLS.clear();
 }

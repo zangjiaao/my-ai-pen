@@ -46,6 +46,11 @@ assert.equal(
   "Worker",
 );
 assert.equal(
+  agentDisplayName({ role: "subagent", name: "Recon", id: "sub_1" }, 1),
+  "Recon",
+  "Spec #308/#491: display_name must not be replaced by Worker N ordinal",
+);
+assert.equal(
   agentDisplayName({ role: "main", name: "渗透大师", parent_id: null }),
   "渗透大师",
 );
@@ -93,13 +98,18 @@ assert.ok(compareAgentNames("Worker 10", "Worker 11") < 0);
 const roster = ["Worker 1", "Worker 10", "Worker 11", "Worker 2"].sort(compareAgentNames);
 assert.deepEqual(roster, ["Worker 1", "Worker 2", "Worker 10", "Worker 11"]);
 
-// Chip fallback: missing owner_agent_name but agent_id maps to panel Worker N
+// Chip: panel name (incl. display_name override) wins over frozen owner_agent_name.
 assert.equal(
   resolveTasksAgentChip({ owner_agent_name: "", agent_id: "sub_1" }, agents),
   "Worker 1",
 );
 assert.equal(
   resolveTasksAgentChip({ owner_agent_name: "Worker 3", agent_id: "sub_1" }, agents),
+  "Worker 1",
+  "Spec #308/#491: Tasks chip uses panel/override name, not sticky Worker N",
+);
+assert.equal(
+  resolveTasksAgentChip({ owner_agent_name: "Worker 3", agent_id: "sub_missing" }, agents),
   "Worker 3",
 );
 assert.equal(resolveTasksAgentChip({ agent_id: "sub_missing" }, agents), "");

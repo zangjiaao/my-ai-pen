@@ -24,6 +24,7 @@ import { HardGraphPlanStore, emitHardGraphPlanTreeUpdate } from "./hard-graph-pl
 import {
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
+  stampPanelConfiguredModel,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -273,6 +274,7 @@ export async function runHardGraphExpertTask(options: {
     graph_id: graph.id,
     graph_label: graph.label,
   });
+  stampPanelConfiguredModel(panel, runUsage);
   const graphQuality = createGraphRunQualityState();
   parentRuntime.lifecycle.hardGraphRun = {
     plan: graphPlan,

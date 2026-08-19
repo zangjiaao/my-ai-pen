@@ -16,6 +16,35 @@ export function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
+/** Spec #491: End Worker — drop the collab-tree row (do not keep a zombie). Suffix match must not hit sub_10 for sub_1. */
+export function isReleasedWorkerId(agentId: string, releasedIds: readonly string[]): boolean {
+  const aid = String(agentId || "").trim();
+  if (!aid) return false;
+  for (const raw of releasedIds) {
+    const rid = String(raw || "").trim();
+    if (!rid) continue;
+    if (aid === rid || aid.endsWith(`-${rid}`) || rid.endsWith(`-${aid}`)) return true;
+  }
+  return false;
+}
+
+export function omitReleasedWorkers(
+  agents: StrixAgentStatus[],
+  releasedIds: readonly string[],
+): StrixAgentStatus[] {
+  if (!releasedIds.length) return agents;
+  return agents.filter((agent) => {
+    if (!agent.parent_id) return true;
+    return !isReleasedWorkerId(agent.id, releasedIds);
+  });
+}
+
+export function markPanelWorkerReleased(agents: StrixAgentStatus[], agentId: string): StrixAgentStatus[] {
+  const id = String(agentId || "").trim();
+  if (!id) return agents;
+  return omitReleasedWorkers(agents, [id]);
+}
+
 /**
  * Spec #278 S4: AgentRow badge from Session actual work_mode (not composer).
  * Pure helper — Free or short Graph label.
@@ -178,6 +207,13 @@ export function mergeSnapshotAgentsPreserveHarness(
     // Authoritative snapshot id wins (Reset / new Agent). Only fill gap from live.
     const session_id =
       (sidOk(liveSid) ? liveSid : "") || (sidOk(priorSid) ? priorSid : "") || undefined;
+    const snapTokens = Number(row.usage?.total_tokens || 0);
+    const snapRequests = Number(row.usage?.requests || 0);
+    const usage =
+      snapTokens > 0 || snapRequests > 0 ? row.usage : prior.usage || row.usage;
+    const model =
+      String(row.model || row.usage?.model || prior.model || prior.usage?.model || "").trim() ||
+      undefined;
     return {
       ...row,
       ...(work_mode
@@ -194,6 +230,8 @@ export function mergeSnapshotAgentsPreserveHarness(
           }
         : {}),
       ...(session_id ? { session_id } : {}),
+      ...(usage ? { usage } : {}),
+      ...(model ? { model } : {}),
     };
   });
 }
@@ -201,8 +239,11 @@ export function mergeSnapshotAgentsPreserveHarness(
 export function mergeLivePanelAgents(
   prev: StrixAgentStatus[],
   panel: StrixAgentStatus[],
-  meta?: { expert_id?: string; expert_name?: string },
+  meta?: { expert_id?: string; expert_name?: string; released_ids?: readonly string[] },
 ): StrixAgentStatus[] {
+  const released = Array.isArray(meta?.released_ids) ? [...meta.released_ids] : [];
+  prev = omitReleasedWorkers(prev, released);
+  panel = omitReleasedWorkers(panel, released);
   if (!panel.length) return prev;
   if (!prev.length) return panel;
 
@@ -264,6 +305,8 @@ export function mergeLivePanelAgents(
     last_tool: panelMain.last_tool || root.last_tool,
     highlighted: true,
     expert_id: eid || root.expert_id || panelMain.expert_id,
+    // Live Node panel is burst-scoped; keep Case cumulative meters from the roster.
+    model: String(panelMain.model || root.model || "").trim() || undefined,
     ...(sessionId ? { session_id: sessionId } : {}),
     ...(workMode
       ? {

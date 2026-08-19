@@ -120,6 +120,23 @@ export function ChatComposerSkeleton() {
   );
 }
 
+export type ComposerSubmitKeyEvent = {
+  key: string;
+  shiftKey: boolean;
+  isComposing?: boolean;
+  keyCode?: number;
+};
+
+/** Enter sends; Shift+Enter newlines; IME confirm / processing must not send. Spec #490. */
+export function shouldSubmitComposerOnEnter(
+  event: ComposerSubmitKeyEvent,
+  composing = false,
+): boolean {
+  if (event.key !== "Enter" || event.shiftKey) return false;
+  if (composing || event.isComposing === true || event.keyCode === 229) return false;
+  return true;
+}
+
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
 export function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
   if (!target || target.kind !== "expert") return false;
@@ -192,6 +209,8 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
   const partnerMenuRef = useRef<HTMLDivElement | null>(null);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const tickAnchorRef = useRef<{ seconds: number; atMs: number } | null>(null);
+  const imeComposingRef = useRef(false);
+  const imeSettleTimerRef = useRef<number | null>(null);
 
   useImperativeHandle(ref, () => ({
     getValue: () => input,
@@ -307,6 +326,28 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     onSend(text);
   }, [input, onSend]);
 
+  const beginImeComposition = useCallback(() => {
+    if (imeSettleTimerRef.current != null) {
+      window.clearTimeout(imeSettleTimerRef.current);
+      imeSettleTimerRef.current = null;
+    }
+    imeComposingRef.current = true;
+  }, []);
+
+  const endImeCompositionSoon = useCallback(() => {
+    if (imeSettleTimerRef.current != null) window.clearTimeout(imeSettleTimerRef.current);
+    imeSettleTimerRef.current = window.setTimeout(() => {
+      imeComposingRef.current = false;
+      imeSettleTimerRef.current = null;
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (imeSettleTimerRef.current != null) window.clearTimeout(imeSettleTimerRef.current);
+    };
+  }, []);
+
   return (
     <div className={CHAT_COMPOSER_OUTER_CLASS}>
       <div className={`${CHAT_COMPOSER_SHELL_CLASS} focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]`}>
@@ -374,8 +415,20 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
               const next = e.target.value;
               commitTypedInput("ChatComposer", () => setInput(next));
             }}
+            onCompositionStart={beginImeComposition}
+            onCompositionEnd={endImeCompositionSoon}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (
+                shouldSubmitComposerOnEnter(
+                  {
+                    key: e.key,
+                    shiftKey: e.shiftKey,
+                    isComposing: e.nativeEvent.isComposing,
+                    keyCode: e.nativeEvent.keyCode,
+                  },
+                  imeComposingRef.current,
+                )
+              ) {
                 e.preventDefault();
                 submit();
               }

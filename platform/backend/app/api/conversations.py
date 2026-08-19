@@ -579,6 +579,89 @@ async def put_worker_display_name(
     }
 
 
+@router.post("/{conv_id}/workers/{agent_id}/release")
+async def release_worker(
+    conv_id: str,
+    agent_id: str,
+    body: dict | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spec #491 / #354 L12: End Worker — dispose idle/live child session, not Main Session."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.case_participants import case_has_child_worker, mark_panel_worker_released
+    from app.ws import router as ws_router
+
+    c = await _get_conv(conv_id, current_user, db)
+    aid = str(agent_id or "").strip()
+    if not aid:
+        raise HTTPException(400, "agent_id required")
+    expert_id = str((body or {}).get("expert_id") or "").strip() or None
+    if not c.node_id:
+        raise HTTPException(409, "Conversation is not bound to a node")
+    result = await _push_node_json(
+        str(c.node_id),
+        {
+            "type": "worker_release",
+            "conversation_id": str(c.id),
+            "agent_id": aid,
+            **({"expert_id": expert_id} if expert_id else {}),
+        },
+        wait_ack="worker_release_ack",
+        conversation_id=str(c.id),
+        expert_id=aid,
+        timeout_s=6.0,
+    )
+    if not result.get("delivered"):
+        reason = str(result.get("reason") or "offline")
+        raise HTTPException(409, f"Node unavailable ({reason})")
+    ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
+    acked = bool(ack.get("released"))
+    ctx_in = c.context if isinstance(c.context, dict) else {}
+    # Persist + WS drop together. Broadcasting without released_worker_ids lets
+    # a later snapshot wipe the local End ref and resurrect the row.
+    persist_chrome = acked or case_has_child_worker(ctx_in, agent_id=aid)
+    if persist_chrome:
+        ctx = mark_panel_worker_released(ctx_in, agent_id=aid)
+        c.context = ctx
+        flag_modified(c, "context")
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.worker_release",
+        "conversation",
+        c.id,
+        c.id,
+        {"agent_id": aid, "expert_id": expert_id, "node": result},
+    )
+    await db.commit()
+    if persist_chrome:
+        try:
+            import json as _json
+
+            await ws_router._broadcast_to_conversation(
+                conv_id,
+                _json.dumps(
+                    {
+                        "type": "worker_released",
+                        "conversation_id": conv_id,
+                        "agent_id": aid,
+                        "released": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as exc:
+            print(f"[API] worker_released broadcast: {exc}")
+    return {
+        "ok": True,
+        "agent_id": aid,
+        "released": persist_chrome,
+        "reason": ack.get("reason") if persist_chrome else (ack.get("reason") or "not_found"),
+    }
+
+
 @router.post("/{conv_id}/steer")
 async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)

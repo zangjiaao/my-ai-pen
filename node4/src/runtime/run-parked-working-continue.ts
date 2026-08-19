@@ -17,6 +17,7 @@ import {
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
   PlatformTextStream,
+  stampPanelConfiguredModel,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -128,6 +129,7 @@ export async function runParkedWorkingContinue(options: {
   }
 
   const usage = createUsageLedgerFromEnv();
+  stampPanelConfiguredModel(panel, usage);
   const textStream = new PlatformTextStream(platform, task);
   const checkpointThrottle = new CheckpointThrottle();
   const obsCounters = {

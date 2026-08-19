@@ -35,7 +35,11 @@ import {
   tryAdmitSubagentPackage,
 } from "../runtime/concurrency.js";
 import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
-import { getOrCreateIdlePool } from "../runtime/subagent-idle-pool.js";
+import { getOrCreateIdlePool, type SubagentIdlePool } from "../runtime/subagent-idle-pool.js";
+
+function idlePoolFor(runtime: ToolRuntime): SubagentIdlePool | undefined {
+  return getOrCreateIdlePool(runtime.lifecycle, process.env, runtime.task.conversationId);
+}
 import {
   assertGraphPackageAnchor,
   checkPackageAttemptBudget,
@@ -109,7 +113,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
-      "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
+      "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now and drop it from the collaboration tree; else idle TTL (~420s) / maxIdle LRU auto-releases.",
       "Cookies seed/promote. Graph rejects command=. Nested subagent DISALLOWED (depth=1).",
       "Returns agent_id, worker_status idle|released, resume_hint, candidates/acceptance.",
     ].join(" "),
@@ -170,7 +174,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       const op = String(params.op || "spawn").trim().toLowerCase() || "spawn";
 
       if (op === "list") {
-        const pool = getOrCreateIdlePool(runtime.lifecycle);
+        const pool = idlePoolFor(runtime);
         const idle_workers = pool?.listIdle() ?? [];
         return jsonResult({
           ok: true,
@@ -190,7 +194,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             isError: true,
           });
         }
-        const pool = getOrCreateIdlePool(runtime.lifecycle);
+        const pool = idlePoolFor(runtime);
         if (!pool) {
           return jsonResult({
             ok: true,
@@ -200,7 +204,20 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             reason: "idle_pool_disabled",
           });
         }
-        const released = await pool.release(aid);
+        const released = await pool.release(aid, { dropFromPanel: true });
+        runtime.lifecycle.panelAgents?.dropChild(aid);
+        const convId = String(runtime.task?.conversationId || "").trim();
+        if (convId) {
+          void runtime.platform
+            .send({
+              type: "worker_released",
+              conversation_id: convId,
+              task_id: runtime.task.taskId,
+              agent_id: aid,
+              released,
+            })
+            .catch(() => {});
+        }
         return jsonResult({
           ok: true,
           op: "release",
@@ -343,7 +360,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             "Done with a worker → subagent(op=release, agent_id=…) or wait idle TTL; orthogonal modules stay cold packages[].",
             "Cookies seed/promote parent↔child.",
           ].join(" "),
-          idle_workers: getOrCreateIdlePool(runtime.lifecycle)?.listIdle() ?? [],
+          idle_workers: idlePoolFor(runtime)?.listIdle() ?? [],
         });
       }
 
@@ -429,7 +446,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             "5) Graph: todo(done) needs act/deadend/skip on surfaces.",
             "6) Task package budget: NODE4_SUBAGENT_TASK_BUDGET (default 128); concurrency queues, does not reject.",
           ].join(" "),
-          idle_workers: getOrCreateIdlePool(runtime.lifecycle)?.listIdle() ?? [],
+          idle_workers: idlePoolFor(runtime)?.listIdle() ?? [],
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -566,7 +583,7 @@ async function runSubagentPackage(
 
   // Exclusive warm resume at tool layer (affinity: same path). Else cold spawn.
   const resumeWanted = String(pkg.resume_agent_id || "").trim();
-  const pool = getOrCreateIdlePool(runtime.lifecycle);
+  const pool = idlePoolFor(runtime);
   const pk =
     pathKey(handoff.handoff.target) ||
     String(handoff.handoff.target || "")
@@ -685,7 +702,8 @@ async function runSubagentPackage(
   });
   } catch (err) {
     // Re-park exclusive warm handle if spawn failed before lifecycle park.
-    if (warmHandle && pool) {
+    // Operator End already hard-released — do not revive a disposed session.
+    if (warmHandle && pool && !warmHandle.hardReleased) {
       try {
         pool.park(warmHandle);
       } catch {
