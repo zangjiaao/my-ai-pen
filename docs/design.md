@@ -650,7 +650,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 
 **交互模式**：用户点击「创建会话」→ 立即进入空白对话页 → 直接在输入框用自然语言描述测试意图。**不弹窗**，不需要先填表单再开始。
 
-**`conversation-input`** — 底部输入框：白色 + hairline 边框。Enter 发送；Shift+Enter 换行。中文等 IME 选词确认（`isComposing` / keyCode 229 / 尚未 settle 的 composition）不得发送（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。Placeholder 提示用户提供信息：
+**`conversation-input`** — 底部输入框：白色 + hairline 边框。Enter 发送；Shift+Enter 或 ⌘/Ctrl+Enter 换行。中文等 IME 选词确认（`isComposing` / keyCode 229 / 尚未 settle 的 composition）不得发送（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。Placeholder 提示用户提供信息：
 
 > "描述你的测试需求。例如：对 https://example.com 做渗透测试，测试账号 admin/admin123（高权限）和 viewer/viewer123（低权限），重点检查权限提升和 API 鉴权绕过。也可以提供主机 IP 进行网络扫描。"
 
