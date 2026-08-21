@@ -33,6 +33,7 @@ import MessageRenderer, {
   agentDisplayName,
   shouldShowAgentSpeakerLabel,
 } from "../components/MessageRenderer";
+import SessionDemandQueue from "../components/SessionDemandQueue";
 import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
@@ -117,6 +118,14 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
+import {
+  newSessionDemandId,
+  queuedDemandUserContent,
+  removeQueuedDemand,
+  sessionDemandQueueIsFull,
+  upsertQueuedDemand,
+  type SessionDemandItem,
+} from "../lib/sessionDemandQueue";
 import { mergeIntelSnapshot, upsertIntelRow, type IntelRow } from "../lib/intelView";
 import {
   buildConfirmOptionsText,
@@ -451,6 +460,9 @@ export default function ConversationPage() {
   const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamFrame>>({});
   /** List-tail Working attribution (send_success); visibility follows work-burst. */
   const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
+  const [sessionDemands, setSessionDemands] = useState<SessionDemandItem[]>([]);
+  /** Demand already taken for force-send — cancel/edit on that row would lie. */
+  const [forcingDemandId, setForcingDemandId] = useState<string | null>(null);
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
@@ -1028,11 +1040,13 @@ export default function ConversationPage() {
     ) {
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       launchOptimisticRef.current = false;
     } else if (!launchOptimisticRef.current) {
       // created / idle / unknown — only clear when we are not mid-launch.
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
     }
     // else: keep optimistic running=true so the Interrupt button stays stable.
   }, []);
@@ -1129,6 +1143,7 @@ export default function ConversationPage() {
         setPendingChrome((cur) => reducePendingChrome(cur, { type: "terminal" }));
       }
       setInterrupting(false);
+      setForcingDemandId(null);
     }
     // Multi-role Case roster: light case_run patch; full snapshot only when multi-role.
     if (isRecord(msg.case_run)) {
@@ -1166,6 +1181,62 @@ export default function ConversationPage() {
       {
     conversation_working: (msg) => {
       applyConversationWorking(msg);
+    },
+    session_demand_queued: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || m.id || "").trim();
+      const text = String(m.text || "").trim();
+      if (!id || !text) return;
+      const kind = String(m.kind || "text") === "confirm_options" ? "confirm_options" : "text";
+      setSessionDemands((prev) => upsertQueuedDemand(prev, {
+        id,
+        kind,
+        text,
+        status: "pending",
+      }));
+    },
+    session_demand_deleted: (msg) => {
+      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
+      if (!id) return;
+      setSessionDemands((prev) => removeQueuedDemand(prev, id));
+    },
+    session_demand_rejected: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || "").trim();
+      const kind = String(m.kind || "text");
+      const text = String(m.text || "").trim();
+      const requestId = String(m.request_id || "").trim();
+      if (id) setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      if (kind === "confirm_options" && requestId && activeId) {
+        setConversationMessageData(activeId, (data) =>
+          removeMessageRecords(data, (record) => {
+            if (recordMessageType(record) !== "decision") return false;
+            const content = (record.content || {}) as Record<string, unknown>;
+            return String(content.request_id || "").trim() === requestId;
+          }),
+        );
+        return;
+      }
+      if (text) {
+        composerRef.current?.setValue(text);
+        composerRef.current?.focus();
+      }
+    },
+    session_demand_drained: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || "").trim();
+      const text = String(m.text || "").trim();
+      if (id) {
+        setSessionDemands((prev) => removeQueuedDemand(prev, id));
+        setForcingDemandId((cur) => (cur === id ? null : cur));
+      }
+      const convId = messageConversationId(m, activeId);
+      if (convId && id && text) {
+        addMessageToConversation(
+          convId,
+          makeMessage(convId, "user", "text", queuedDemandUserContent({ id, text })),
+        );
+      }
     },
     conversation_title_updated: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -1558,6 +1629,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       clearProgressiveStreamUi();
       const status = String(m.status || "incomplete").toLowerCase();
       const sessionContinue = m.parked_continue === true || m.session_continue === true;
@@ -1859,6 +1931,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       // Live streams are already mirrored into the message cache; drop overlay + chrome.
       clearProgressiveStreamUi();
       const terminal = String(m.status || "completed").toLowerCase();
@@ -1907,6 +1980,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       clearProgressiveStreamUi();
       if (convId) patchConversation(convId, { status: "failed", working: false });
       // Spec #455: package segment fail ≠ Case/Session death (display copy).
@@ -1993,6 +2067,7 @@ export default function ConversationPage() {
         launchOptimisticRef.current = false;
         setRunning(false);
         setInterrupting(false);
+        setForcingDemandId(null);
         if (convId) {
           // Keep idle room status — do not promote to running/failed from chat.
           const cur = String(activeConversation?.status || "").toLowerCase();
@@ -2134,6 +2209,8 @@ export default function ConversationPage() {
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
+    setForcingDemandId(null);
+    setSessionDemands([]);
   }, []);
 
   /** Owner ledger for Surface 已纳入 (user-scoped; independent of Case snapshot assets). */
@@ -2545,6 +2622,14 @@ export default function ConversationPage() {
         answers: extraObj.answers,
       });
       if (!reduced.ok) return;
+      // Queue-full only refuses enqueue. Live approval wait still forwards
+      // (authorize/handoff/next_steps) even when five demands are already pending.
+      if (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands)) {
+        const liveWait = pendingApprovals.some(
+          (item) => String(item.request_id || "").trim() === requestId,
+        );
+        if (!liveWait) return;
+      }
       const expanded = expandSelectedOptions(cardContent, reduced.selected_option_ids);
       const text = buildConfirmOptionsText(cardContent, reduced.selected_option_ids, {
         customText: reduced.custom_text,
@@ -2575,7 +2660,7 @@ export default function ConversationPage() {
         answers: reduced.answers,
       });
     },
-    [activeId, addMessageToConversation, send],
+    [activeId, addMessageToConversation, send, isActiveConversationRunning, sessionDemands, pendingApprovals],
   );
 
   const markComposerRestoreHandled = useCallback(() => {
@@ -3024,6 +3109,24 @@ export default function ConversationPage() {
   const handleSend = useCallback(async (overrideText: string) => {
     const displayText = overrideText.trim();
     if (!displayText) return;
+    if (activeId && isActiveConversationRunning && !hasOpenInteractiveChoice) {
+      if (sessionDemandQueueIsFull(sessionDemands)) return;
+      const demandId = newSessionDemandId();
+      setSessionDemands((prev) => upsertQueuedDemand(prev, {
+        id: demandId,
+        kind: "text",
+        text: displayText,
+        status: "pending",
+      }));
+      send({
+        type: "session_demand",
+        conversation_id: activeId,
+        demand_id: demandId,
+        kind: "text",
+        text: displayText,
+      });
+      return;
+    }
     const selectedCandidate = selectedMentionRef.current || selectedMention;
     // Prefer explicit toolbar partner; else parse @token from the message body.
     const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
@@ -3117,7 +3220,36 @@ export default function ConversationPage() {
     messages,
     approvalDecisionByRequestId,
     addMessageToConversation,
+    isActiveConversationRunning,
+    hasOpenInteractiveChoice,
+    sessionDemands,
+    send,
   ]);
+
+  const handleCancelDemand = useCallback((demandId: string) => {
+    if (!activeId || demandId === forcingDemandId) return;
+    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
+    send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
+  }, [activeId, forcingDemandId, send]);
+
+  const handleEditDemand = useCallback((demandId: string) => {
+    if (!activeId || demandId === forcingDemandId) return;
+    const item = sessionDemands.find((row) => row.id === demandId);
+    if (!item || item.status !== "pending") return;
+    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
+    send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
+    composerRef.current?.setValue(item.text);
+    composerRef.current?.focus();
+  }, [activeId, forcingDemandId, sessionDemands, send]);
+
+  const handleForceDemand = useCallback((demandId: string) => {
+    if (!activeId || interrupting) return;
+    const item = sessionDemands.find((row) => row.id === demandId);
+    if (!item || item.status !== "pending") return;
+    setInterrupting(true);
+    setForcingDemandId(demandId);
+    send({ type: "session_demand_force", conversation_id: activeId, demand_id: demandId });
+  }, [activeId, interrupting, sessionDemands, send]);
 
   const handleInterrupt = useCallback(() => {
     if (!activeId || interrupting) return;
@@ -3333,7 +3465,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       choiceAnswersByRequestId={choiceAnswersByRequestId}
                       sessionActive={isActiveConversationRunning}
                       choiceDisabled={
-                        interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                        interrupting
+                        || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
                       }
                       resultAnchorWorkSeconds={resultAnchorSecondsByMessageId[msg.id]}
                     />
@@ -3381,6 +3514,14 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 );
               })()}
+              <SessionDemandQueue
+                items={sessionDemands}
+                onCancel={handleCancelDemand}
+                onEdit={handleEditDemand}
+                onForceSend={handleForceDemand}
+                forceDisabled={interrupting}
+                busyDemandId={forcingDemandId}
+              />
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
             {/* Draft state lives in ChatComposer — page-level input re-rendered the whole stream. */}
@@ -3399,6 +3540,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 running={isActiveConversationRunning}
                 interrupting={interrupting}
                 workBurst={workBurst}
+                queueFull={sessionDemandQueueIsFull(sessionDemands)}
                 onSend={(text) => { void handleSend(text); }}
                 onInterrupt={handleInterrupt}
               />
@@ -3462,6 +3604,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 if (!activeId) return;
                 setRunning(false);
                 setInterrupting(false);
+                setForcingDemandId(null);
                 launchOptimisticRef.current = false;
                 patchConversation(activeId, { working: false, status: "incomplete" });
                 clearProgressiveStreamUi();

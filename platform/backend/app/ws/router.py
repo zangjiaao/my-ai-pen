@@ -4581,6 +4581,169 @@ async def _enqueue_confirm_options_while_busy(
     return item
 
 
+async def _broadcast_session_demand(
+    conv_id: str,
+    event_type: str,
+    *,
+    demand_id: str | None = None,
+    kind: str | None = None,
+    text: str | None = None,
+    reason: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    from app.services import session_demand_queue as demand_queue
+
+    payload: dict = {
+        "type": event_type,
+        "conversation_id": conv_id,
+        "queue_size": demand_queue.size(conv_id),
+    }
+    if demand_id:
+        payload["demand_id"] = demand_id
+    if kind:
+        payload["kind"] = kind
+    if text:
+        payload["text"] = text
+    if reason:
+        payload["reason"] = reason
+    if request_id:
+        payload["request_id"] = request_id
+    try:
+        await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
+    except Exception as e:
+        print(f"[WS] {event_type} broadcast error: {e}")
+
+
+async def _enqueue_text_demand_while_busy(
+    *,
+    conv_id: str,
+    client_id: str,
+    msg: dict,
+) -> dict:
+    """Spec #277 §3.4: busy Session + user text without force → FIFO queue, not steer."""
+    from app.services import session_demand_queue as demand_queue
+
+    text = str(msg.get("display_text") or msg.get("text") or "").strip()
+    if not text:
+        raise ValueError("session_demand text required")
+    demand_id = str(msg.get("demand_id") or msg.get("id") or "").strip() or None
+    item = demand_queue.enqueue(
+        conv_id,
+        id=demand_id,
+        kind="text",
+        client_id=client_id,
+        text=text,
+        expert_id=str(msg.get("expert_id") or "").strip() or None,
+        expert_name=str(msg.get("expert_name") or "").strip() or None,
+        engagement=str(msg.get("engagement") or msg.get("role") or "").strip() or None,
+        target=msg.get("target"),
+        scope=msg.get("scope"),
+    )
+    await _broadcast_session_demand(
+        conv_id,
+        "session_demand_queued",
+        demand_id=str(item.get("id") or ""),
+        kind="text",
+        text=text,
+    )
+    return item
+
+
+async def _dispatch_queued_text_demand(
+    *,
+    conv_id: str,
+    client_id: str,
+    item: dict,
+) -> None:
+    text = str(item.get("text") or "").strip()
+    if not text:
+        return
+    # Persist as a user bubble (same path as user_message). Do not broadcast
+    # type=text — FE treats that as Agent progressive stream and drops it.
+    await _save_message(
+        {
+            "type": "user_message",
+            "conversation_id": conv_id,
+            "text": text,
+            "display_text": text,
+            "client_message_id": str(item.get("id") or "").strip() or None,
+        },
+        "user",
+    )
+    msg = {
+        "text": text,
+        "expert_id": item.get("expert_id"),
+        "expert_name": item.get("expert_name"),
+        "engagement": item.get("engagement"),
+    }
+    if item.get("target") is not None:
+        msg["target"] = item.get("target")
+    if item.get("scope") is not None:
+        msg["scope"] = item.get("scope")
+    await _continue_after_orphaned_confirm_options(
+        conv_id=conv_id,
+        client_id=client_id,
+        msg=msg,
+        selected_option_ids=[],
+        workset_item_ids=list(item.get("workset_item_ids") or []),
+    )
+
+
+async def _force_session_demand(conv_id: str, client_id: str, demand_id: str) -> bool:
+    """Interrupt in-flight turn, then apply this queued demand now."""
+    from app.services import session_demand_queue as demand_queue
+
+    item = demand_queue.take(conv_id, demand_id)
+    if not item:
+        return False
+    try:
+        await _freeze_pending_approvals_on_interrupt(conv_id, client_id)
+        interrupt_msg = {
+            "type": "user_interrupt",
+            "conversation_id": conv_id,
+            "action": "cancel",
+        }
+        await _send_to_bound_node(conv_id, json.dumps(interrupt_msg, ensure_ascii=False))
+    except Exception as e:
+        print(f"[WS] session_demand_force interrupt error: {e}")
+    kind = str(item.get("kind") or "text")
+    try:
+        if kind == "confirm_options" or item.get("selected_option_ids") is not None:
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            msg = {
+                "text": item.get("text") or payload.get("text") or "",
+                "expert_id": item.get("expert_id") or payload.get("expert_id"),
+                "expert_name": item.get("expert_name") or payload.get("expert_name"),
+                "engagement": item.get("engagement") or payload.get("engagement"),
+                "request_id": item.get("request_id"),
+            }
+            if item.get("target") is not None:
+                msg["target"] = item.get("target")
+            if item.get("scope") is not None:
+                msg["scope"] = item.get("scope")
+            await _continue_after_orphaned_confirm_options(
+                conv_id=conv_id,
+                client_id=client_id,
+                msg=msg,
+                selected_option_ids=item.get("selected_option_ids") or [],
+                workset_item_ids=item.get("workset_item_ids") or [],
+            )
+        else:
+            await _dispatch_queued_text_demand(conv_id=conv_id, client_id=client_id, item=item)
+    except Exception as e:
+        print(f"[WS] session_demand_force dispatch error: {e}")
+        demand_queue.enqueue(conv_id, item, restore=True)
+        return False
+    await _broadcast_session_demand(
+        conv_id,
+        "session_demand_drained",
+        demand_id=str(item.get("id") or demand_id),
+        kind=kind,
+        text=str(item.get("text") or ""),
+    )
+    return True
+
+
 async def _drain_session_demand_queue(conv_id: str, client_id: str | None = None) -> bool:
     """Spec #313 L9: on idle/task_complete, dequeue head and continue-dispatch if present.
 
@@ -4619,33 +4782,30 @@ async def _drain_session_demand_queue(conv_id: str, client_id: str | None = None
             print(
                 f"[WS] session demand drained conv={conv_id[:8]} demand={str(item.get('id') or '')[:8]}"
             )
+            await _broadcast_session_demand(
+                conv_id,
+                "session_demand_drained",
+                demand_id=str(item.get("id") or ""),
+                kind=kind or "confirm_options",
+                text=str(item.get("text") or ""),
+            )
             return True
-        # Generic text demand (future): shape as user continue.
         text = str(item.get("text") or "").strip()
         if text:
-            msg = {
-                "text": text,
-                "expert_id": item.get("expert_id"),
-                "expert_name": item.get("expert_name"),
-                "engagement": item.get("engagement"),
-            }
-            if item.get("target") is not None:
-                msg["target"] = item.get("target")
-            if item.get("scope") is not None:
-                msg["scope"] = item.get("scope")
-            await _continue_after_orphaned_confirm_options(
-                conv_id=conv_id,
-                client_id=cid_client,
-                msg=msg,
-                selected_option_ids=[],
-                workset_item_ids=list(item.get("workset_item_ids") or []),
+            await _dispatch_queued_text_demand(conv_id=conv_id, client_id=cid_client, item=item)
+            await _broadcast_session_demand(
+                conv_id,
+                "session_demand_drained",
+                demand_id=str(item.get("id") or ""),
+                kind="text",
+                text=text,
             )
             return True
     except Exception as e:
         print(f"[WS] drain session demand error: {e}")
-        # Re-queue head on failure so demand is not lost.
+        # Re-queue head on failure so demand is not lost (bypass cap).
         try:
-            demand_queue.enqueue(conv_id, item)
+            demand_queue.enqueue(conv_id, item, restore=True)
         except Exception:
             pass
     return False
@@ -7474,9 +7634,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         if delivery == "forward_live":
                             pass  # user_input already forwarded (incl. todo_replace_permission)
                         elif delivery == "enqueue":
-                            # Hold grant until dequeue → task_assign one-shot.
-                            if replace_perm:
-                                _grant_todo_replace(conv_id)
+                            from app.services.session_demand_queue import SessionDemandQueueFull
+
                             try:
                                 await _enqueue_confirm_options_while_busy(
                                     conv_id=conv_id,
@@ -7484,6 +7643,20 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     msg=msg,
                                     selected_option_ids=selected_ids,
                                     workset_item_ids=workset_item_ids,
+                                )
+                                # Hold grant until dequeue → task_assign one-shot.
+                                if replace_perm:
+                                    _grant_todo_replace(conv_id)
+                            except SessionDemandQueueFull:
+                                print(
+                                    f"[WS] confirm_options enqueue rejected: queue_full conv={conv_id[:8]}"
+                                )
+                                await _broadcast_session_demand(
+                                    conv_id,
+                                    "session_demand_rejected",
+                                    kind="confirm_options",
+                                    reason="queue_full",
+                                    request_id=str(request_id or "").strip() or None,
                                 )
                             except Exception as e:
                                 print(f"[WS] confirm_options enqueue error: {e}")
@@ -7525,6 +7698,49 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     },
                                     "agent",
                                 )
+
+                elif msg.get("type") in (
+                    "session_demand",
+                    "session_demand_delete",
+                    "session_demand_force",
+                ) and conv_id:
+                    demand_type = str(msg.get("type") or "")
+                    demand_id = str(msg.get("demand_id") or msg.get("id") or "").strip()
+                    if demand_type == "session_demand":
+                        from app.services.session_demand_queue import SessionDemandQueueFull
+
+                        try:
+                            await _enqueue_text_demand_while_busy(
+                                conv_id=conv_id,
+                                client_id=client_id,
+                                msg=msg,
+                            )
+                            st = str(await _conversation_status(conv_id) or "").lower()
+                            if st != "running":
+                                await _drain_session_demand_queue(conv_id, client_id)
+                        except SessionDemandQueueFull:
+                            await _broadcast_session_demand(
+                                conv_id,
+                                "session_demand_rejected",
+                                demand_id=demand_id,
+                                kind="text",
+                                text=str(msg.get("display_text") or msg.get("text") or "").strip() or None,
+                                reason="queue_full",
+                            )
+                        except Exception as e:
+                            print(f"[WS] session_demand enqueue error: {e}")
+                    elif demand_type == "session_demand_delete":
+                        from app.services import session_demand_queue as demand_queue
+
+                        demand_queue.delete(conv_id, demand_id)
+                        await _broadcast_session_demand(
+                            conv_id,
+                            "session_demand_deleted",
+                            demand_id=demand_id,
+                            kind="text",
+                        )
+                    elif demand_type == "session_demand_force" and demand_id:
+                        await _force_session_demand(conv_id, client_id, demand_id)
 
                 elif msg.get("type") in ("user_steer", "user_interrupt") and conv_id:
                     if msg.get("type") == "user_interrupt":

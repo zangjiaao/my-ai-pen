@@ -3,10 +3,10 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { Check, ChevronDown, Target } from "lucide-react";
 import {
@@ -23,6 +23,7 @@ import {
   type WorkBurstProjection,
 } from "../lib/workBurstTime";
 import { commitTypedInput, useRenderAudit } from "../lib/renderAudit";
+import { SESSION_DEMAND_QUEUE_FULL_TITLE } from "../lib/sessionDemandQueue";
 
 /** @mention picker entry: workspace assistant (default seat) or product expert. */
 export type MentionTarget = {
@@ -50,6 +51,7 @@ export type ChatComposerHandle = {
   getValue: () => string;
   setValue: (text: string) => void;
   clear: () => void;
+  focus: () => void;
 };
 
 type MentionState = { start: number; query: string } | null;
@@ -65,6 +67,7 @@ type Props = {
   running: boolean;
   interrupting: boolean;
   workBurst: WorkBurstProjection | null;
+  queueFull?: boolean;
   onSend: (text: string) => void;
   onInterrupt: () => void;
 };
@@ -72,8 +75,12 @@ type Props = {
 const CHAT_COMPOSER_OUTER_CLASS = "px-6 pb-4 pt-4";
 const CHAT_COMPOSER_SHELL_CLASS =
   "relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)]";
-const CHAT_COMPOSER_INPUT_REGION_CLASS = "relative h-[5.875rem] min-w-0";
+const CHAT_COMPOSER_INPUT_REGION_CLASS = "relative min-w-0";
 const CHAT_COMPOSER_INPUT_CONTENT_CLASS = "px-4 py-3.5 text-sm leading-5";
+/** py-3.5 × 2 + leading-5 × 2 — compact empty field; grows with draft. */
+export const COMPOSER_TEXTAREA_MIN_PX = 68;
+/** py-3.5 × 2 + leading-5 × 7 — then native scroll. */
+export const COMPOSER_TEXTAREA_MAX_PX = 168;
 const CHAT_COMPOSER_FOOTER_CLASS =
   "flex min-w-0 items-center justify-between gap-2 px-2.5 py-2";
 const CHAT_COMPOSER_TOOLBAR_CLASS =
@@ -165,29 +172,38 @@ export function insertComposerNewlineAtCaret(
   return { next: `${value.slice(0, lo)}\n${value.slice(hi)}`, caret: lo + 1 };
 }
 
+export function composerTextareaLayout(contentHeight: number): {
+  heightPx: number;
+  overflowY: "auto" | "hidden";
+} {
+  const heightPx = Math.min(
+    Math.max(contentHeight, COMPOSER_TEXTAREA_MIN_PX),
+    COMPOSER_TEXTAREA_MAX_PX,
+  );
+  return {
+    heightPx,
+    overflowY: contentHeight > COMPOSER_TEXTAREA_MAX_PX ? "auto" : "hidden",
+  };
+}
+
+/** Collapse, measure scrollHeight, then clamp to min/max. */
+export function applyComposerTextareaLayout(field: HTMLTextAreaElement): void {
+  const keepEnd = field.selectionStart === field.value.length;
+  const prevScroll = field.scrollTop;
+  field.style.height = "0px";
+  const { heightPx, overflowY } = composerTextareaLayout(field.scrollHeight);
+  field.style.height = `${heightPx}px`;
+  field.style.overflowY = overflowY;
+  if (overflowY === "auto") {
+    field.scrollTop = keepEnd ? field.scrollHeight : prevScroll;
+  }
+}
+
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
 export function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
   if (!target || target.kind !== "expert") return false;
   const pack = String(target.packId || "").trim().toLowerCase();
   return pack === "pentest" || pack.startsWith("pentest");
-}
-
-function renderMentionText(text: string): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const pattern = /(@[^\s@]+)/g;
-  let lastIndex = 0;
-  for (const match of text.matchAll(pattern)) {
-    const index = match.index ?? 0;
-    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
-    parts.push(
-      <span key={`${index}-${match[0]}`} className="font-semibold text-status-running">
-        {match[0]}
-      </span>,
-    );
-    lastIndex = index + match[0].length;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts.length ? parts : [text];
 }
 
 function getMentionState(value: string): MentionState {
@@ -224,6 +240,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     running,
     interrupting,
     workBurst,
+    queueFull = false,
     onSend,
     onInterrupt,
   },
@@ -236,14 +253,21 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
   const [composerTickMs, setComposerTickMs] = useState(() => Date.now());
   const partnerMenuRef = useRef<HTMLDivElement | null>(null);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
+  const inputElRef = useRef<HTMLTextAreaElement | null>(null);
   const tickAnchorRef = useRef<{ seconds: number; atMs: number } | null>(null);
   const imeComposingRef = useRef(false);
   const imeSettleTimerRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = inputElRef.current;
+    if (el) applyComposerTextareaLayout(el);
+  }, [input]);
 
   useImperativeHandle(ref, () => ({
     getValue: () => input,
     setValue: (text: string) => setInput(text),
     clear: () => setInput(""),
+    focus: () => inputElRef.current?.focus(),
   }), [input]);
 
   const mentionState = useMemo(() => getMentionState(input), [input]);
@@ -347,12 +371,13 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     }
   }, [mentionTargets, onSelectPartner, onGoalMode, onEngagementTemplate]);
 
+  const demandQueueFull = running && queueFull;
   const submit = useCallback(() => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || demandQueueFull) return;
     setInput("");
     onSend(text);
-  }, [input, onSend]);
+  }, [input, onSend, demandQueueFull]);
 
   const beginImeComposition = useCallback(() => {
     if (imeSettleTimerRef.current != null) {
@@ -429,15 +454,8 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
           </div>
         )}
         <div className={CHAT_COMPOSER_INPUT_REGION_CLASS}>
-          {input && (
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-ink ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}
-            >
-              {renderMentionText(input)}
-            </div>
-          )}
           <textarea
+            ref={inputElRef}
             value={input}
             onChange={(e) => {
               const next = e.target.value;
@@ -471,16 +489,17 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 commitTypedInput("ChatComposer", () => setInput(next));
                 requestAnimationFrame(() => {
                   el.selectionStart = el.selectionEnd = caret;
+                  applyComposerTextareaLayout(el);
                 });
               }
             }}
-            rows={3}
+            rows={1}
             placeholder={
               activePartner
                 ? `向 ${activePartner.label || activePartner.name} 描述任务…（Shift+Enter 或 ⌘/Ctrl+Enter 换行）`
                 : "请先在专家管理创建专家，或从下方选择对话对象…"
             }
-            className={`relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent text-transparent caret-ink placeholder:text-ink-muted focus:outline-none ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}
+            className={`block min-h-[4.25rem] w-full resize-none whitespace-pre-wrap break-words bg-transparent text-ink caret-ink placeholder:text-ink-muted focus:outline-none ${CHAT_COMPOSER_INPUT_CONTENT_CLASS}`}
           />
         </div>
         <div className={CHAT_COMPOSER_FOOTER_CLASS}>
@@ -717,16 +736,22 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
               >
                 {interrupting ? "中断中…" : "中断"}
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!input.trim()}
-                className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
-              >
-                发送
-              </button>
-            )}
+            ) : null}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!input.trim() || demandQueueFull}
+              title={
+                demandQueueFull
+                  ? SESSION_DEMAND_QUEUE_FULL_TITLE
+                  : running
+                    ? "工作中：加入队列"
+                    : undefined
+              }
+              className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
+            >
+              发送
+            </button>
           </div>
         </div>
       </div>

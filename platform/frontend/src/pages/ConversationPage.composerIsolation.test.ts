@@ -21,5 +21,10 @@ assert.match(
   /ChatComposer/,
   "composer UI must be the isolated ChatComposer child",
 );
+assert.match(
+  pageSrc,
+  /SessionDemandQueue/,
+  "queued user text must render as list-tail chrome, not composer draft",
+);
 
 console.log("ok: ConversationPage composer input is isolated");

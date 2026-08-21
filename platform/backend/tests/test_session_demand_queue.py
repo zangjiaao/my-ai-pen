@@ -23,6 +23,16 @@ def test_fifo_enqueue_pop_order():
     assert q.size("c1") == 0
 
 
+def test_take_by_id_force_send():
+    a = q.enqueue("c3", text="first")
+    b = q.enqueue("c3", text="second")
+    taken = q.take("c3", b["id"])
+    assert taken is not None
+    assert taken["text"] == "second"
+    assert q.peek("c3")["id"] == a["id"]
+    assert q.take("c3", "missing") is None
+
+
 def test_delete_by_id():
     a = q.enqueue("c2", text="keep")
     b = q.enqueue("c2", text="drop")
@@ -33,6 +43,25 @@ def test_delete_by_id():
     assert [x["text"] for x in remaining] == ["keep", "tail"]
     assert remaining[0]["id"] == a["id"]
     assert remaining[1]["id"] == c["id"]
+
+
+def test_enqueue_rejects_over_max_per_case():
+    for i in range(q.MAX_DEMANDS_PER_CASE):
+        q.enqueue("c1", text=f"d{i}")
+    try:
+        q.enqueue("c1", text="extra")
+        assert False, "expected SessionDemandQueueFull"
+    except q.SessionDemandQueueFull:
+        pass
+    assert q.size("c1") == q.MAX_DEMANDS_PER_CASE
+
+
+def test_restore_enqueue_bypasses_cap():
+    for i in range(q.MAX_DEMANDS_PER_CASE):
+        q.enqueue("c1", text=f"d{i}")
+    restored = q.enqueue("c1", {"id": "old", "text": "restored"}, restore=True)
+    assert restored["text"] == "restored"
+    assert q.size("c1") == q.MAX_DEMANDS_PER_CASE + 1
 
 
 def test_queues_isolated_by_conversation():

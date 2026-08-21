@@ -64,7 +64,7 @@ From the operator’s view:
 | **Replace permission** | Explicit user accept to replace the Free Tasks map. |
 | **next_steps card** | ChoiceCard kind for curated next direction (amends #312 multi-select default). |
 | **Supplement text** | Optional free text on the card chrome, merged into confirm `text`. |
-| **Session demand queue** | Spec #277 queue of user intents while Session in-flight; FIFO; force/delete. |
+| **Session demand queue** | Spec #277 queue of user intents while Session in-flight; FIFO; force/delete; cap 5 pending / Case. |
 | **Honest pause** | Narrative/card that admits open checklist items rather than claiming full completion. |
 
 ---
