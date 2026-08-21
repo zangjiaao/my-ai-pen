@@ -279,21 +279,27 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # does not wipe another role's tasks after handoff.
     try:
         from app.services.case_participants import (
+            participant_plan_tree_owners,
             plan_tree_from_participants,
             task_map_projection_from_participants,
         )
 
         participant_plan = plan_tree_from_participants(context)
+        declared_plan_owners = participant_plan_tree_owners(context)
         task_map_proj = task_map_projection_from_participants(context)
     except Exception:
         participant_plan = []
+        declared_plan_owners = set()
         task_map_proj = {
             "task_map_revisions": [],
             "live_revision_id": None,
             "live_sealed": False,
         }
-    if participant_plan:
-        raw_plan_tree = merge_plan_trees_by_owner(participant_plan, raw_plan_tree)
+    raw_plan_tree = merge_snapshot_plan_tree(
+        participant_plan,
+        raw_plan_tree,
+        declared_plan_owners,
+    )
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conv_status, workflow_kind)
     if conv_status in {"completed", "incomplete"} and workflow_kind == "pentest":
@@ -586,6 +592,37 @@ def strix_agents_for_snapshot(
     except Exception:
         pass
     return strix_agents_from_checkpoint(checkpoint, conversation_status)
+
+
+def merge_snapshot_plan_tree(
+    participant_nodes: list,
+    secondary: list,
+    authoritative_owners: set[str] | None = None,
+) -> list[dict]:
+    """Case Tasks for snapshot: participant persist wins, including empty clears.
+
+    Owners who have a stored ``plan_tree`` list (even ``[]``) must not be
+    resurrected from checkpoint / message archaeology. Unowned secondary
+    nodes are dropped once any owner has declared a tree.
+    """
+    owners = {str(item).strip() for item in (authoritative_owners or set()) if str(item).strip()}
+    if not owners:
+        if participant_nodes:
+            return merge_plan_trees_by_owner(participant_nodes, secondary)
+        return [dict(item) for item in (secondary or []) if isinstance(item, dict)]
+
+    def owner_of(node: dict) -> str:
+        return str(node.get("owner_expert_id") or node.get("owner_expert_name") or "").strip()
+
+    kept_secondary: list[dict] = []
+    for item in secondary or []:
+        if not isinstance(item, dict):
+            continue
+        owner = owner_of(item)
+        if not owner or owner in owners:
+            continue
+        kept_secondary.append(item)
+    return merge_plan_trees_by_owner(participant_nodes or [], kept_secondary)
 
 
 def merge_plan_trees_by_owner(primary: list, secondary: list) -> list[dict]:

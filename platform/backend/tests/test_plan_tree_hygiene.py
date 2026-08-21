@@ -3,6 +3,7 @@
 from app.services.conversation_snapshot import (
     ensure_plan_tree_shape,
     kanban_for_snapshot,
+    merge_snapshot_plan_tree,
     normalize_kanban_buckets,
     progress_for_checkpoint,
     progress_for_phase,
@@ -68,3 +69,72 @@ def test_empty_pentest_kanban_has_no_padded_buckets():
         "pentest",
     )
     assert [b["id"] for b in kept] == ["attack-surface"]
+
+
+def test_snapshot_reload_does_not_resurrect_cleared_owner():
+    """Participant [] is SoT on reload — checkpoint / unowned archaeology stay out."""
+    from app.services.case_participants import (
+        apply_plan_tree_to_participant,
+        participant_plan_tree_owners,
+        plan_tree_from_participants,
+    )
+
+    ctx = apply_plan_tree_to_participant(
+        {},
+        [{"node_id": "t1", "title": "recon", "status": "running"}],
+        expert_id="e1",
+        expert_name="平台助理",
+    )
+    ctx = apply_plan_tree_to_participant(
+        ctx,
+        [{"node_id": "t2", "title": "sqli", "status": "pending"}],
+        expert_id="e2",
+        expert_name="渗透大师",
+    )
+    ctx = apply_plan_tree_to_participant(ctx, [], expert_id="e1", expert_name="平台助理")
+
+    secondary = [
+        {"node_id": "t1", "title": "recon", "owner_expert_id": "e1"},
+        {"node_id": "ghost", "title": "unowned checkpoint"},
+        {"node_id": "t2", "title": "sqli stale", "owner_expert_id": "e2"},
+        {"node_id": "t3", "title": "other role", "owner_expert_id": "e3"},
+    ]
+    out = merge_snapshot_plan_tree(
+        plan_tree_from_participants(ctx),
+        secondary,
+        participant_plan_tree_owners(ctx),
+    )
+    titles = {str(n.get("title")) for n in out}
+    assert titles == {"sqli", "other role"}
+    assert all(str(n.get("owner_expert_id") or "") != "e1" for n in out)
+
+
+def test_snapshot_full_clear_drops_checkpoint_fallback():
+    from app.services.case_participants import (
+        apply_plan_tree_to_participant,
+        participant_plan_tree_owners,
+        plan_tree_from_participants,
+    )
+
+    ctx = apply_plan_tree_to_participant(
+        {},
+        [{"node_id": "t1", "title": "recon"}],
+        expert_id="e1",
+        expert_name="平台助理",
+    )
+    ctx = apply_plan_tree_to_participant(ctx, [], expert_id="e1", expert_name="平台助理")
+    out = merge_snapshot_plan_tree(
+        plan_tree_from_participants(ctx),
+        [
+            {"node_id": "t1", "title": "recon", "owner_expert_id": "e1"},
+            {"node_id": "legacy", "title": "message archaeology"},
+        ],
+        participant_plan_tree_owners(ctx),
+    )
+    assert out == []
+
+
+def test_snapshot_without_declared_plan_keeps_checkpoint():
+    secondary = [{"node_id": "legacy", "title": "from checkpoint"}]
+    out = merge_snapshot_plan_tree([], secondary, set())
+    assert [n.get("title") for n in out] == ["from checkpoint"]
