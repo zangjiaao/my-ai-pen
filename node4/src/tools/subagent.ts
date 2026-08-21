@@ -120,7 +120,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
     description: [
       "Child work packages under this task workspace (OMP keep-alive).",
       "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
-      "SPAWN BATCH: packages=[{...}] — concurrency is scheduling only (NODE4_SUBAGENT_CONCURRENCY default 8; extras queue). Same target may fan out freely.",
+      "SPAWN BATCH: packages=[{...}] — concurrency is scheduling only (NODE4_SUBAGENT_CONCURRENCY default 8; extras queue). Same target may fan out freely. Packages inherit top-level target/scope/already_done when omitted.",
       "Per-task admitted package budget default 128 (NODE4_SUBAGENT_TASK_BUDGET; max 1024). Batch length safety ceiling MAX_SUBAGENT_BATCH.",
       "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
       "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
@@ -137,7 +137,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
         }),
       ),
       // Flat fields (optional when packages provided)
-      target: Type.Optional(Type.String({ description: "Flat: URL | IP:Port | domain+path" })),
+      target: Type.Optional(Type.String({ description: "Flat or batch default: URL | IP:Port | domain+path" })),
       scope: Type.Optional(Type.String({ description: "Flat or batch default scope" })),
       already_done: Type.Optional(
         Type.String({ description: "Flat or batch default already_done (base progress)" }),
@@ -899,7 +899,7 @@ async function runSubagentPackage(
             requested_node_id: result.planBind.requested_node_id,
             hint:
               result.planBind.hint ||
-              (result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
+              (result.planBind.path === "fuzzy"
                 ? "Pass plan_node_id (Tasks L2 todo node_id) on next subagent spawn for deterministic Worker chip ownership."
                 : undefined),
           }

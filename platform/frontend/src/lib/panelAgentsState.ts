@@ -483,6 +483,9 @@ export function isLegacySyntheticPhasePlan(nodes: PlanNode[]): boolean {
  * Never preserve legacy synthetic phase lists when next is empty/real.
  */
 export function preferRicherPlanTree(prev: PlanNode[], next: PlanNode[]): PlanNode[] {
+  // Incoming archaeology shells must never paint — including the first snapshot
+  // of a brand-new Case (prev is empty; old code returned `next` as-is).
+  if (isLegacySyntheticPhasePlan(next)) next = [];
   if (!prev.length) return next;
   if (!next.length) {
     // Empty authoritative snapshot: drop archaeology-only fake phases; keep live Graph.
@@ -509,12 +512,36 @@ export function preferRicherPlanTree(prev: PlanNode[], next: PlanNode[]): PlanNo
  * Drop unowned nodes when the same node_id already has an owner (checkpoint vs participant).
  * When an owner re-publishes, replace that owner's previous nodes only.
  */
-export function mergePlanTreeByOwner(prev: PlanNode[], incoming: PlanNode[]): PlanNode[] {
-  if (!incoming.length) return prev;
-  if (!prev.length) return dedupePlanTreePreferOwner(incoming);
-
+export function mergePlanTreeByOwner(
+  prev: PlanNode[],
+  incoming: PlanNode[],
+  ownerHint?: { owner_expert_id?: string; owner_expert_name?: string },
+): PlanNode[] {
   const ownerKey = (node: PlanNode) =>
     String(node.owner_expert_id || node.owner_expert_name || "").trim();
+  if (!incoming.length) {
+    const hint = String(
+      ownerHint?.owner_expert_id || ownerHint?.owner_expert_name || "",
+    ).trim();
+    if (hint) {
+      const aliases = new Set(
+        [hint, String(ownerHint?.owner_expert_id || "").trim(), String(ownerHint?.owner_expert_name || "").trim()].filter(
+          Boolean,
+        ),
+      );
+      return prev.filter((node) => {
+        const owner = ownerKey(node);
+        if (!owner) return false;
+        return !aliases.has(owner);
+      });
+    }
+    const owners = new Set(prev.map(ownerKey).filter(Boolean));
+    // Unowned or single-role tree: empty is a full replace (Case d84fb991 ghost chip).
+    if (owners.size <= 1) return [];
+    return prev;
+  }
+  if (!prev.length) return dedupePlanTreePreferOwner(incoming);
+
   const nodeId = (node: PlanNode) =>
     String(node.node_id || node.id || node.title || "").trim();
   const incomingOwners = new Set(incoming.map(ownerKey).filter(Boolean));

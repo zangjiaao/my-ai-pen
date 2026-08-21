@@ -465,6 +465,37 @@ def test_plan_tree_per_role_does_not_wipe_other():
     assert owners == {"e1", "e2"}
 
 
+def test_empty_plan_tree_clears_that_role_only():
+    """Empty plan_tree is an authoritative persist for that owner (reload must not resurrect)."""
+    from app.services.case_participants import apply_plan_tree_to_participant, plan_tree_from_participants
+
+    ctx = apply_plan_tree_to_participant(
+        {},
+        [{"node_id": "t1", "title": "recon", "level": "work_item", "source": "plan", "kind": "task"}],
+        expert_id="e1",
+        expert_name="平台助理",
+        pack_id="default",
+    )
+    ctx = apply_plan_tree_to_participant(
+        ctx,
+        [{"node_id": "t2", "title": "sqli", "level": "work_item", "source": "plan", "kind": "task"}],
+        expert_id="e2",
+        expert_name="渗透大师",
+        pack_id="pentest",
+    )
+    ctx = apply_plan_tree_to_participant(
+        ctx,
+        [],
+        expert_id="e1",
+        expert_name="平台助理",
+        pack_id="default",
+    )
+    assert ctx["participants"]["expert:e1"]["plan_tree"] == []
+    flat = plan_tree_from_participants(ctx)
+    assert [n.get("title") for n in flat] == ["sqli"]
+    assert {str(n.get("owner_expert_id")) for n in flat} == {"e2"}
+
+
 # --- Spec #308 Worker display_name ---
 
 

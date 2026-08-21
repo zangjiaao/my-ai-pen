@@ -789,7 +789,9 @@ export function createHardGraphStageExecutor(options: {
 
       const stageUsage = createUsageLedgerFromEnv();
       stampPanelConfiguredModel(panel, stageUsage);
-      const textStream = new PlatformTextStream(parentRuntime.platform, task);
+      const textStream = new PlatformTextStream(parentRuntime.platform, task, {
+        sessionId: () => String(stageSid || "").trim(),
+      });
       const checkpointThrottle = new CheckpointThrottle();
       const obsCounters = {
         toolCallCount: 0,

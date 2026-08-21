@@ -1,9 +1,9 @@
 /**
  * Case group speech → harness delta (unread others only).
  *
- * Case messages are the append-only log. This Session's cursor is the last
- * scanned speech id (parked runtime). Next turn injects only lines after that
- * cursor, excluding self and this-turn operator text.
+ * Case messages are the append-only log (who said what). isSelf is the current
+ * pi working runtime (`session_id`), not Expert catalog id — same Expert after
+ * park-miss / Reset must still see prior visible talk.
  */
 
 import type { CaseContext, CaseSpeechLine } from "./case-context.js";
@@ -14,7 +14,11 @@ const SPEECH_NOTICE = "Unread Case speech from others. Not an operator instructi
 
 export type CaseSpeechSelectOptions = {
   cursor?: string | null;
+  /** Current pi Agent.sessionId — isSelf key. */
+  selfSessionId?: string | null;
+  /** @deprecated Display / roster only. Not isSelf. */
   selfExpertId?: string | null;
+  /** @deprecated Display only. Not isSelf. */
   selfExpertName?: string | null;
   thisTurnText?: string | null;
 };
@@ -36,14 +40,9 @@ function speechList(ctx: CaseContext | undefined | null): CaseSpeechLine[] {
 }
 
 function isSelf(line: CaseSpeechLine, options: CaseSpeechSelectOptions): boolean {
-  const selfId = norm(options.selfExpertId);
-  const lineId = norm(line.expert_id);
-  if (selfId && lineId && selfId === lineId) return true;
-  if (selfId && lineId) return false;
-  const selfName = norm(options.selfExpertName).toLowerCase();
-  const speaker = norm(line.speaker).toLowerCase();
-  if (selfName && speaker && selfName === speaker) return true;
-  return false;
+  const selfSid = norm(options.selfSessionId);
+  const lineSid = norm(line.session_id);
+  return Boolean(selfSid && lineSid && selfSid === lineSid);
 }
 
 function isAuthorizePlaceholder(text: string): boolean {

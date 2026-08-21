@@ -10,7 +10,10 @@ export type CaseThreadLine = {
   text?: string;
   ts?: string;
   id?: string;
+  /** Who spoke (Expert / mention). Not isSelf. */
   expert_id?: string;
+  /** pi Agent.sessionId of the speaking working runtime. isSelf key. */
+  session_id?: string;
 };
 
 /** Visible group speech (id-bearing). Distinct from thread crumbs / finding cards. */

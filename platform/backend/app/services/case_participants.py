@@ -925,6 +925,25 @@ def plan_tree_from_participants(context: dict | None) -> list[dict[str, Any]]:
     return out
 
 
+def participant_plan_tree_owners(context: dict | None) -> set[str]:
+    """Owners who have a persisted plan_tree list (empty list = declared clear).
+
+    Missing ``plan_tree`` is not a clear — those Cases still use checkpoint /
+    message fallback. Expert id and display name are both aliases.
+    """
+    owners: set[str] = set()
+    for row in participants_list(context):
+        if not isinstance(row.get("plan_tree"), list):
+            continue
+        eid = str(row.get("expert_id") or "").strip()
+        ename = str(row.get("expert_name") or "").strip()
+        if eid:
+            owners.add(eid)
+        if ename:
+            owners.add(ename)
+    return owners
+
+
 def mark_participant_idle(
     context: dict | None,
     *,

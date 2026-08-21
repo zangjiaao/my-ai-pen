@@ -57,7 +57,7 @@ Learned from pi-coding-agent (`research/pi/packages/coding-agent/src/core/system
 |---------|---------------------|----------|----------------|
 | **System** | Four layers, one string, Standing-first | Policy, how this seat works, this-run switches, this-turn facts | Operator utterance; skill encyclopedia; tool JSON schema |
 | **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope, outer continue |
-| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint; **unread Case speech from others** (`### Case speech`) | Operator utterance; this Session’s own speech; always-on policy |
+| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint; **unread Case speech** (`### Case speech`; isSelf = this pi `session_id`) | Operator utterance; this working runtime’s own speech; always-on policy |
 | **Tool result** | Appended tool text | Mid-run todo / booking / surface nudges (`### This-run …`) | Operator utterance |
 | **Tool definitions** | Name + description + parameters (parallel to text) | How to call the tool | Policy essays, start-order, Case facts |
 | **Skill body** | After `skill(get)` / worker load | Attack-class procedure | Always-on Profession; Graph settlement law |
@@ -97,7 +97,7 @@ Ask one question; put the sentence in **exactly one** home.
 | Authorized handoff card body (`proposed_action`) | **Task `### Handoff`** — not the user turn; not Instruction |
 | What the human just said | **User turn** |
 | Lab outer continue / occupancy persist or checkpoint (not the operator) | **Harness** (`### Continue` / `### Context window` / `### Checkpoint rehydrate`) |
-| Unread Case group speech from other Sessions / the operator (not self, not this-turn user) | **Harness** `### Case speech` (delta after Session cursor) |
+| Unread Case group speech (not this pi `session_id`, not this-turn user) | **Harness** `### Case speech` (delta after Session cursor) |
 | Mid-run todo / booking / surface nudge after a tool | **Tool result** (`### This-run todo` / `### This-run booking` / `### Surface`) |
 | How to invoke a tool | **Tool schema** |
 
@@ -106,7 +106,7 @@ Ask one question; put the sentence in **exactly one** home.
 - **One home.** If citizen already says it, do not restate in `work.md`, Runtime one-liners, and the user turn.
 - **Facts last in system, not first in user.** Case / Target / Scope stay in Task. User is not a second Case dump.
 - **Reminders are Runtime, not user.** `eagerTodo` / `eagerBooking` / chat-only “no target” are opted-in system Runtime (`BuildSystemPromptOptions`). They render as markdown (`### This-run todo` / `### This-run booking`). Runtime work-mode, graph catalog, and RoE use `### Work mode` / `### Available graphs` / `### Rules of engagement`. Goal inject in This turn uses `### Goal`. Chat-only “named vs empty” follows structured Target/Scope content (host-only URLs and default `:80`/`:443` count as named), not an explicit non-default port. Outer continue / goal / budget use the **Harness** channel (`### Continue`, `session.prompt(..., { channel: "harness" })`). Mid-run nudges append to the **tool result** with the same `###` headings. Do not wrap harness in XML. Do not put harness in the user turn.
-- **Case speech is harness, not system Thread.** Case `messages` is the append-only group log (visible talk only). Each Main / park turn injects **unread others** after the Session cursor (`speechCursor` on the parked runtime). Do not re-dump 1–3 then 1–4. Do not put `### Thread` back in This turn. Thinking and tool process stay Session-private.
+- **Case speech is harness, not system Thread.** Case `messages` is the append-only group log (visible talk only: `expert_id` who + `session_id` which pi runtime). Each Main / park turn injects **unread others** after the Session cursor (`speechCursor` on the parked runtime). **isSelf = current pi `session_id`**. Do not re-dump 1–3 then 1–4. Do not put `### Thread` back in This turn. Thinking and tool process stay Session-private.
 - **No encyclopedia in always-on.** Graph settlement, package `plan_node_id` law, and class playbooks stay out of Free Profession.
 - **Skill ids ≠ skill bodies.** Runtime lists ids; bodies enter only via `skill` / worker load.
 - **Do not invent a sixth layer** for “environment.” Environment = Task (Case + target) + RoE (Runtime).
@@ -405,4 +405,5 @@ Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai
 | Date | Change |
 |------|--------|
 | 2026-08-16 | Harness channel (#481): outer continue / persist-pass / checkpoint are `role=harness`, not fake user turns. Mid-run nudges stay on the tool result. |
+| 2026-08-21 | Case speech isSelf = pi `session_id` (not Expert id). Same Expert new working runtime still sees prior visible talk. |
 | 2026-08-16 | Case group speech: `case_context.speech` log + Session cursor; harness `### Case speech` is unread others only. System `### Thread` retired. |

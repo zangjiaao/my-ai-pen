@@ -146,6 +146,7 @@ class ProgressiveContentStream {
     private readonly task: TaskEnvelope,
     private readonly channel: StreamChannel,
     private readonly extract: (message: unknown) => string,
+    private readonly sessionIdOf?: () => string,
   ) {}
 
   /**
@@ -288,10 +289,14 @@ class ProgressiveContentStream {
     if (status) this.lastSentStatus = status;
     this.firstFlushPending = false;
     const type = this.channel === "thinking" ? "thinking" : "text";
+    const sessionId = String(this.sessionIdOf?.() || "").trim();
     const content =
       this.channel === "thinking"
         ? { text, reasoning: text, stream_id: streamId, status: status || "running" }
         : { text, stream_id: streamId };
+    if (sessionId && type === "text") {
+      (content as { session_id?: string }).session_id = sessionId;
+    }
     // Chain WS sends for order. Progressive flushes stay non-blocking for callers;
     // force/allowEmpty (final + T1 start) await the chain so status frames are ordered.
     this.sending = this.sending
@@ -302,6 +307,7 @@ class ProgressiveContentStream {
           task_id: this.task.taskId,
           content,
           stream_id: streamId,
+          ...(sessionId && type === "text" ? { session_id: sessionId } : {}),
         } as PlatformMessage),
       )
       .catch(() => {});
@@ -353,9 +359,14 @@ export class PlatformTextStream {
   constructor(
     platform: PlatformSink,
     task: TaskEnvelope,
+    options?: { sessionId?: string | (() => string) },
   ) {
-    this.text = new ProgressiveContentStream(platform, task, "text", assistantText);
-    this.thinking = new ProgressiveContentStream(platform, task, "thinking", assistantThinking);
+    const sessionIdOf = () =>
+      typeof options?.sessionId === "function"
+        ? String(options.sessionId() || "").trim()
+        : String(options?.sessionId || "").trim();
+    this.text = new ProgressiveContentStream(platform, task, "text", assistantText, sessionIdOf);
+    this.thinking = new ProgressiveContentStream(platform, task, "thinking", assistantThinking, sessionIdOf);
   }
 
   /**

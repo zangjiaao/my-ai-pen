@@ -69,23 +69,6 @@ def plan_node_level(kind: str) -> str:
     return "work_item"
 
 
-def phase_node_id(phase: str) -> str:
-    return f"plan-phase-{phase}"
-
-
-def objective_node_id(phase: str, key: str) -> str:
-    return f"plan-objective-{phase}-{key}"
-
-
-def objective_title(phase: str, key: str) -> str:
-    titles = {
-        ("recon", "attack_surface"): "\u53d1\u73b0\u53ef\u6d4b\u8bd5\u653b\u51fb\u9762",
-        ("recon", "traffic"): "\u6574\u7406\u9ad8\u4ef7\u503c\u8bf7\u6c42",
-        ("analysis", "test_plan"): "\u5206\u6790\u653b\u51fb\u9762\u98ce\u9669",
-    }
-    return titles.get((phase, key), key.replace("_", " ").title())
-
-
 def _pending_handoff_expert_ids(context: object) -> list[str]:
     """Spec #354: expert ids with incomplete map holds (collab badge)."""
     try:
@@ -96,74 +79,20 @@ def _pending_handoff_expert_ids(context: object) -> list[str]:
         return []
 
 
-def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
+def ensure_plan_tree_shape(
+    items: list[dict],
+    _phase: str | None = None,
+    _completed: set[str] | None = None,
+    _status: str = "",
+    workflow_kind: str | None = None,
+) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
     if workflow_kind == "strix":
         return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
-    if workflow_kind == "pentest":
-        return normalize_pentest_plan_tree(nodes)
-
-    by_id = {str(item.get("node_id") or item.get("id") or ""): item for item in nodes if item.get("node_id") or item.get("id")}
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-
-    for index, key in enumerate(PHASES):
-        node_id = phase_node_id(key)
-        if node_id not in by_id:
-            node = {
-                "node_id": node_id,
-                "title": PHASE_LABELS[key],
-                "kind": "phase",
-                "level": "phase",
-                "parent_id": None,
-                "status": "pending",
-                "priority": index * 100,
-                "source": "runtime",
-            }
-            nodes.append(node)
-            by_id[node_id] = node
-        phase_status = "pending"
-        if status == "completed" or key in completed or index < current_index:
-            phase_status = "done"
-        elif index == current_index:
-            phase_status = "running"
-        by_id[node_id]["status"] = phase_status
-        by_id[node_id]["level"] = "phase"
-        by_id[node_id]["kind"] = "phase"
-        by_id[node_id]["priority"] = by_id[node_id].get("priority", index * 100)
-
-    def ensure_objective(phase_key: str, objective_key: str, priority: int) -> str:
-        node_id = objective_node_id(phase_key, objective_key)
-        if node_id not in by_id:
-            node = {
-                "node_id": node_id,
-                "title": objective_title(phase_key, objective_key),
-                "kind": "objective",
-                "level": "objective",
-                "parent_id": phase_node_id(phase_key),
-                "status": "pending",
-                "priority": PHASES.index(phase_key) * 100 + priority,
-                "source": "runtime",
-            }
-            nodes.append(node)
-            by_id[node_id] = node
-        return node_id
-
-    for node in nodes:
-        kind = str(node.get("kind") or "task")
-        node["level"] = str(node.get("level") or plan_node_level(kind))
-        if node["level"] != "work_item":
-            continue
-        parent_id = str(node.get("parent_id") or "")
-        if parent_id and parent_id in by_id:
-            continue
-        if kind in {"surface", "request"}:
-            node["parent_id"] = ensure_objective("recon", "attack_surface", 10)
-        elif kind == "test":
-            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
-        else:
-            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
-
-    return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
+    # Product Node4 (and any unbound new Case) must not invent archaeology
+    # plan-phase-intake|recon|… shells. Those flashed in Tasks on create, then
+    # vanished once checkpoint.runtime stamped workflow_kind=pentest.
+    return normalize_pentest_plan_tree(nodes)
 
 
 def normalize_pentest_plan_tree(nodes: list[dict]) -> list[dict]:
@@ -350,21 +279,27 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # does not wipe another role's tasks after handoff.
     try:
         from app.services.case_participants import (
+            participant_plan_tree_owners,
             plan_tree_from_participants,
             task_map_projection_from_participants,
         )
 
         participant_plan = plan_tree_from_participants(context)
+        declared_plan_owners = participant_plan_tree_owners(context)
         task_map_proj = task_map_projection_from_participants(context)
     except Exception:
         participant_plan = []
+        declared_plan_owners = set()
         task_map_proj = {
             "task_map_revisions": [],
             "live_revision_id": None,
             "live_sealed": False,
         }
-    if participant_plan:
-        raw_plan_tree = merge_plan_trees_by_owner(participant_plan, raw_plan_tree)
+    raw_plan_tree = merge_snapshot_plan_tree(
+        participant_plan,
+        raw_plan_tree,
+        declared_plan_owners,
+    )
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conv_status, workflow_kind)
     if conv_status in {"completed", "incomplete"} and workflow_kind == "pentest":
@@ -376,8 +311,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         conv_status,
         elapsed_seconds_for_conversation(conversation, checkpoint),
     )
-    progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conv_status) if checkpoint else progress_for_phase(agent_state.get("phase"), conv_status))
-    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conv_status) if checkpoint else todos_for_phase(agent_state.get("phase"), conv_status))
+    # Honest counts only — do not invent 6-phase progress / todos from empty Cases.
+    progress = progress_for_kanban(kanban)
+    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or []
     # Spec #280 Wave1: Evidence SoT = evidence table only (no tool_call fallback).
     evidence_items = evidence_for_panel(evidence, messages=messages)
     # Spec #309: Case traffic audit SoT = conversation.context traffic_exchanges.
@@ -656,6 +592,37 @@ def strix_agents_for_snapshot(
     except Exception:
         pass
     return strix_agents_from_checkpoint(checkpoint, conversation_status)
+
+
+def merge_snapshot_plan_tree(
+    participant_nodes: list,
+    secondary: list,
+    authoritative_owners: set[str] | None = None,
+) -> list[dict]:
+    """Case Tasks for snapshot: participant persist wins, including empty clears.
+
+    Owners who have a stored ``plan_tree`` list (even ``[]``) must not be
+    resurrected from checkpoint / message archaeology. Unowned secondary
+    nodes are dropped once any owner has declared a tree.
+    """
+    owners = {str(item).strip() for item in (authoritative_owners or set()) if str(item).strip()}
+    if not owners:
+        if participant_nodes:
+            return merge_plan_trees_by_owner(participant_nodes, secondary)
+        return [dict(item) for item in (secondary or []) if isinstance(item, dict)]
+
+    def owner_of(node: dict) -> str:
+        return str(node.get("owner_expert_id") or node.get("owner_expert_name") or "").strip()
+
+    kept_secondary: list[dict] = []
+    for item in secondary or []:
+        if not isinstance(item, dict):
+            continue
+        owner = owner_of(item)
+        if not owner or owner in owners:
+            continue
+        kept_secondary.append(item)
+    return merge_plan_trees_by_owner(participant_nodes or [], kept_secondary)
 
 
 def merge_plan_trees_by_owner(primary: list, secondary: list) -> list[dict]:
@@ -1535,10 +1502,18 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
     surfaces = [node for node in work if str(node.get("kind") or "") in {"surface", "request"}]
     tests = [node for node in work if is_concrete_test_node(node)]
     verification = [node for node in work if str(node.get("kind") or "") == "finding" or (str(node.get("kind") or "") == "test" and is_terminal_plan_node(node))]
-    if not checkpoint_kind == "pentest" and not surfaces and not tests and not verification:
+    if not surfaces and not tests and not verification:
         return {
             "elapsed_seconds": elapsed_seconds,
-            "current_stage": current_kanban_stage(phase, status, checkpoint, None),
+            "current_stage": (
+                "completed"
+                if status == "completed"
+                else "incomplete"
+                if status == "incomplete"
+                else "executing"
+                if status == "running"
+                else "idle"
+            ),
             "totals": {"discovered": 0, "processed": 0, "pending": 0, "running": 0, "confirmed": 0, "negative": 0, "blocked": 0, "inconclusive": 0, "percent": 0},
             "buckets": [],
         }
@@ -1697,7 +1672,7 @@ def normalize_kanban_buckets(items, workflow_kind: str | None = None) -> list[di
         if not isinstance(item, dict):
             continue
         bucket_id = str(item.get("id") or "")
-        if bucket_id not in KANBAN_BUCKET_TITLES:
+        if bucket_id not in KANBAN_BUCKET_TITLES or bucket_id in seen:
             continue
         seen.add(bucket_id)
         buckets.append({
@@ -1707,9 +1682,6 @@ def normalize_kanban_buckets(items, workflow_kind: str | None = None) -> list[di
             "total": int(item.get("total") or 0),
             "status": str(item.get("status") or "pending"),
         })
-    for bucket_id, title in KANBAN_BUCKET_TITLES.items():
-        if bucket_id not in seen:
-            buckets.append({"id": bucket_id, "title": title, "done": 0, "total": 0, "status": "pending"})
     return buckets
 
 
@@ -1826,17 +1798,9 @@ def safe_percent(current, total) -> int:
     return round((current_value / total_value) * 100) if total_value else 0
 
 
-def progress_for_phase(phase: str | None, status: str) -> dict:
-    total = len(PHASES)
-    if status == "completed":
-        current = total
-    elif phase in PHASES:
-        current = PHASES.index(phase) + 1
-    elif status == "running":
-        current = 1
-    else:
-        current = 0
-    return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
+def progress_for_phase(_phase: str | None, _status: str) -> dict:
+    """Do not invent a 6-phase denominator. Callers should use kanban totals."""
+    return {"current": 0, "total": 0, "percent": 0}
 
 
 
@@ -1857,59 +1821,27 @@ def todos_for_plan_tree(plan_tree: list[dict]) -> list[dict]:
     return [
         {
             "id": phase,
-            "title": str(by_phase.get(phase, {}).get("title") or PHASE_LABELS[phase]),
-            "status": str(by_phase.get(phase, {}).get("status") or "pending"),
+            "title": str(by_phase[phase].get("title") or PHASE_LABELS.get(phase) or phase),
+            "status": str(by_phase[phase].get("status") or "pending"),
         }
         for phase in PHASES
+        if phase in by_phase
     ]
 
 
-def todos_for_phase(phase: str | None, status: str) -> list[dict]:
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-    return [
-        {
-            "id": key,
-            "title": PHASE_LABELS[key],
-            "status": "done" if status == "completed" or index < current_index else "running" if index == current_index else "pending",
-        }
-        for index, key in enumerate(PHASES)
-    ]
+def todos_for_phase(_phase: str | None, _status: str) -> list[dict]:
+    """Legacy 6-phase checklist — no longer invented for empty Cases."""
+    return []
 
 
-def progress_for_checkpoint(checkpoint: dict, status: str) -> dict:
-    total = len(PHASES)
-    phase = checkpoint_phase(checkpoint, status)
-    completed = checkpoint_completed(checkpoint)
-    if status == "completed":
-        current = total
-    elif completed:
-        current = min(total, max(PHASES.index(item) + 1 for item in completed))
-        if phase in PHASES and phase not in completed:
-            current = max(current, PHASES.index(phase) + 1)
-    elif phase in PHASES:
-        current = PHASES.index(phase) + 1
-    elif status == "running":
-        current = 1
-    else:
-        current = 0
-    current = max(0, min(total, current))
-    return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
+def progress_for_checkpoint(_checkpoint: dict, _status: str) -> dict:
+    """Do not invent a 6-phase denominator from checkpoint.phase."""
+    return {"current": 0, "total": 0, "percent": 0}
 
 
-def todos_for_checkpoint(checkpoint: dict, status: str) -> list[dict]:
-    phase = checkpoint_phase(checkpoint, status)
-    completed = checkpoint_completed(checkpoint)
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-    todos = []
-    for index, key in enumerate(PHASES):
-        if status == "completed" or key in completed or index < current_index:
-            item_status = "done"
-        elif index == current_index:
-            item_status = "running"
-        else:
-            item_status = "pending"
-        todos.append({"id": key, "title": PHASE_LABELS[key], "status": item_status})
-    return todos
+def todos_for_checkpoint(_checkpoint: dict, _status: str) -> list[dict]:
+    """Legacy 6-phase checklist — no longer invented from checkpoint.phase."""
+    return []
 
 
 

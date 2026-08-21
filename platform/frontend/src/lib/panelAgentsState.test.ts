@@ -7,6 +7,7 @@ import {
   isLegacySyntheticPhasePlan,
   markPanelWorkerReleased,
   mergeLivePanelAgents,
+  mergePlanTreeByOwner,
   mergeSnapshotAgentsPreserveHarness,
   preferRicherPlanTree,
   type StrixAgentStatus,
@@ -264,6 +265,10 @@ const liveMainOnly: StrixAgentStatus[] = [
   ];
   assert(isLegacySyntheticPhasePlan(synthetic), "synthetic plan detected");
   assert(
+    preferRicherPlanTree([], synthetic).length === 0,
+    "first snapshot must not paint synthetic plan-phase list",
+  );
+  assert(
     preferRicherPlanTree(synthetic, []).length === 0,
     "empty snapshot drops synthetic plan-phase list",
   );
@@ -298,6 +303,30 @@ const liveMainOnly: StrixAgentStatus[] = [
   assert(marked.every((a) => a.id !== sub1.id && !a.id.endsWith("-sub_1")), "sub_1 gone");
   assert(marked.some((a) => a.id === "role-expert:e2-sub_10"), "sub_10 untouched");
   console.log("ok: markPanelWorkerReleased suffix");
+}
+
+{
+  const ping4: PlanNode = {
+    node_id: "pkg-sub_10",
+    title: "回复 ping4",
+    status: "running",
+    kind: "task",
+    level: "work_item",
+    owner_expert_id: "e1",
+    owner_expert_name: "渗透大师",
+  };
+  const keptGhost = mergePlanTreeByOwner([ping4], []);
+  assert(keptGhost.length === 0, "empty plan_tree must not leave a running ghost chip");
+  const ownerClear = mergePlanTreeByOwner(
+    [ping4, { ...ping4, node_id: "other-role", owner_expert_id: "e2", title: "other" }],
+    [],
+    { owner_expert_id: "e1" },
+  );
+  assert(ownerClear.length === 1, "empty from one expert drops only that expert");
+  assert(ownerClear[0]?.node_id === "other-role", "other role Tasks remain");
+  const doneKeep = mergePlanTreeByOwner([ping4], [{ ...ping4, status: "done" }]);
+  assert(doneKeep[0]?.status === "done", "done republish replaces running");
+  console.log("ok: mergePlanTreeByOwner empty is authoritative");
 }
 
 console.log("panelAgentsState.test.ts: all passed");
