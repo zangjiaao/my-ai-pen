@@ -305,8 +305,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         conv_status,
         elapsed_seconds_for_conversation(conversation, checkpoint),
     )
-    progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conv_status) if checkpoint else progress_for_phase(agent_state.get("phase"), conv_status))
-    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conv_status) if checkpoint else todos_for_phase(agent_state.get("phase"), conv_status))
+    # Honest counts only — do not invent 6-phase progress / todos from empty Cases.
+    progress = progress_for_kanban(kanban)
+    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or []
     # Spec #280 Wave1: Evidence SoT = evidence table only (no tool_call fallback).
     evidence_items = evidence_for_panel(evidence, messages=messages)
     # Spec #309: Case traffic audit SoT = conversation.context traffic_exchanges.
@@ -1464,10 +1465,18 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
     surfaces = [node for node in work if str(node.get("kind") or "") in {"surface", "request"}]
     tests = [node for node in work if is_concrete_test_node(node)]
     verification = [node for node in work if str(node.get("kind") or "") == "finding" or (str(node.get("kind") or "") == "test" and is_terminal_plan_node(node))]
-    if not checkpoint_kind == "pentest" and not surfaces and not tests and not verification:
+    if not surfaces and not tests and not verification:
         return {
             "elapsed_seconds": elapsed_seconds,
-            "current_stage": current_kanban_stage(phase, status, checkpoint, None),
+            "current_stage": (
+                "completed"
+                if status == "completed"
+                else "incomplete"
+                if status == "incomplete"
+                else "executing"
+                if status == "running"
+                else "idle"
+            ),
             "totals": {"discovered": 0, "processed": 0, "pending": 0, "running": 0, "confirmed": 0, "negative": 0, "blocked": 0, "inconclusive": 0, "percent": 0},
             "buckets": [],
         }
@@ -1626,7 +1635,7 @@ def normalize_kanban_buckets(items, workflow_kind: str | None = None) -> list[di
         if not isinstance(item, dict):
             continue
         bucket_id = str(item.get("id") or "")
-        if bucket_id not in KANBAN_BUCKET_TITLES:
+        if bucket_id not in KANBAN_BUCKET_TITLES or bucket_id in seen:
             continue
         seen.add(bucket_id)
         buckets.append({
@@ -1636,9 +1645,6 @@ def normalize_kanban_buckets(items, workflow_kind: str | None = None) -> list[di
             "total": int(item.get("total") or 0),
             "status": str(item.get("status") or "pending"),
         })
-    for bucket_id, title in KANBAN_BUCKET_TITLES.items():
-        if bucket_id not in seen:
-            buckets.append({"id": bucket_id, "title": title, "done": 0, "total": 0, "status": "pending"})
     return buckets
 
 
@@ -1755,17 +1761,9 @@ def safe_percent(current, total) -> int:
     return round((current_value / total_value) * 100) if total_value else 0
 
 
-def progress_for_phase(phase: str | None, status: str) -> dict:
-    total = len(PHASES)
-    if status == "completed":
-        current = total
-    elif phase in PHASES:
-        current = PHASES.index(phase) + 1
-    elif status == "running":
-        current = 1
-    else:
-        current = 0
-    return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
+def progress_for_phase(_phase: str | None, _status: str) -> dict:
+    """Do not invent a 6-phase denominator. Callers should use kanban totals."""
+    return {"current": 0, "total": 0, "percent": 0}
 
 
 
@@ -1786,59 +1784,27 @@ def todos_for_plan_tree(plan_tree: list[dict]) -> list[dict]:
     return [
         {
             "id": phase,
-            "title": str(by_phase.get(phase, {}).get("title") or PHASE_LABELS[phase]),
-            "status": str(by_phase.get(phase, {}).get("status") or "pending"),
+            "title": str(by_phase[phase].get("title") or PHASE_LABELS.get(phase) or phase),
+            "status": str(by_phase[phase].get("status") or "pending"),
         }
         for phase in PHASES
+        if phase in by_phase
     ]
 
 
-def todos_for_phase(phase: str | None, status: str) -> list[dict]:
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-    return [
-        {
-            "id": key,
-            "title": PHASE_LABELS[key],
-            "status": "done" if status == "completed" or index < current_index else "running" if index == current_index else "pending",
-        }
-        for index, key in enumerate(PHASES)
-    ]
+def todos_for_phase(_phase: str | None, _status: str) -> list[dict]:
+    """Legacy 6-phase checklist — no longer invented for empty Cases."""
+    return []
 
 
-def progress_for_checkpoint(checkpoint: dict, status: str) -> dict:
-    total = len(PHASES)
-    phase = checkpoint_phase(checkpoint, status)
-    completed = checkpoint_completed(checkpoint)
-    if status == "completed":
-        current = total
-    elif completed:
-        current = min(total, max(PHASES.index(item) + 1 for item in completed))
-        if phase in PHASES and phase not in completed:
-            current = max(current, PHASES.index(phase) + 1)
-    elif phase in PHASES:
-        current = PHASES.index(phase) + 1
-    elif status == "running":
-        current = 1
-    else:
-        current = 0
-    current = max(0, min(total, current))
-    return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
+def progress_for_checkpoint(_checkpoint: dict, _status: str) -> dict:
+    """Do not invent a 6-phase denominator from checkpoint.phase."""
+    return {"current": 0, "total": 0, "percent": 0}
 
 
-def todos_for_checkpoint(checkpoint: dict, status: str) -> list[dict]:
-    phase = checkpoint_phase(checkpoint, status)
-    completed = checkpoint_completed(checkpoint)
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-    todos = []
-    for index, key in enumerate(PHASES):
-        if status == "completed" or key in completed or index < current_index:
-            item_status = "done"
-        elif index == current_index:
-            item_status = "running"
-        else:
-            item_status = "pending"
-        todos.append({"id": key, "title": PHASE_LABELS[key], "status": item_status})
-    return todos
+def todos_for_checkpoint(_checkpoint: dict, _status: str) -> list[dict]:
+    """Legacy 6-phase checklist — no longer invented from checkpoint.phase."""
+    return []
 
 
 

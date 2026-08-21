@@ -2360,15 +2360,15 @@ class CheckpointResumeTests(unittest.TestCase):
 
         self.assertEqual(agent_state["phase"], "analysis")
         self.assertEqual(agent_state["activeTool"], "execute")
-        self.assertEqual(progress, {"current": 3, "total": 6, "percent": 50})
-        self.assertEqual([item["status"] for item in todos], ["done", "done", "running", "pending", "pending", "pending"])
+        self.assertEqual(progress, {"current": 0, "total": 0, "percent": 0})
+        self.assertEqual(todos, [])
         self.assertEqual(_checkpoint_findings(checkpoint)[0]["id"], "cand-1")
         self.assertEqual(_checkpoint_assets(checkpoint)[0]["address"], "http://target.local")
 
     def test_checkpoint_helpers_tolerate_null_checkpoint(self):
         self.assertEqual(_agent_state_from_checkpoint(None, "running")["phase"], None)
-        self.assertEqual(_progress_for_checkpoint(None, "running"), {"current": 1, "total": 6, "percent": 17})
-        self.assertEqual([item["status"] for item in _todos_for_checkpoint(None, "running")], ["running", "pending", "pending", "pending", "pending", "pending"])
+        self.assertEqual(_progress_for_checkpoint(None, "running"), {"current": 0, "total": 0, "percent": 0})
+        self.assertEqual(_todos_for_checkpoint(None, "running"), [])
         self.assertEqual(_checkpoint_findings(None), [])
         self.assertEqual(_checkpoint_assets(None), [])
         self.assertEqual(_checkpoint_plan_tree(None), [])
@@ -2397,8 +2397,8 @@ class CheckpointResumeTests(unittest.TestCase):
         todos = _todos_for_checkpoint(checkpoint, "running")
 
         self.assertEqual(agent_state["phase"], "verify")
-        self.assertEqual(progress, {"current": 4, "total": 6, "percent": 67})
-        self.assertEqual([item["status"] for item in todos], ["done", "done", "done", "running", "pending", "pending"])
+        self.assertEqual(progress, {"current": 0, "total": 0, "percent": 0})
+        self.assertEqual(todos, [])
 
     def test_user_message_route_separates_resume_from_new_assignment(self):
         self.assertEqual(_user_message_route({"text": "continue"}, "completed")["action"], "completed")

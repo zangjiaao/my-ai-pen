@@ -47,7 +47,7 @@ import {
   recordMessageType,
   shouldUpdateMessageRecord,
 } from "../lib/conversationMessageMerge";
-import { PHASES, phaseLabel } from "../lib/phase";
+import { phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
   legacyWorkerDisplayName,
@@ -1702,7 +1702,7 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
-      setProgress(progressForPhase(phase, "running"));
+      if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
       if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
@@ -1722,7 +1722,7 @@ export default function ConversationPage() {
       const activeTool = m.active_tool != null ? String(m.active_tool) : undefined;
       const currentDetail = typeof m.current_detail === "string" ? m.current_detail : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
-      setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
+      if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
       // Live-patch active role activity without wiping other Case participants.
@@ -3574,9 +3574,7 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
       intakeResult: lastStatus.intake_result,
       intakeStatus: lastStatus.status,
     },
-    progress: progressForPhase(phase, normalizedStatus),
-    // Tasks SoT = plan_tree_updated / Graph plan / checkpoint todos — never invent
-    // pentest phase shells from status.phase (painted Default assistant chat as Graph).
+    // Do not invent 6-phase progress from status.phase — kanban/work totals are SoT.
     plan_tree: [],
     findings: [],
     assets,
@@ -3701,16 +3699,6 @@ function parsePhase(text: string): string | undefined {
   const match = text.match(/Phase:\s*([^\s(]+)/);
   return match?.[1];
 }
-
-function progressForPhase(phase: string | undefined, status: Conversation["status"] | "running"): Progress {
-  const total = PHASES.length;
-  let current = 0;
-  if (status === "completed") current = total;
-  else if (phase && PHASES.includes(phase as typeof PHASES[number])) current = PHASES.indexOf(phase as typeof PHASES[number]) + 1;
-  else if (status === "running") current = 1;
-  return { current, total, percent: total ? Math.round((current / total) * 100) : 0 };
-}
-
 
 function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIdentity = "pentest"): Record<string, unknown> {
   const content = msg.content && typeof msg.content === "object" && !Array.isArray(msg.content) ? msg.content as Record<string, unknown> : {};
