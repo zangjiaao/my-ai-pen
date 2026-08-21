@@ -5,6 +5,7 @@
  */
 
 export const SESSION_DEMAND_CANCEL_LABEL = "取消";
+export const SESSION_DEMAND_EDIT_LABEL = "编辑";
 export const SESSION_DEMAND_SEND_LABEL = "发送";
 /** Spec #277 §3.4 — same cap as backend MAX_DEMANDS_PER_CASE. */
 export const SESSION_DEMAND_MAX_PER_CASE = 5;
@@ -42,17 +43,7 @@ export function upsertQueuedDemand(
   return copy;
 }
 
-/** Keep the row as cancelled chrome (secondary), do not drop it. */
-export function cancelQueuedDemand(
-  items: SessionDemandItem[],
-  demandId: string,
-): SessionDemandItem[] {
-  const id = String(demandId || "").trim();
-  if (!id) return items;
-  return items.map((row) => (row.id === id ? { ...row, status: "cancelled" as const } : row));
-}
-
-/** Remove after drain / force-send (row becomes a real user bubble). */
+/** Remove after drain / force-send / cancel / edit. */
 export function removeQueuedDemand(
   items: SessionDemandItem[],
   demandId: string,
@@ -60,6 +51,14 @@ export function removeQueuedDemand(
   const id = String(demandId || "").trim();
   if (!id) return items;
   return items.filter((row) => row.id !== id);
+}
+
+/** Drop the row. Cancel and edit both remove chrome — no cancelled ghost. */
+export function cancelQueuedDemand(
+  items: SessionDemandItem[],
+  demandId: string,
+): SessionDemandItem[] {
+  return removeQueuedDemand(items, demandId);
 }
 
 export function pendingQueuedDemands(items: SessionDemandItem[]): SessionDemandItem[] {

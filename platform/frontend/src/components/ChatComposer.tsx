@@ -51,6 +51,7 @@ export type ChatComposerHandle = {
   getValue: () => string;
   setValue: (text: string) => void;
   clear: () => void;
+  focus: () => void;
 };
 
 type MentionState = { start: number; query: string } | null;
@@ -266,6 +267,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     getValue: () => input,
     setValue: (text: string) => setInput(text),
     clear: () => setInput(""),
+    focus: () => inputElRef.current?.focus(),
   }), [input]);
 
   const mentionState = useMemo(() => getMentionState(input), [input]);

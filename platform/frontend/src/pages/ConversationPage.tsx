@@ -119,7 +119,6 @@ import {
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
 import {
-  cancelQueuedDemand,
   newSessionDemandId,
   queuedDemandUserContent,
   removeQueuedDemand,
@@ -1194,7 +1193,7 @@ export default function ConversationPage() {
     session_demand_deleted: (msg) => {
       const id = String((msg as Record<string, unknown>).demand_id || "").trim();
       if (!id) return;
-      setSessionDemands((prev) => cancelQueuedDemand(prev, id));
+      setSessionDemands((prev) => removeQueuedDemand(prev, id));
     },
     session_demand_rejected: (msg) => {
       const id = String((msg as Record<string, unknown>).demand_id || "").trim();
@@ -3191,9 +3190,19 @@ export default function ConversationPage() {
 
   const handleCancelDemand = useCallback((demandId: string) => {
     if (!activeId) return;
-    setSessionDemands((prev) => cancelQueuedDemand(prev, demandId));
+    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
     send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
   }, [activeId, send]);
+
+  const handleEditDemand = useCallback((demandId: string) => {
+    if (!activeId || interrupting) return;
+    const item = sessionDemands.find((row) => row.id === demandId);
+    if (!item || item.status !== "pending") return;
+    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
+    send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
+    composerRef.current?.setValue(item.text);
+    composerRef.current?.focus();
+  }, [activeId, interrupting, sessionDemands, send]);
 
   const handleForceDemand = useCallback((demandId: string) => {
     if (!activeId || interrupting) return;
@@ -3468,6 +3477,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               <SessionDemandQueue
                 items={sessionDemands}
                 onCancel={handleCancelDemand}
+                onEdit={handleEditDemand}
                 onForceSend={handleForceDemand}
                 forceDisabled={interrupting}
               />

@@ -33,12 +33,11 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
 
 {
   const cancelled = cancelQueuedDemand([a, b], "a");
-  assert.equal(cancelled[0].status, "cancelled");
-  assert.equal(cancelled[1].status, "pending");
+  assert.deepEqual(cancelled.map((r) => r.id), ["b"]);
   assert.deepEqual(pendingQueuedDemands(cancelled).map((r) => r.id), ["b"]);
   const gone = removeQueuedDemand(cancelled, "b");
-  assert.deepEqual(gone.map((r) => r.id), ["a"]);
-  console.log("ok: cancel keeps row; remove drops drained");
+  assert.deepEqual(gone, []);
+  console.log("ok: cancel and remove drop the row");
 }
 
 {
@@ -83,11 +82,23 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
     /queuedDemandUserContent|addMessageToConversation|removeQueuedDemand/,
     "force-send must wait for session_demand_drained before promoting a user bubble",
   );
+  const editFn = pageSrc.match(/const handleEditDemand[\s\S]*?\}, \[/);
+  assert.ok(editFn, "handleEditDemand must exist");
+  assert.match(editFn[0], /session_demand_delete/, "edit deletes the queued demand");
+  assert.match(editFn[0], /setValue/, "edit overwrites the composer draft");
+  const cancelFn = pageSrc.match(/const handleCancelDemand[\s\S]*?\}, \[/);
+  assert.ok(cancelFn, "handleCancelDemand must exist");
+  assert.match(cancelFn[0], /removeQueuedDemand/, "cancel drops the row");
+  assert.doesNotMatch(cancelFn[0], /cancelQueuedDemand/, "cancel must not leave a cancelled ghost");
   const composerSrc = readFileSync(join(here, "../components/ChatComposer.tsx"), "utf8");
   assert.match(
     composerSrc,
     /demandQueueFull/,
     "composer must not clear draft when the Session demand queue is full",
   );
+  const queueSrc = readFileSync(join(here, "../components/SessionDemandQueue.tsx"), "utf8");
+  assert.match(queueSrc, /SESSION_DEMAND_SEND_LABEL/);
+  assert.match(queueSrc, /SESSION_DEMAND_EDIT_LABEL/);
+  assert.match(queueSrc, /SESSION_DEMAND_CANCEL_LABEL/);
   console.log("ok: ConversationPage promotes drained demands to user bubbles");
 }
