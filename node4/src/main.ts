@@ -426,6 +426,8 @@ client.on("user_input", async (message) => {
     selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
     workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
     text: message.text,
+    custom_text: message.custom_text ?? message.customText,
+    answers: message.answers,
   });
 });
 

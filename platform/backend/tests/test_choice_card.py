@@ -1,5 +1,6 @@
 """Spec #312 / #313 pure choice card contracts (S1–S3)."""
 from app.services.choice_card import (
+    PROJECTED_NEXT_STEPS_QUESTION_ID,
     SOFT_GATE_NOTE,
     apply_soft_gate_note,
     build_confirm_continue_message,
@@ -7,7 +8,10 @@ from app.services.choice_card import (
     expand_selected_options,
     format_selected_summary,
     is_next_steps_choice,
+    is_question_answer_valid,
     messages_have_legal_next_steps_choice,
+    parse_wizard_questions,
+    reduce_choice_decision,
     resolve_confirm_options_delivery,
     should_soft_gate_next_steps,
     validate_choice_card_payload,
@@ -98,8 +102,8 @@ def test_s2_expand_selected_options():
     assert format_selected_summary(exp["summary_titles"]) == "已选择：加深、报告"
 
 
-def test_s3_confirm_text_includes_body_and_supplement():
-    """Spec #313 L8/L9: confirm text carries title/body + optional supplement."""
+def test_s3_confirm_text_custom_is_peer_option():
+    """Spec #450: confirm text carries title/body + 自定义, never 补充."""
     card = {
         "kind": "next_steps",
         "options": [
@@ -112,15 +116,81 @@ def test_s3_confirm_text_includes_body_and_supplement():
             {"id": "report", "title": "出报告", "body": "汇总已确认发现"},
         ],
     }
-    text = build_confirm_options_text(card, ["continue_deep"], supplement="优先 login")
+    text = build_confirm_options_text(card, ["continue_deep"], custom_text="优先 login")
     assert "继续深入探测" in text
     assert "对已发现 surface 做二次验证" in text
-    assert "补充：优先 login" in text
-    # single selection only still valid
+    assert "自定义：优先 login" in text
+    assert "补充" not in text
     text2 = build_confirm_options_text(card, ["report"])
     assert "出报告" in text2
     assert "汇总已确认发现" in text2
     assert "补充" not in text2
+    custom_only = build_confirm_options_text(card, [], custom_text="先做登录口")
+    assert "自定义：先做登录口" in custom_only
+    assert "补充" not in custom_only
+
+    questions = parse_wizard_questions(card)
+    assert len(questions) == 1
+    assert questions[0]["id"] == PROJECTED_NEXT_STEPS_QUESTION_ID
+    assert questions[0]["allow_custom"] is True
+
+    assert is_question_answer_valid(
+        selection="single", allow_custom=True, selected_option_ids=[], custom_text="先做登录口"
+    )
+    assert not is_question_answer_valid(
+        selection="single",
+        allow_custom=True,
+        selected_option_ids=["continue_deep"],
+        custom_text="note",
+    )
+
+    reduced = reduce_choice_decision(card, custom_text="先做登录口")
+    assert reduced["ok"] is True
+    assert reduced["selected_option_ids"] == []
+    assert reduced["custom_text"] == "先做登录口"
+    assert reduce_choice_decision(card, selected_option_ids=[])["ok"] is False
+
+    # custom-alone expands no workset
+    exp = expand_selected_options(card, [])
+    assert exp["workset_item_ids"] == []
+
+
+def test_s1_wizard_questions_payload():
+    good = validate_choice_card_payload(
+        {
+            "presentation": "approval_wizard",
+            "questions": [
+                {
+                    "id": "q1",
+                    "prompt": "How many?",
+                    "selection": "single",
+                    "options": [
+                        {"id": "three", "title": "Three"},
+                        {"id": "five", "title": "Five"},
+                    ],
+                }
+            ],
+        }
+    )
+    assert good["ok"] is True
+    assert good["mode"] == "next_steps"
+    assert good["value"]["presentation"] == "approval_wizard"
+
+    custom_only = validate_choice_card_payload(
+        {
+            "presentation": "approval_wizard",
+            "questions": [{"id": "only", "prompt": "Anything?", "options": [], "allow_custom": True}],
+        }
+    )
+    assert custom_only["ok"] is True
+
+    blocked = validate_choice_card_payload(
+        {
+            "presentation": "approval_wizard",
+            "questions": [{"id": "only", "prompt": "Pick", "options": [], "allow_custom": False}],
+        }
+    )
+    assert blocked["ok"] is False
 
 
 def test_s1_confirm_continue_retains_sticky_target():

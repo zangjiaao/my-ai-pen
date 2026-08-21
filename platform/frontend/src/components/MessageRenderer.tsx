@@ -11,7 +11,8 @@ import ThinkingCard from "./cards/ThinkingCard";
 import { ToolCallCard, ToolCallCardSkeleton } from "./cards/ToolCallCard";
 import { LoadingPixelMark } from "./LoadingState";
 import MarkdownText from "./MarkdownText";
-import type { ChoiceDecision } from "../lib/choiceCard";
+import type { ChoiceDecision, WizardAnswer } from "../lib/choiceCard";
+import type { ConfirmOptionsExtras } from "./cards/ChoiceCard";
 import {
   composerLiveSeconds,
   composerTimerVisible,
@@ -29,12 +30,12 @@ interface Props {
   fallbackPentestNodeId?: string | null;
   platformAgentNodeId?: string | null;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
-  /** Spec #313 next_steps single-select confirm + optional supplement. */
+  /** Spec #313 / #450 next_steps confirm: option ids and/or custom-alone. */
   onConfirmOptions?: (
     requestId: string,
     selectedOptionIds: string[],
     cardContent: Record<string, unknown>,
-    supplement?: string,
+    extras?: ConfirmOptionsExtras,
   ) => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
@@ -43,6 +44,8 @@ interface Props {
   approvalDecisionByRequestId?: Record<string, ChoiceDecision>;
   /** Spec #312: selected option ids by request_id (hydrate read-only next_steps). */
   choiceSelectedByRequestId?: Record<string, string[]>;
+  choiceCustomByRequestId?: Record<string, string>;
+  choiceAnswersByRequestId?: Record<string, WizardAnswer[]>;
   /** Case actively working — false clears orphan 「思考中…」 on idle/incomplete. */
   sessionActive?: boolean;
   /** Disable choice controls while a turn is running. */
@@ -457,7 +460,7 @@ function SystemNotice({ content, msgType }: { content: Record<string, unknown>; 
   return <StatusNotice content={content} msgType={msgType} />;
 }
 
-function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
+function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, choiceCustomByRequestId = {}, choiceAnswersByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
   useRenderAudit("MessageRenderer");
   const { role, msg_type, content } = message;
 
@@ -543,12 +546,14 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
           content={content}
           decision={approvalDecisionByRequestId[rid]}
           selectedOptionIds={choiceSelectedByRequestId[rid]}
+          customText={choiceCustomByRequestId[rid]}
+          answers={choiceAnswersByRequestId[rid]}
           highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)}
           disabled={choiceDisabled}
           onAuthorize={() => onDecision?.(content.request_id as string, "authorize")}
           onCancel={() => onDecision?.(content.request_id as string, "cancel")}
-          onConfirmOptions={(ids, supplement) =>
-            onConfirmOptions?.(String(content.request_id || ""), ids, content, supplement)
+          onConfirmOptions={(ids, extras) =>
+            onConfirmOptions?.(String(content.request_id || ""), ids, content, extras)
           }
         />
       );

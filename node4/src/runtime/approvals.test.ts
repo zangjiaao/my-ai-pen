@@ -61,6 +61,19 @@ assert.deepEqual(nextResult.selected_option_ids, ["a", "b"]);
 assert.deepEqual(nextResult.workset_item_ids, ["w1"]);
 assert.equal(nextResult.text, "已选择：A、B");
 
+const waitCustom = registerApprovalWait("req-3b", "conv-1");
+assert.equal(
+  resolveApproval("req-3b", "confirm_options", {
+    selected_option_ids: [],
+    custom_text: "先做登录口",
+    text: "已选择：\n- 自定义：先做登录口",
+  }),
+  true,
+);
+const customResult = await waitCustom;
+assert.equal(customResult.decision, "confirm_options");
+assert.equal(customResult.custom_text, "先做登录口");
+
 // Spec #312 L9: secondary freeze unblocks as answered (not authorize).
 const waitAnswered = registerApprovalWait("req-4", "conv-1");
 assert.equal(resolveApproval("req-4", "answered"), true);

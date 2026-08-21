@@ -31,8 +31,8 @@ From the operator’s view:
 1. **Free-mode Tasks are the user-visible progress source of truth** for that Participant Session’s checklist (not a disposable agent scratchpad).  
 2. **Silent whole-map `todo.init` replace is forbidden** while the Session has meaningful prior todo state; continue work **merges** or mutates in place. Full replace requires **explicit user permission**. Declining replace still allows normal maintain ops (`append` / `start` / `done` / `drop`). **Successful replace archives** the prior map (does not discard it); sealed all-terminal maps and RightPanel revision history are Spec [#321](https://github.com/zangjiaao/my-ai-pen/issues/321) / [`task-map-history.md`](task-map-history.md).  
 3. **Completion narrative is soft-aligned:** the Agent may offer next steps or say a phase is pausing **without** zeroing open todos, but must **honestly surface remaining open progress** (no “评估已完成” with a silent dirty map). Open todos do **not** hard-block harness settlement (avoids fake mass-`done`).  
-4. **next_steps Choice Cards** are **agent-authored from prior work**, emitted only when valuable and purposeful; platform rejects empty/broken cards. **Single-select** primary direction; optional **expandable supplement text** on the card.  
-5. Confirm = **structured ids + full display text (option title/body + optional supplement)** enqueued as a **normal FIFO Session demand** (same as user messages under Spec #277). Idle/out-of-queue delivery continues the **same Session** with sticky target/scope/expert and **without** empty-target chat-only bypass.  
+4. **next_steps Choice Cards** are **agent-authored from prior work**, emitted only when valuable and purposeful; platform rejects empty/broken cards. **Single-select** primary direction; **custom last-row option** may stand alone (Spec #450).  
+5. Confirm = **structured ids + full display text (option title/body and/or 自定义)** enqueued as a **normal FIFO Session demand** (same as user messages under Spec #277). Idle/out-of-queue delivery continues the **same Session** with sticky target/scope/expert and **without** empty-target chat-only bypass.  
 6. Graph mode keeps existing stage-local L2 merge discipline; this Spec’s Free init/replace rules do not weaken Graph package-anchored history protection.
 
 ---
@@ -48,8 +48,8 @@ From the operator’s view:
 | L5 | **Soft completion honesty:** next_steps / “pause / wrap narrative” allowed with open items **if** remaining progress is disclosed; no hard “open todos ⇒ refuse settle.” |
 | L6 | next_steps options **from Agent judgment on work done**; **may omit** the card; **no fixed product template options** as primary UI. |
 | L7 | Platform **fail-closed residual cards** only (0 options, missing body, invalid shape)—not “must always show N options.” |
-| L8 | next_steps **single-select**; optional **supplement text** field on confirm. |
-| L9 | Confirm wire: `selected_option_ids` + `text` (titles/bodies + supplement) → **same FIFO queue** as user messages; not a privileged priority class. |
+| L8 | next_steps **single-select**; custom last-row answer may stand alone (Spec #450). |
+| L9 | Confirm wire: `selected_option_ids` + `text` (titles/bodies + 自定义) → **same FIFO queue** as user messages; not a privileged priority class. |
 | L10 | Dequeue / live wait deliver to **same Participant Session** with work context (target, scope, expert, existing Tasks); **forbid** empty-target “conversation only” continuation for a confirm that carried a prior engagement target. |
 | L11 | Queue chrome: delete item / force-send-interrupt — same as any queued user demand (Spec #277 §3.4). |
 

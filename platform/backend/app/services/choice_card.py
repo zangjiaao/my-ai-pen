@@ -1,7 +1,8 @@
-"""Spec #312 — Unified Choice Card pure contracts (S1–S3).
+"""Spec #312 / #313 / #450 — Unified Choice Card pure contracts (S1–S3).
 
 Agent-authored options; platform validates / expands / soft-gates only.
 Does not invent engagement or option bodies from Workset titles.
+#450: custom is a peer option (not a supplement); option cards use wizard chrome.
 """
 from __future__ import annotations
 
@@ -9,6 +10,9 @@ from typing import Any
 
 NEXT_STEPS_MIN = 2
 NEXT_STEPS_MAX = 5
+WIZARD_MAX_QUESTIONS = 8
+WIZARD_MAX_OPTIONS = 8
+PROJECTED_NEXT_STEPS_QUESTION_ID = "next_steps"
 
 SOFT_GATE_NOTE = (
     "Soft gate (Spec #312/#313): stoppable/continue boundary with open Case Workset "
@@ -32,10 +36,103 @@ def is_next_steps_choice(content: dict | None) -> bool:
     kind = _s(content.get("kind")).lower()
     if kind == "next_steps":
         return True
+    presentation = _s(content.get("presentation")).lower()
+    if presentation == "approval_wizard":
+        return True
+    questions = content.get("questions")
+    if isinstance(questions, list) and questions and all(isinstance(q, dict) for q in questions):
+        return True
     opts = content.get("options")
     if not isinstance(opts, list) or not opts:
         return False
     return all(isinstance(o, dict) for o in opts)
+
+
+def _parse_option_row(
+    row: object, index: int, errors: list[str], prefix: str, *, require_body: bool
+) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        errors.append(f"{prefix}[{index}] must be an object")
+        return None
+    oid = _s(row.get("id"))
+    title = _s(row.get("title"))
+    body = _s(row.get("body"))
+    if not oid:
+        errors.append(f"{prefix}[{index}].id required")
+    if not title:
+        errors.append(f"{prefix}[{index}].title required")
+    if require_body and not body:
+        errors.append(f"{prefix}[{index}].body required")
+    if not oid or not title:
+        return None
+    opt: dict[str, Any] = {"id": oid, "title": title, "body": body}
+    raw_ws = row.get("workset_item_ids")
+    if isinstance(raw_ws, list):
+        workset_ids = [_s(x) for x in raw_ws if _s(x)]
+        if workset_ids:
+            opt["workset_item_ids"] = workset_ids
+    if _s(row.get("kind")):
+        opt["kind"] = _s(row.get("kind"))
+    return opt
+
+
+def _parse_questions(raw: object, errors: list[str], card_option_ids: set[str]) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        errors.append("questions must be an array")
+        return []
+    if len(raw) < 1 or len(raw) > WIZARD_MAX_QUESTIONS:
+        errors.append(
+            f"wizard questions must be 1–{WIZARD_MAX_QUESTIONS} (got {len(raw)})"
+        )
+    qids: set[str] = set()
+    questions: list[dict[str, Any]] = []
+    for i, row in enumerate(raw):
+        if not isinstance(row, dict):
+            errors.append(f"questions[{i}] must be an object")
+            continue
+        oid = _s(row.get("id"))
+        prompt = _s(row.get("prompt")) or _s(row.get("question"))
+        if not oid:
+            errors.append(f"questions[{i}].id required")
+        if not prompt:
+            errors.append(f"questions[{i}].prompt required")
+        if oid:
+            if oid in qids:
+                errors.append(f"duplicate question id: {oid}")
+            qids.add(oid)
+        selection = "multi" if row.get("selection") == "multi" else "single"
+        allow_custom = row.get("allow_custom") is not False
+        options: list[dict[str, Any]] = []
+        opts_raw = row.get("options")
+        if opts_raw is None:
+            pass
+        elif not isinstance(opts_raw, list):
+            errors.append(f"questions[{i}].options must be an array")
+        else:
+            if len(opts_raw) > WIZARD_MAX_OPTIONS:
+                errors.append(f"questions[{i}] options must be 0–{WIZARD_MAX_OPTIONS}")
+            for j, opt_row in enumerate(opts_raw):
+                parsed = _parse_option_row(
+                    opt_row, j, errors, f"questions[{i}].options", require_body=False
+                )
+                if not parsed:
+                    continue
+                if parsed["id"] in card_option_ids:
+                    errors.append(f"duplicate option id: {parsed['id']}")
+                card_option_ids.add(parsed["id"])
+                options.append(parsed)
+        if not options and not allow_custom:
+            errors.append(f"questions[{i}] needs options or allow_custom")
+        questions.append(
+            {
+                "id": oid or f"q{i}",
+                "prompt": prompt,
+                "selection": selection,
+                "options": options,
+                "allow_custom": allow_custom,
+            }
+        )
+    return questions
 
 
 def validate_choice_card_payload(raw: object) -> dict[str, Any]:
@@ -44,9 +141,11 @@ def validate_choice_card_payload(raw: object) -> dict[str, Any]:
         return {"ok": False, "errors": ["payload must be an object"]}
 
     kind = _s(raw.get("kind")).lower() or "confirm"
+    explicit_presentation = _s(raw.get("presentation")).lower()
+    has_questions = isinstance(raw.get("questions"), list) and bool(raw.get("questions"))
     is_next = kind == "next_steps" or is_next_steps_choice(raw)
 
-    if not is_next:
+    if not is_next and not has_questions and explicit_presentation != "approval_wizard":
         return {
             "ok": True,
             "mode": "authorize",
@@ -57,55 +156,86 @@ def validate_choice_card_payload(raw: object) -> dict[str, Any]:
         }
 
     errors: list[str] = []
-    opts_raw = raw.get("options")
-    if not isinstance(opts_raw, list):
-        return {"ok": False, "errors": ["next_steps requires options array"]}
-    if len(opts_raw) < NEXT_STEPS_MIN or len(opts_raw) > NEXT_STEPS_MAX:
-        errors.append(
-            f"next_steps options must be {NEXT_STEPS_MIN}–{NEXT_STEPS_MAX} "
-            f"(got {len(opts_raw)})"
-        )
+    card_option_ids: set[str] = set()
+    questions: list[dict[str, Any]] | None = None
+    if has_questions or explicit_presentation == "approval_wizard":
+        questions = _parse_questions(raw.get("questions"), errors, card_option_ids)
 
-    ids: set[str] = set()
+    opts_raw = raw.get("options")
+    has_structured = (
+        isinstance(opts_raw, list)
+        and bool(opts_raw)
+        and all(isinstance(o, dict) for o in opts_raw)
+    )
     options: list[dict[str, Any]] = []
-    for i, row in enumerate(opts_raw):
-        if not isinstance(row, dict):
-            errors.append(f"options[{i}] must be an object")
-            continue
-        oid = _s(row.get("id"))
-        title = _s(row.get("title"))
-        body = _s(row.get("body"))
-        if not oid:
-            errors.append(f"options[{i}].id required")
-        if not title:
-            errors.append(f"options[{i}].title required")
-        if not body:
-            errors.append(f"options[{i}].body required")
-        if oid:
-            if oid in ids:
-                errors.append(f"duplicate option id: {oid}")
-            ids.add(oid)
-        workset_ids = []
-        raw_ws = row.get("workset_item_ids")
-        if isinstance(raw_ws, list):
-            workset_ids = [_s(x) for x in raw_ws if _s(x)]
-        opt: dict[str, Any] = {"id": oid, "title": title, "body": body}
-        if workset_ids:
-            opt["workset_item_ids"] = workset_ids
-        if _s(row.get("kind")):
-            opt["kind"] = _s(row.get("kind"))
-        options.append(opt)
+    if has_structured and not questions:
+        if len(opts_raw) < NEXT_STEPS_MIN or len(opts_raw) > NEXT_STEPS_MAX:
+            errors.append(
+                f"next_steps options must be {NEXT_STEPS_MIN}–{NEXT_STEPS_MAX} "
+                f"(got {len(opts_raw)})"
+            )
+        ids: set[str] = set()
+        for i, row in enumerate(opts_raw):
+            parsed = _parse_option_row(row, i, errors, "options", require_body=True)
+            if not parsed:
+                continue
+            if parsed["id"] in ids:
+                errors.append(f"duplicate option id: {parsed['id']}")
+            ids.add(parsed["id"])
+            options.append(parsed)
+    elif not questions and (kind == "next_steps" or explicit_presentation == "approval_wizard"):
+        return {"ok": False, "errors": ["next_steps requires options array"]}
 
     if errors:
         return {"ok": False, "errors": errors}
 
-    # Spec #313 L8: next_steps product default is single-select (multi only when agent sets it).
     selection = raw.get("selection")
     if selection not in ("single", "multi"):
         selection = "single"
 
-    value = {**raw, "kind": "next_steps", "selection": selection, "options": options}
+    if explicit_presentation in {"recommendation", "flat"}:
+        presentation = explicit_presentation
+    else:
+        presentation = "approval_wizard"
+
+    value = {
+        **raw,
+        "kind": "next_steps",
+        "selection": selection,
+        "presentation": presentation,
+    }
+    if options:
+        value["options"] = options
+    if questions:
+        value["questions"] = questions
+    if raw.get("allow_custom") is False:
+        value["allow_custom"] = False
     return {"ok": True, "mode": "next_steps", "value": value}
+
+
+def parse_wizard_questions(card: dict | None) -> list[dict[str, Any]]:
+    result = validate_choice_card_payload(card or {})
+    if not result.get("ok") or result.get("mode") != "next_steps":
+        return []
+    value = result.get("value") if isinstance(result.get("value"), dict) else {}
+    host = value.get("questions")
+    if isinstance(host, list) and host:
+        return list(host)
+    options = value.get("options") if isinstance(value.get("options"), list) else []
+    if not options:
+        return []
+    prompt = _s(value.get("question")) or _s(value.get("preamble")) or "下一步工作包"
+    selection = value.get("selection") if value.get("selection") in {"single", "multi"} else "single"
+    allow_custom = value.get("allow_custom") is not False
+    return [
+        {
+            "id": PROJECTED_NEXT_STEPS_QUESTION_ID,
+            "prompt": prompt,
+            "selection": selection,
+            "options": options,
+            "allow_custom": allow_custom,
+        }
+    ]
 
 
 def parse_choice_options(card: dict | None) -> list[dict[str, Any]]:
@@ -113,6 +243,17 @@ def parse_choice_options(card: dict | None) -> list[dict[str, Any]]:
     if not result.get("ok") or result.get("mode") != "next_steps":
         return []
     value = result.get("value") or {}
+    questions = value.get("questions") if isinstance(value, dict) else None
+    if isinstance(questions, list) and questions:
+        out: list[dict[str, Any]] = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            opts = q.get("options")
+            if isinstance(opts, list):
+                out.extend(o for o in opts if isinstance(o, dict))
+        if out:
+            return out
     opts = value.get("options") if isinstance(value, dict) else None
     return list(opts) if isinstance(opts, list) else []
 
@@ -156,38 +297,177 @@ def format_selected_summary(summary_titles: list[str] | None) -> str:
     return "已选择：" + "、".join(titles)
 
 
+def is_question_answer_valid(
+    *,
+    selection: str,
+    allow_custom: bool,
+    selected_option_ids: list | None = None,
+    custom_text: str | None = None,
+) -> bool:
+    selected = [_s(x) for x in (selected_option_ids or []) if _s(x)]
+    custom = _s(custom_text) if allow_custom else ""
+    if selection == "single":
+        if custom:
+            return len(selected) == 0
+        return len(selected) == 1
+    return len(selected) > 0 or bool(custom)
+
+
+def parse_wizard_answers(raw: object) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        qid = _s(row.get("question_id"))
+        if not qid:
+            continue
+        selected = [
+            _s(x)
+            for x in (row.get("selected_option_ids") or [])
+            if isinstance(row.get("selected_option_ids"), list) and _s(x)
+        ]
+        if not isinstance(row.get("selected_option_ids"), list):
+            selected = []
+        ans: dict[str, Any] = {"question_id": qid, "selected_option_ids": selected}
+        custom = _s(row.get("custom_text"))
+        if custom:
+            ans["custom_text"] = custom
+        out.append(ans)
+    return out
+
+
+def reduce_choice_decision(
+    card: dict | None,
+    *,
+    selected_option_ids: list | None = None,
+    custom_text: str | None = None,
+    answers: list | None = None,
+) -> dict[str, Any]:
+    """S2 — wizard / next_steps answers → normalized confirm payload."""
+    questions = parse_wizard_questions(card)
+    if not questions:
+        return {"ok": False, "errors": ["no wizard questions"]}
+    by_id: dict[str, dict[str, Any]] = {}
+    for ans in parse_wizard_answers(answers):
+        by_id[str(ans.get("question_id"))] = ans
+    errors: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    union: list[str] = []
+    seen: set[str] = set()
+    for q in questions:
+        qid = _s(q.get("id"))
+        ans = by_id.get(qid)
+        if ans is None and len(questions) == 1:
+            ans = {
+                "question_id": qid,
+                "selected_option_ids": [_s(x) for x in (selected_option_ids or []) if _s(x)],
+                "custom_text": _s(custom_text) or None,
+            }
+        selected = [_s(x) for x in ((ans or {}).get("selected_option_ids") or []) if _s(x)]
+        legal = {_s(o.get("id")) for o in (q.get("options") or []) if isinstance(o, dict)}
+        filtered = [oid for oid in selected if oid in legal]
+        allow_custom = q.get("allow_custom") is not False
+        custom = _s((ans or {}).get("custom_text")) if allow_custom else ""
+        selection = "multi" if q.get("selection") == "multi" else "single"
+        if selection == "single" and custom:
+            filtered = []
+        if not is_question_answer_valid(
+            selection=selection,
+            allow_custom=allow_custom,
+            selected_option_ids=filtered,
+            custom_text=custom,
+        ):
+            errors.append(f"question {qid} needs an option or custom answer")
+            continue
+        row: dict[str, Any] = {"question_id": qid, "selected_option_ids": filtered}
+        if custom:
+            row["custom_text"] = custom
+        normalized.append(row)
+        for oid in filtered:
+            if oid in seen:
+                continue
+            seen.add(oid)
+            union.append(oid)
+    if errors:
+        return {"ok": False, "errors": errors}
+    result: dict[str, Any] = {
+        "ok": True,
+        "selected_option_ids": union,
+        "answers": normalized,
+    }
+    if len(normalized) == 1 and normalized[0].get("custom_text"):
+        result["custom_text"] = normalized[0]["custom_text"]
+    elif _s(custom_text):
+        result["custom_text"] = _s(custom_text)
+    return result
+
+
 def build_confirm_options_text(
     card: dict | None,
     selected_option_ids: list | None,
     *,
     supplement: str | None = None,
+    custom_text: str | None = None,
+    answers: list | None = None,
 ) -> str:
-    """Spec #313 S3 — full confirm text: option title/body + optional supplement.
+    """Spec #313 / #450 S3 — option title/body + custom as a peer answer.
 
-    Used as Session demand text (same class as user messages). Prefer this over
-    title-only summary when feeding continue / queue.
+    Used as Session demand text (same class as user messages). Custom is never
+    merged as 「补充：」.
     """
+    fallback_custom = _s(custom_text) or _s(supplement)
+    parsed_answers = parse_wizard_answers(answers)
+    questions = parse_wizard_questions(card)
+    if parsed_answers and questions:
+        by_id = { _s(a.get("question_id")): a for a in parsed_answers }
+        parts: list[str] = []
+        multi = len(questions) > 1
+        for i, q in enumerate(questions):
+            ans = by_id.get(_s(q.get("id"))) or {}
+            lines: list[str] = []
+            if multi:
+                lines.append(f"{i + 1}. {_s(q.get('prompt'))}")
+            else:
+                lines.append("已选择：")
+            opt_by_id = {
+                _s(o.get("id")): o
+                for o in (q.get("options") or [])
+                if isinstance(o, dict)
+            }
+            for oid in ans.get("selected_option_ids") or []:
+                opt = opt_by_id.get(_s(oid))
+                if not isinstance(opt, dict):
+                    continue
+                title = _s(opt.get("title")) or _s(opt.get("id"))
+                body = _s(opt.get("body"))
+                lines.append(f"- {title}：{body}" if body else f"- {title}")
+            custom = _s(ans.get("custom_text"))
+            if custom:
+                lines.append(f"- 自定义：{custom}")
+            parts.append("\n".join(lines))
+        return "\n".join(parts).strip()
+
     expanded = expand_selected_options(card, selected_option_ids)
     selected = expanded.get("selected_options") or []
     parts: list[str] = []
     if selected:
-        lines: list[str] = ["已选择："]
+        lines = ["已选择："]
         for opt in selected:
             if not isinstance(opt, dict):
                 continue
             title = _s(opt.get("title")) or _s(opt.get("id"))
             body = _s(opt.get("body"))
-            if body:
-                lines.append(f"- {title}：{body}")
-            else:
-                lines.append(f"- {title}")
+            lines.append(f"- {title}：{body}" if body else f"- {title}")
+        if fallback_custom:
+            lines.append(f"- 自定义：{fallback_custom}")
         parts.append("\n".join(lines))
+    elif fallback_custom:
+        parts.append("已选择：\n" + f"- 自定义：{fallback_custom}")
     else:
         titles = expanded.get("summary_titles") or []
         parts.append(format_selected_summary(titles if isinstance(titles, list) else []))
-    sup = _s(supplement)
-    if sup:
-        parts.append(f"补充：{sup}")
     return "\n".join(parts).strip()
 
 

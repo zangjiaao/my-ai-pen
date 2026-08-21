@@ -1,6 +1,6 @@
 # Spec: Unified Choice Card (next steps + authorize)
 
-**Status:** implemented (vertical slice; review fixes applied; soft-gate on assign; no hard gate) — **amended by Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)** (Free continue integrity: single-select next_steps, optional supplement, value-only emission, confirm = FIFO Session demand)  
+**Status:** implemented (vertical slice; review fixes applied; soft-gate on assign; no hard gate) — **amended by Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)** (Free continue integrity) and **[#450](https://github.com/zangjiaao/my-ai-pen/issues/450)** (Approval wizard chrome; custom is a last-row peer option, not a supplement)  
 **Tracker Spec (to-spec / `ready-for-agent`):** [#312](https://github.com/zangjiaao/my-ai-pen/issues/312); amend [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)  
 **Related:** Spec [#311](https://github.com/zangjiaao/my-ai-pen/issues/311) Case Workset / Goal outer; `docs/specs/harness.md` Settle; `ConfirmCard` / `request_user_decision`; product-state UI projection [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free Tasks SoT [`free-tasks-continue-integrity.md`](free-tasks-continue-integrity.md)
 
@@ -30,7 +30,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 1. **Agent-curated** structured **Choice Cards** in the **Main conversation stream** (same product language as authorize/handoff cards).  
 2. **One shared chrome** (`ChoiceCard`): title, markdown body/preamble, options, primary CTA.  
    - **`authorize` / handoff** preset → today’s ConfirmCard behavior (授权 / 取消).  
-   - **`next_steps` preset** → curated options, **single-select primary direction** (Spec #313; multi-select no longer product default), optional **supplement text** on the card, confirm continues the Session.  
+   - **`next_steps` preset** → Approval wizard chrome (Spec #450): radio/check rows, **custom last-row option** (may stand alone), Send submits, ✕ cancels. Single-select default (Spec #313). Confirm continues the Session.  
 3. Each next_steps option has **title + required body** (why / what / success shape) and **optional** `workset_item_ids[]` (0..n) to bind Case Workset rows without listing every API as its own chip. Options are **agent-authored from prior work**; emit **only when valuable/purpose-clear** (may omit). Platform rejects empty/broken cards — does **not** supply fixed template options.  
 4. User confirm → **structured `user_decision`** (`selected_option_ids` + full `text` including option title/body + optional supplement) + visible “已选择…” summary; demand is **FIFO Session queue** same as user text (#277 / #313).  
 5. Card **stays in history**; after user continues the conversation without using the card (or after answering), **controls become read-only**.  
@@ -47,7 +47,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 | L1 | Options **authored by Agent** (not platform keyword/inventory expansion as primary UI). |
 | L2 | Emit when Agent judges **valuable next work** exists (may omit); soft retry when a boundary expected a card but none arrived — **no** fixed “always four options.” Spec #313. |
 | L3 | Unified **ChoiceCard** shell; Confirm is a preset. |
-| L4 | **next_steps** default **single-select** + optional supplement text (Spec #313); authorize stays two-button. Multi-select is not the product default. |
+| L4 | **next_steps** default **single-select** (Spec #313); custom is a **peer option** (Spec #450), not a supplement. Authorize stays two-button until Recommendation (H2). Multi-select is not the product default. |
 | L5 | Card is a **message in the stream** (not sticky-only chrome). |
 | L6 | Option fields: `id`, `title`, `body`, optional `workset_item_ids[]`, optional coarse `kind`. |
 | L7 | Confirm path: structured decision + visible summary (not silent-only). |
@@ -116,7 +116,7 @@ choice_card | confirm_card (compat):
   request_id: string
   kind: "authorize" | "handoff" | "next_steps" | …
   selection: "single" | "multi"   # next_steps default single (Spec #313); authorize N/A (two fixed actions)
-  # optional FE supplement text merged into user_decision.text on confirm
+  # Spec #450: custom_text is a peer answer (not a supplement hanging on an option)
   preamble?: markdown
   question?: string               # authorize title
   options?: [                     # next_steps

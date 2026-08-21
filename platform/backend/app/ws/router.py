@@ -1683,10 +1683,16 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         pending_kind = str(msg.get("kind") or "confirm").strip().lower() or "confirm"
         pending_options = msg.get("options") if isinstance(msg.get("options"), list) else None
         pending_selection = msg.get("selection")
-        if pending_options and all(isinstance(o, dict) for o in pending_options):
+        pending_questions = msg.get("questions") if isinstance(msg.get("questions"), list) else None
+        pending_presentation = str(msg.get("presentation") or "").strip().lower() or None
+        structured_pending = bool(
+            (pending_options and all(isinstance(o, dict) for o in pending_options))
+            or pending_questions
+        )
+        if structured_pending:
             if pending_kind in {"confirm", ""}:
                 pending_kind = "next_steps"
-            # Spec #312: validate next_steps snapshot used for S2 expand (fail closed).
+            # Spec #312 / #450: validate next_steps / wizard snapshot used for S2 expand (fail closed).
             try:
                 from app.services.choice_card import validate_choice_card_payload
 
@@ -1694,7 +1700,10 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                     {
                         "kind": pending_kind,
                         "options": pending_options,
+                        "questions": pending_questions,
+                        "presentation": pending_presentation,
                         "selection": pending_selection,
+                        "allow_custom": msg.get("allow_custom"),
                         "request_id": request_id,
                     }
                 )
@@ -1703,6 +1712,10 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                     pending_options = value.get("options")
                     pending_kind = "next_steps"
                     pending_selection = value.get("selection") or pending_selection
+                    if value.get("questions"):
+                        pending_questions = value.get("questions")
+                    if value.get("presentation"):
+                        pending_presentation = value.get("presentation")
                 elif pending_kind == "next_steps":
                     print(
                         f"[WS] pending next_steps invalid options: {validated.get('errors')}"
@@ -1731,19 +1744,25 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "target": msg.get("target"),
             "proposed_action": msg.get("proposed_action"),
             "question": msg.get("question"),
-            # Spec #312: retain validated next_steps option snapshot for expand on confirm_options.
+            # Spec #312 / #450: retain validated option/wizard snapshot for expand on confirm_options.
             "options": pending_options,
+            "questions": pending_questions,
+            "presentation": pending_presentation,
+            "allow_custom": msg.get("allow_custom"),
             "selection": pending_selection,
             # Requesting Session persona (for graph_mode_apply settle on same expert).
             "expert_id": str(msg.get("expert_id") or "").strip() or None,
             "expert_name": str(msg.get("expert_name") or "").strip() or None,
         }
         # Spec #313 L10: keep option snapshot after pending_approvals is consumed/frozen.
-        if pending_options is not None or pending_kind:
+        if pending_options is not None or pending_questions is not None or pending_kind:
             choice_card_snapshots[request_id] = {
                 "conversation_id": conv_id,
                 "kind": pending_kind,
                 "options": pending_options,
+                "questions": pending_questions,
+                "presentation": pending_presentation,
+                "allow_custom": msg.get("allow_custom"),
                 "selection": pending_selection,
             }
         # Spec #325 H1: authorize wait is not busy — pause work-burst accrual.
@@ -2596,13 +2615,15 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                     content["selected_option_ids"] = [
                         str(x).strip() for x in selected_ids if str(x or "").strip()
                     ]
+                custom_text = str(msg.get("custom_text") or "").strip()
+                if custom_text:
+                    content["custom_text"] = custom_text
+                if isinstance(msg.get("answers"), list):
+                    content["answers"] = msg.get("answers")
                 # Spec #312 S2: always expand workset binds from pending card snapshot —
                 # never trust client workset_item_ids alone.
                 workset_ids: list[str] = []
-                if (
-                    str(decision_val or "").strip() == "confirm_options"
-                    and isinstance(selected_ids, list)
-                ):
+                if str(decision_val or "").strip() == "confirm_options":
                     try:
                         from app.services.choice_card import expand_selected_options
 
@@ -2619,8 +2640,16 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                                 if isinstance(approval_snap, dict)
                                 else None
                             ),
+                            "questions": (
+                                approval_snap.get("questions")
+                                if isinstance(approval_snap, dict)
+                                else None
+                            ),
                         }
-                        expanded = expand_selected_options(card_snap, selected_ids)
+                        expanded = expand_selected_options(
+                            card_snap,
+                            selected_ids if isinstance(selected_ids, list) else [],
+                        )
                         workset_ids = list(expanded.get("workset_item_ids") or [])
                     except Exception:
                         workset_ids = []
@@ -2767,24 +2796,30 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
         elif msg_type == "request_decision":
             msg_type = "confirm_card"
             kind = str(msg.get("kind") or "confirm").strip().lower() or "confirm"
-            # Spec #312: next_steps carries structured option objects; authorize keeps legacy strings.
+            # Spec #312 / #450: next_steps carries structured option objects; authorize keeps legacy strings.
             raw_options = msg.get("options")
             structured_options = None
+            structured_questions = msg.get("questions") if isinstance(msg.get("questions"), list) else None
             if isinstance(raw_options, list) and raw_options and all(
                 isinstance(o, dict) for o in raw_options
             ):
                 structured_options = raw_options
                 if kind in {"confirm", ""}:
                     kind = "next_steps"
+            if structured_questions and kind in {"confirm", ""}:
+                kind = "next_steps"
             # Fail closed for invalid next_steps: drop bad options and log (do not persist junk).
-            if kind == "next_steps" or structured_options is not None:
+            if kind == "next_steps" or structured_options is not None or structured_questions is not None:
                 try:
                     from app.services.choice_card import validate_choice_card_payload
 
                     validated = validate_choice_card_payload(
                         {
-                            "kind": "next_steps" if kind == "next_steps" or structured_options else kind,
+                            "kind": "next_steps" if kind == "next_steps" or structured_options or structured_questions else kind,
                             "options": structured_options,
+                            "questions": structured_questions,
+                            "presentation": msg.get("presentation"),
+                            "allow_custom": msg.get("allow_custom"),
                             "selection": msg.get("selection"),
                             "question": msg.get("question"),
                             "request_id": msg.get("request_id"),
@@ -2793,21 +2828,27 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                     if validated.get("ok") and validated.get("mode") == "next_steps":
                         value = validated.get("value") or {}
                         structured_options = value.get("options")
+                        if value.get("questions"):
+                            structured_questions = value.get("questions")
                         kind = "next_steps"
                         if value.get("selection") in {"single", "multi"}:
                             msg = {**msg, "selection": value.get("selection")}
+                        if value.get("presentation"):
+                            msg = {**msg, "presentation": value.get("presentation")}
                     else:
                         print(
                             f"[WS] request_decision next_steps invalid options: "
                             f"{validated.get('errors')}"
                         )
                         structured_options = None
+                        structured_questions = None
                         if kind == "next_steps":
                             # Fail closed: do not present fake inventory chips.
                             kind = "confirm"
                 except Exception as val_exc:
                     print(f"[WS] request_decision validate_choice_card: {val_exc}")
                     structured_options = None
+                    structured_questions = None
                     if kind == "next_steps":
                         kind = "confirm"
             content = {
@@ -2817,16 +2858,29 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "proposed_action": msg.get("proposed_action", ""),
                 "target": msg.get("target", ""),
                 "expires_at": msg.get("expires_at", ""),
-                "options": structured_options if structured_options is not None else ["authorize", "cancel"],
+                "options": (
+                    structured_options
+                    if structured_options is not None
+                    else (["authorize", "cancel"] if not structured_questions else [])
+                ),
                 "kind": kind,
             }
-            if structured_options is not None:
+            if structured_options is not None or structured_questions is not None:
                 # Spec #313 L8: product default single-select (not multi).
                 selection = str(msg.get("selection") or "single").strip().lower()
                 content["selection"] = selection if selection in {"single", "multi"} else "single"
                 preamble = str(msg.get("preamble") or "").strip()
                 if preamble:
                     content["preamble"] = preamble
+                presentation = str(msg.get("presentation") or "").strip().lower()
+                if presentation in {"approval_wizard", "recommendation", "flat"}:
+                    content["presentation"] = presentation
+                elif structured_options is not None or structured_questions is not None:
+                    content["presentation"] = "approval_wizard"
+                if structured_questions is not None:
+                    content["questions"] = structured_questions
+                if msg.get("allow_custom") is False:
+                    content["allow_custom"] = False
             for key in ("handoff_pack_id", "handoff_expert_id", "handoff_expert_name", "pack_id"):
                 if msg.get(key) is not None and str(msg.get(key) or "").strip():
                     content[key] = str(msg.get(key)).strip()
@@ -7287,10 +7341,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     selected_option_ids = msg.get("selected_option_ids")
                     # Spec #312 S2: always expand from card snapshot (ignore client binds).
                     workset_item_ids: list[str] = []
-                    if (
-                        decision == "confirm_options"
-                        and isinstance(selected_option_ids, list)
-                    ):
+                    if decision == "confirm_options":
                         try:
                             from app.services.choice_card import expand_selected_options
 
@@ -7305,8 +7356,16 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     if isinstance(card_source, dict) and card_source
                                     else None
                                 ),
+                                "questions": (
+                                    card_source.get("questions")
+                                    if isinstance(card_source, dict) and card_source
+                                    else None
+                                ),
                             }
-                            expanded = expand_selected_options(card_snap, selected_option_ids)
+                            expanded = expand_selected_options(
+                                card_snap,
+                                selected_option_ids if isinstance(selected_option_ids, list) else [],
+                            )
                             workset_item_ids = list(expanded.get("workset_item_ids") or [])
                         except Exception:
                             workset_item_ids = []
@@ -7327,6 +7386,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         node_msg["workset_item_ids"] = workset_item_ids
                     if msg.get("text"):
                         node_msg["text"] = str(msg.get("text"))
+                    custom_text = str(msg.get("custom_text") or "").strip()
+                    if custom_text:
+                        node_msg["custom_text"] = custom_text
+                    if isinstance(msg.get("answers"), list):
+                        node_msg["answers"] = msg.get("answers")
                     if replace_perm:
                         # Live wait: Node consumes via user_input this turn (no platform hold).
                         node_msg["todo_replace_permission"] = True

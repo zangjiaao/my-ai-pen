@@ -19,12 +19,16 @@ export type ApprovalResult = {
   selected_option_ids?: string[];
   workset_item_ids?: string[];
   text?: string;
+  custom_text?: string;
+  answers?: unknown[];
 };
 
 export type ApprovalResolveExtras = {
   selected_option_ids?: unknown;
   workset_item_ids?: unknown;
   text?: unknown;
+  custom_text?: unknown;
+  answers?: unknown;
 };
 
 export type PendingApproval = {
@@ -140,9 +144,12 @@ export function resolveApproval(
   const selected = stringList(extras?.selected_option_ids);
   const workset = stringList(extras?.workset_item_ids);
   const text = extras?.text != null ? String(extras.text).trim() : "";
+  const custom = extras?.custom_text != null ? String(extras.custom_text).trim() : "";
   if (selected) result.selected_option_ids = selected;
   if (workset) result.workset_item_ids = workset;
   if (text) result.text = text;
+  if (custom) result.custom_text = custom;
+  if (Array.isArray(extras?.answers)) result.answers = extras.answers;
   entry.resolve(result);
   return true;
 }
