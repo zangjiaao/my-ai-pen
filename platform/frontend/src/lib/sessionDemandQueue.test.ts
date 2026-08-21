@@ -95,8 +95,18 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   assert.match(cancelFn[0], /forcingDemandId/, "cancel must no-op on the row already taken for force-send");
   assert.match(
     pageSrc,
-    /handleConfirmOptions[\s\S]*sessionDemandQueueIsFull/,
-    "confirm must refuse when the Session demand queue is full",
+    /handleConfirmOptions[\s\S]*sessionDemandQueueIsFull[\s\S]*liveWait/,
+    "queue-full must refuse enqueue only — live approval wait still sends",
+  );
+  assert.match(
+    pageSrc,
+    /resetConversationState[\s\S]*setForcingDemandId\(null\)/,
+    "Case switch must drop the force-row lock",
+  );
+  assert.match(
+    pageSrc,
+    /task_complete:[\s\S]*setForcingDemandId\(null\)/,
+    "terminal settle must drop the force-row lock",
   );
   const choiceDisabled = pageSrc.match(/choiceDisabled=\{\s*([\s\S]*?)\s*\}/);
   assert.ok(choiceDisabled, "choiceDisabled must exist");

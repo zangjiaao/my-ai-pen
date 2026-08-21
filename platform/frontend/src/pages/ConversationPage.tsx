@@ -1040,11 +1040,13 @@ export default function ConversationPage() {
     ) {
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       launchOptimisticRef.current = false;
     } else if (!launchOptimisticRef.current) {
       // created / idle / unknown — only clear when we are not mid-launch.
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
     }
     // else: keep optimistic running=true so the Interrupt button stays stable.
   }, []);
@@ -1627,6 +1629,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       clearProgressiveStreamUi();
       const status = String(m.status || "incomplete").toLowerCase();
       const sessionContinue = m.parked_continue === true || m.session_continue === true;
@@ -1928,6 +1931,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       // Live streams are already mirrored into the message cache; drop overlay + chrome.
       clearProgressiveStreamUi();
       const terminal = String(m.status || "completed").toLowerCase();
@@ -1976,6 +1980,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      setForcingDemandId(null);
       clearProgressiveStreamUi();
       if (convId) patchConversation(convId, { status: "failed", working: false });
       // Spec #455: package segment fail ≠ Case/Session death (display copy).
@@ -2062,6 +2067,7 @@ export default function ConversationPage() {
         launchOptimisticRef.current = false;
         setRunning(false);
         setInterrupting(false);
+        setForcingDemandId(null);
         if (convId) {
           // Keep idle room status — do not promote to running/failed from chat.
           const cur = String(activeConversation?.status || "").toLowerCase();
@@ -2203,6 +2209,7 @@ export default function ConversationPage() {
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
+    setForcingDemandId(null);
     setSessionDemands([]);
   }, []);
 
@@ -2615,7 +2622,14 @@ export default function ConversationPage() {
         answers: extraObj.answers,
       });
       if (!reduced.ok) return;
-      if (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands)) return;
+      // Queue-full only refuses enqueue. Live approval wait still forwards
+      // (authorize/handoff/next_steps) even when five demands are already pending.
+      if (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands)) {
+        const liveWait = pendingApprovals.some(
+          (item) => String(item.request_id || "").trim() === requestId,
+        );
+        if (!liveWait) return;
+      }
       const expanded = expandSelectedOptions(cardContent, reduced.selected_option_ids);
       const text = buildConfirmOptionsText(cardContent, reduced.selected_option_ids, {
         customText: reduced.custom_text,
@@ -2646,7 +2660,7 @@ export default function ConversationPage() {
         answers: reduced.answers,
       });
     },
-    [activeId, addMessageToConversation, send, isActiveConversationRunning, sessionDemands],
+    [activeId, addMessageToConversation, send, isActiveConversationRunning, sessionDemands, pendingApprovals],
   );
 
   const markComposerRestoreHandled = useCallback(() => {
@@ -3590,6 +3604,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 if (!activeId) return;
                 setRunning(false);
                 setInterrupting(false);
+                setForcingDemandId(null);
                 launchOptimisticRef.current = false;
                 patchConversation(activeId, { working: false, status: "incomplete" });
                 clearProgressiveStreamUi();
