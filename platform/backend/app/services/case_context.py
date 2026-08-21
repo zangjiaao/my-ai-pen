@@ -169,11 +169,21 @@ def _speaker_from_message(role: str, content: dict, msg_type: str) -> str:
 def _line_identity(msg: dict, content: dict) -> dict[str, str]:
     mid = str(msg.get("id") or "").strip()
     eid = str(content.get("expert_id") or content.get("expertId") or "").strip()
+    sid = str(
+        content.get("session_id")
+        or content.get("sessionId")
+        or content.get("agent_session_id")
+        or msg.get("session_id")
+        or msg.get("sessionId")
+        or ""
+    ).strip()
     out: dict[str, str] = {}
     if mid:
         out["id"] = mid[:80]
     if eid:
         out["expert_id"] = eid[:80]
+    if sid:
+        out["session_id"] = sid[:128]
     return out
 
 

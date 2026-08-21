@@ -456,7 +456,7 @@ export class TodoStore {
 
   /**
    * Spec #301 Free host bind — same priority as Hard Graph resolveWorkerBind:
-   * explicit → reattach → single_free → fuzzy (caller adds pkg-* on null).
+   * explicit → reattach → single_free → fuzzy (caller must not invent a row on null).
    */
   resolveWorkerBind(
     input: WorkerChipInput & { goal?: string; plan_node_id?: string },

@@ -130,7 +130,10 @@ export async function runParkedWorkingContinue(options: {
 
   const usage = createUsageLedgerFromEnv();
   stampPanelConfiguredModel(panel, usage);
-  const textStream = new PlatformTextStream(platform, task);
+  const textStream = new PlatformTextStream(platform, task, {
+    sessionId: () =>
+      String(parked.session?.sessionId || parked.agentSessionId || "").trim(),
+  });
   const checkpointThrottle = new CheckpointThrottle();
   const obsCounters = {
     toolCallCount: 0,
@@ -238,6 +241,7 @@ export async function runParkedWorkingContinue(options: {
       const userTurn = task.instruction || "继续";
       const speech = selectCaseSpeechDelta(task.caseContext, {
         cursor: parked.speechCursor,
+        selfSessionId: session.sessionId || parked.agentSessionId,
         selfExpertId: task.expertId || parked.expertId,
         selfExpertName: task.expertName,
         thisTurnText: userTurn,

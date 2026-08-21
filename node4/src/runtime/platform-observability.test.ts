@@ -376,6 +376,20 @@ async function testMultiToolBatchOpensSingleT1() {
   console.log("ok: multi-tool batch invents no empty thinking shells");
 }
 
+async function testTextFramesCarryPiSessionId() {
+  const platform = fakePlatform();
+  const stream = new PlatformTextStream(platform, task(), { sessionId: "pi-sid-1" });
+  await stream.emitFinalText("hello");
+  await drain(stream);
+  const text = platform.messages.filter((m) => m.type === "text");
+  assert.ok(text.length >= 1);
+  const last = text[text.length - 1]!;
+  assert.equal(last.session_id, "pi-sid-1");
+  const content = last.content as Record<string, unknown>;
+  assert.equal(content.session_id, "pi-sid-1");
+  console.log("ok: text frames stamp pi session_id");
+}
+
 async function main() {
   await testNoT1OnBareMessageStart();
   await testEmptyRunningOnThinkingChannelOpen();
@@ -386,6 +400,7 @@ async function main() {
   await testTurnStartDoesNotOpenT1WithoutTools();
   await testThinkingDoneBeforeTextStream();
   await testMultiToolBatchOpensSingleT1();
+  await testTextFramesCarryPiSessionId();
   console.log("all platform-observability Spec #305 tests passed");
 }
 

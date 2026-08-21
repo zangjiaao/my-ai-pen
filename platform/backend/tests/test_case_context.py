@@ -89,6 +89,7 @@ def test_speech_is_visible_talk_with_ids_skips_findings_and_status():
                 "text": "RCE confirmed; source dumped.",
                 "expert_name": "app-sec",
                 "expert_id": "exp-1",
+                "session_id": "pi-exp-1-a",
             },
             "created_at": "2026-01-01T00:01:00",
         },
@@ -119,6 +120,8 @@ def test_speech_is_visible_talk_with_ids_skips_findings_and_status():
     assert "tool" not in kinds
     assert "status" not in kinds
     assert speech[1]["expert_id"] == "exp-1"
+    assert speech[1]["session_id"] == "pi-exp-1-a"
+    assert "session_id" not in speech[0]
     texts = " ".join(s["text"] for s in speech)
     assert "checkpoint tick" not in texts
     assert "Command injection" not in texts

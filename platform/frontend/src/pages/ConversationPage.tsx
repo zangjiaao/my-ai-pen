@@ -1382,22 +1382,26 @@ export default function ConversationPage() {
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
-      if (tree.length) {
-        const ownerId = readString(m.expert_id);
-        const ownerName = readString(m.expert_name);
-        const stamped = tree.map((node) => ({
-          ...node,
-          owner_expert_id: readString(node.owner_expert_id) || ownerId || undefined,
-          owner_expert_name: readString(node.owner_expert_name) || ownerName || undefined,
-        }));
-        // Coalesce rapid plan broadcasts (tool start/end) into one UI update.
-        // Multi-role: merge by owner so handoff does not wipe the other role's todos.
-        if (planTreeDebounceRef.current) window.clearTimeout(planTreeDebounceRef.current);
-        planTreeDebounceRef.current = window.setTimeout(() => {
-          setPlanTree((prev) => mergePlanTreeByOwner(prev, stamped));
-          planTreeDebounceRef.current = null;
-        }, 250);
-      }
+      const ownerId = readString(m.expert_id);
+      const ownerName = readString(m.expert_name);
+      const stamped = tree.map((node) => ({
+        ...node,
+        owner_expert_id: readString(node.owner_expert_id) || ownerId || undefined,
+        owner_expert_name: readString(node.owner_expert_name) || ownerName || undefined,
+      }));
+      // Coalesce rapid plan broadcasts (tool start/end) into one UI update.
+      // Empty tree is authoritative for this owner (do not leave a running ghost).
+      // Multi-role: merge by owner so handoff does not wipe the other role's todos.
+      if (planTreeDebounceRef.current) window.clearTimeout(planTreeDebounceRef.current);
+      planTreeDebounceRef.current = window.setTimeout(() => {
+        setPlanTree((prev) =>
+          mergePlanTreeByOwner(prev, stamped, {
+            owner_expert_id: ownerId || undefined,
+            owner_expert_name: ownerName || undefined,
+          }),
+        );
+        planTreeDebounceRef.current = null;
+      }, 250);
       // Spec #321: update revision metadata; follow live after archive unless viewing history.
       const revs = normalizeTaskMapRevisions(m.task_map_revisions);
       const liveId = readString(m.live_revision_id) || null;

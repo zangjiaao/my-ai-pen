@@ -69,23 +69,6 @@ def plan_node_level(kind: str) -> str:
     return "work_item"
 
 
-def phase_node_id(phase: str) -> str:
-    return f"plan-phase-{phase}"
-
-
-def objective_node_id(phase: str, key: str) -> str:
-    return f"plan-objective-{phase}-{key}"
-
-
-def objective_title(phase: str, key: str) -> str:
-    titles = {
-        ("recon", "attack_surface"): "\u53d1\u73b0\u53ef\u6d4b\u8bd5\u653b\u51fb\u9762",
-        ("recon", "traffic"): "\u6574\u7406\u9ad8\u4ef7\u503c\u8bf7\u6c42",
-        ("analysis", "test_plan"): "\u5206\u6790\u653b\u51fb\u9762\u98ce\u9669",
-    }
-    return titles.get((phase, key), key.replace("_", " ").title())
-
-
 def _pending_handoff_expert_ids(context: object) -> list[str]:
     """Spec #354: expert ids with incomplete map holds (collab badge)."""
     try:
@@ -96,74 +79,20 @@ def _pending_handoff_expert_ids(context: object) -> list[str]:
         return []
 
 
-def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
+def ensure_plan_tree_shape(
+    items: list[dict],
+    _phase: str | None = None,
+    _completed: set[str] | None = None,
+    _status: str = "",
+    workflow_kind: str | None = None,
+) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
     if workflow_kind == "strix":
         return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
-    if workflow_kind == "pentest":
-        return normalize_pentest_plan_tree(nodes)
-
-    by_id = {str(item.get("node_id") or item.get("id") or ""): item for item in nodes if item.get("node_id") or item.get("id")}
-    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
-
-    for index, key in enumerate(PHASES):
-        node_id = phase_node_id(key)
-        if node_id not in by_id:
-            node = {
-                "node_id": node_id,
-                "title": PHASE_LABELS[key],
-                "kind": "phase",
-                "level": "phase",
-                "parent_id": None,
-                "status": "pending",
-                "priority": index * 100,
-                "source": "runtime",
-            }
-            nodes.append(node)
-            by_id[node_id] = node
-        phase_status = "pending"
-        if status == "completed" or key in completed or index < current_index:
-            phase_status = "done"
-        elif index == current_index:
-            phase_status = "running"
-        by_id[node_id]["status"] = phase_status
-        by_id[node_id]["level"] = "phase"
-        by_id[node_id]["kind"] = "phase"
-        by_id[node_id]["priority"] = by_id[node_id].get("priority", index * 100)
-
-    def ensure_objective(phase_key: str, objective_key: str, priority: int) -> str:
-        node_id = objective_node_id(phase_key, objective_key)
-        if node_id not in by_id:
-            node = {
-                "node_id": node_id,
-                "title": objective_title(phase_key, objective_key),
-                "kind": "objective",
-                "level": "objective",
-                "parent_id": phase_node_id(phase_key),
-                "status": "pending",
-                "priority": PHASES.index(phase_key) * 100 + priority,
-                "source": "runtime",
-            }
-            nodes.append(node)
-            by_id[node_id] = node
-        return node_id
-
-    for node in nodes:
-        kind = str(node.get("kind") or "task")
-        node["level"] = str(node.get("level") or plan_node_level(kind))
-        if node["level"] != "work_item":
-            continue
-        parent_id = str(node.get("parent_id") or "")
-        if parent_id and parent_id in by_id:
-            continue
-        if kind in {"surface", "request"}:
-            node["parent_id"] = ensure_objective("recon", "attack_surface", 10)
-        elif kind == "test":
-            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
-        else:
-            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
-
-    return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
+    # Product Node4 (and any unbound new Case) must not invent archaeology
+    # plan-phase-intake|recon|… shells. Those flashed in Tasks on create, then
+    # vanished once checkpoint.runtime stamped workflow_kind=pentest.
+    return normalize_pentest_plan_tree(nodes)
 
 
 def normalize_pentest_plan_tree(nodes: list[dict]) -> list[dict]:

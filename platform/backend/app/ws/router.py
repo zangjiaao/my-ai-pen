@@ -2507,6 +2507,25 @@ def _stamp_worker_audit_scope(content: dict, msg: dict) -> None:
             pass
 
 
+def _stamp_speech_session_id(content: dict, msg: dict) -> None:
+    """Persist pi Agent.sessionId on visible agent text (Case speech isSelf key)."""
+    if not isinstance(content, dict) or not isinstance(msg, dict):
+        return
+    nested = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    sid = str(
+        content.get("session_id")
+        or content.get("sessionId")
+        or msg.get("session_id")
+        or msg.get("sessionId")
+        or msg.get("agent_session_id")
+        or nested.get("session_id")
+        or nested.get("agent_session_id")
+        or ""
+    ).strip()
+    if sid:
+        content["session_id"] = sid[:128]
+
+
 def _stamp_stream_message_ids(msg: dict, conv_id: str) -> None:
     """
     Attach a stable message_id before broadcast so the UI can upsert stream frames
@@ -2633,6 +2652,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
             _stamp_worker_audit_scope(content, msg)
+            _stamp_speech_session_id(content, msg)
         elif msg_type in ("thinking", "agent_thinking", "reasoning"):
             msg_type = "thinking"
             inner = msg.get("content", {})

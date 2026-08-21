@@ -116,9 +116,10 @@ export class SubagentHost {
   }
 
   /**
-   * Attach Worker chip to Case todo (Hard Graph L2 or Free Main Todo).
-   * Priority: explicit → reattach → single_free → fuzzy → pkg-* (owner still set).
-   * Spec #301: Main must not need a separate "link" tool.
+   * Attach Worker chip to an existing Case todo (Hard Graph L2 or Free Main Todo).
+   * Priority: explicit → reattach → single_free → fuzzy.
+   * Miss: do not invent a Tasks row — collaboration tree still shows the Worker.
+   * Spec #301 bind without a link tool; no synthetic pkg-* fallback.
    */
   private async upsertCaseTodoChip(input: {
     subagentId: string;
@@ -161,7 +162,6 @@ export class SubagentHost {
     hint?: string;
   }> {
     const goal = resolveSubagentGoal(input.label, input.assignment);
-    const title = goal.slice(0, 240) || input.subagentId;
     const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
     const owner = workerN > 0 ? formatWorkerName(workerN) : "Worker";
     const requested = String(input.planNodeId || "").trim() || undefined;
@@ -173,19 +173,19 @@ export class SubagentHost {
       plan_node_id: input.planNodeId,
     };
 
+    const pkgId = `pkg-${input.subagentId}`;
     const bound = plan.resolveWorkerBind(stageId, chip);
     if (!bound) {
-      plan.upsertStageWorkItem(stageId, {
-        node_id: `pkg-${input.subagentId}`,
-        title,
-        status: input.status,
-        agent_id: input.subagentId,
-        owner_agent_name: owner,
-        kind: "task",
-        source: "plan",
-      });
-    } else {
-      plan.removeStageWorkItem(stageId, `pkg-${input.subagentId}`);
+      return {
+        path: "none",
+        requested_node_id: requested,
+        hint: requested
+          ? `plan_node_id "${requested}" not found in stage L2. Host does not invent a Tasks row.`
+          : "No matching L2 todo; Worker stays on the collab tree only.",
+      };
+    }
+    if (bound.node_id !== pkgId) {
+      plan.removeStageWorkItem(stageId, pkgId);
     }
 
     await emitHardGraphPlanTreeUpdate(
@@ -199,21 +199,11 @@ export class SubagentHost {
       },
     ).catch(() => {});
 
-    if (bound) {
-      return {
-        path: bound.path,
-        node_id: bound.node_id,
-        requested_node_id: bound.requested_node_id,
-        hint: bound.hint,
-      };
-    }
     return {
-      path: "pkg",
-      node_id: `pkg-${input.subagentId}`,
-      requested_node_id: requested,
-      hint: requested
-        ? `plan_node_id "${requested}" not found in stage L2; fell back to pkg. Copy work_items[].node_id from the last todo result.`
-        : "No matching Main todo; host pkg-* row created. Pass plan_node_id when multiple todos are open.",
+      path: bound.path,
+      node_id: bound.node_id,
+      requested_node_id: bound.requested_node_id,
+      hint: bound.hint,
     };
   }
 
@@ -234,7 +224,6 @@ export class SubagentHost {
     hint?: string;
   }> {
     const goal = resolveSubagentGoal(input.label, input.assignment);
-    const title = goal.slice(0, 240) || input.subagentId;
     const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
     const owner = workerN > 0 ? formatWorkerName(workerN) : "Worker";
     const requested = String(input.planNodeId || "").trim() || undefined;
@@ -246,17 +235,19 @@ export class SubagentHost {
       plan_node_id: input.planNodeId,
     };
 
+    const pkgId = `pkg-${input.subagentId}`;
     const bound = todo.resolveWorkerBind(chip);
     if (!bound) {
-      todo.upsertPackageWorkItem({
-        node_id: `pkg-${input.subagentId}`,
-        title,
-        status: input.status,
-        agent_id: input.subagentId,
-        owner_agent_name: owner,
-      });
-    } else {
-      todo.removePackageWorkItem(`pkg-${input.subagentId}`);
+      return {
+        path: "none",
+        requested_node_id: requested,
+        hint: requested
+          ? `plan_node_id "${requested}" not found in Free todos. Host does not invent a Tasks row.`
+          : "No matching Main todo; Worker stays on the collab tree only.",
+      };
+    }
+    if (bound.node_id !== pkgId) {
+      todo.removePackageWorkItem(pkgId);
     }
 
     await emitTodoPlanTreeUpdate(
@@ -266,21 +257,11 @@ export class SubagentHost {
       `subagent.${input.status}:${input.subagentId}`,
     ).catch(() => {});
 
-    if (bound) {
-      return {
-        path: bound.path,
-        node_id: bound.node_id,
-        requested_node_id: bound.requested_node_id,
-        hint: bound.hint,
-      };
-    }
     return {
-      path: "pkg",
-      node_id: `pkg-${input.subagentId}`,
-      requested_node_id: requested,
-      hint: requested
-        ? `plan_node_id "${requested}" not found in Free todos; fell back to pkg. Copy work_items[].node_id from the last todo result.`
-        : "No matching Main todo; host pkg-* row created. Pass plan_node_id when multiple todos are open.",
+      path: bound.path,
+      node_id: bound.node_id,
+      requested_node_id: bound.requested_node_id,
+      hint: bound.hint,
     };
   }
 

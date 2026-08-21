@@ -236,7 +236,10 @@ export async function runNode4Task(
   panel.setWorkMode({ work_mode: "free" });
   const usage = createUsageLedgerFromEnv();
   stampPanelConfiguredModel(panel, usage);
-  const textStream = new PlatformTextStream(loggingPlatform, task);
+  let sessionRef: Node4AgentSession | undefined;
+  const textStream = new PlatformTextStream(loggingPlatform, task, {
+    sessionId: () => String(sessionRef?.sessionId || piSessionId || "").trim(),
+  });
   const checkpointThrottle = new CheckpointThrottle();
   // Pack-scoped skills under experts/<id>/skills (catalog or install copy)
   // Pack-scoped skills only when an expert is installed (bare runtime has none)
@@ -396,7 +399,6 @@ export async function runNode4Task(
     counters: obsCounters,
   };
 
-  let sessionRef: Node4AgentSession | undefined;
   // No session wall/max-time (OMP-default style). Only platform/user cancel aborts.
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
@@ -668,6 +670,7 @@ export async function runNode4Task(
     if (!cancelled()) {
       const speech = selectCaseSpeechDelta(task.caseContext, {
         cursor: "",
+        selfSessionId: session.sessionId || piSessionId,
         selfExpertId: task.expertId,
         selfExpertName: task.expertName,
         thisTurnText: userPrompt,

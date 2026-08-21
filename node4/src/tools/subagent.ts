@@ -899,7 +899,7 @@ async function runSubagentPackage(
             requested_node_id: result.planBind.requested_node_id,
             hint:
               result.planBind.hint ||
-              (result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
+              (result.planBind.path === "fuzzy"
                 ? "Pass plan_node_id (Tasks L2 todo node_id) on next subagent spawn for deterministic Worker chip ownership."
                 : undefined),
           }
