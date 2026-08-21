@@ -23,6 +23,16 @@ def test_fifo_enqueue_pop_order():
     assert q.size("c1") == 0
 
 
+def test_take_by_id_force_send():
+    a = q.enqueue("c3", text="first")
+    b = q.enqueue("c3", text="second")
+    taken = q.take("c3", b["id"])
+    assert taken is not None
+    assert taken["text"] == "second"
+    assert q.peek("c3")["id"] == a["id"]
+    assert q.take("c3", "missing") is None
+
+
 def test_delete_by_id():
     a = q.enqueue("c2", text="keep")
     b = q.enqueue("c2", text="drop")

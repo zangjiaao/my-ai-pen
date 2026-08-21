@@ -61,20 +61,25 @@ def pop(conv_id: object) -> dict[str, Any] | None:
     return dict(item)
 
 
-def delete(conv_id: object, demand_id: object) -> bool:
-    """Remove demand by id. Returns True if found."""
+def take(conv_id: object, demand_id: object) -> dict[str, Any] | None:
+    """Remove and return demand by id (force-send a specific row)."""
     cid = _cid(conv_id)
     did = str(demand_id or "").strip()
     if not cid or not did:
-        return False
+        return None
     q = _queues.get(cid) or []
     for i, row in enumerate(q):
         if str(row.get("id") or "") == did:
-            q.pop(i)
+            item = q.pop(i)
             if not q:
                 _queues.pop(cid, None)
-            return True
-    return False
+            return dict(item)
+    return None
+
+
+def delete(conv_id: object, demand_id: object) -> bool:
+    """Remove demand by id. Returns True if found."""
+    return take(conv_id, demand_id) is not None
 
 
 def list_demands(conv_id: object) -> list[dict[str, Any]]:

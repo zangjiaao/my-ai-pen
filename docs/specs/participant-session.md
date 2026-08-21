@@ -81,6 +81,7 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 15. **In-flight work:** new user demand (text, Graph control, Mention change, **ChoiceCard confirm / next_steps selection**) **queues** as one FIFO class.  
 15a. **Confirm delivery (Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)):** live approval wait → forward into current Session; dead wait / busy / restart → enqueue or continue dispatch with full confirm text + sticky target/scope/expert — **not** empty-target chat-only bypass.  
 16. **Force send / interrupt** on queue chrome: interrupt current turn, then apply new demand (same as single-Agent new goal under interrupt). User may **delete** queue items before delivery.  
+16a. **Queue chrome (list-tail):** queued user text sits **below** list-tail `工作中...`, same bubble shape as user history, **secondary type** (thinking/tool body: `text-ink-muted`). **取消** does not deliver (row stays cancelled, still secondary). **发送** = force interrupt then apply that demand. Not a historical user bubble until drain/force.  
 17. **Mention change** only retargets **subsequent** routed messages; does not alone kill the running Session (unless force interrupt).  
 18. **Expert transfer:** ask → user permit → switch Mention; **new** Expert Session starts **Free** with Case-visible summary; new Expert enters Graph only via its own permission path. Not a mandatory assembly step before every task.
 

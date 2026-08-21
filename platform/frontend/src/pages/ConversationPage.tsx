@@ -33,6 +33,7 @@ import MessageRenderer, {
   agentDisplayName,
   shouldShowAgentSpeakerLabel,
 } from "../components/MessageRenderer";
+import SessionDemandQueue from "../components/SessionDemandQueue";
 import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
@@ -117,6 +118,13 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
+import {
+  cancelQueuedDemand,
+  newSessionDemandId,
+  removeQueuedDemand,
+  upsertQueuedDemand,
+  type SessionDemandItem,
+} from "../lib/sessionDemandQueue";
 import { mergeIntelSnapshot, upsertIntelRow, type IntelRow } from "../lib/intelView";
 import {
   buildConfirmOptionsText,
@@ -451,6 +459,7 @@ export default function ConversationPage() {
   const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamFrame>>({});
   /** List-tail Working attribution (send_success); visibility follows work-burst. */
   const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
+  const [sessionDemands, setSessionDemands] = useState<SessionDemandItem[]>([]);
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
@@ -1166,6 +1175,29 @@ export default function ConversationPage() {
       {
     conversation_working: (msg) => {
       applyConversationWorking(msg);
+    },
+    session_demand_queued: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || m.id || "").trim();
+      const text = String(m.text || "").trim();
+      if (!id || !text) return;
+      const kind = String(m.kind || "text") === "confirm_options" ? "confirm_options" : "text";
+      setSessionDemands((prev) => upsertQueuedDemand(prev, {
+        id,
+        kind,
+        text,
+        status: "pending",
+      }));
+    },
+    session_demand_deleted: (msg) => {
+      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
+      if (!id) return;
+      setSessionDemands((prev) => cancelQueuedDemand(prev, id));
+    },
+    session_demand_drained: (msg) => {
+      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
+      if (!id) return;
+      setSessionDemands((prev) => removeQueuedDemand(prev, id));
     },
     conversation_title_updated: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -2134,6 +2166,7 @@ export default function ConversationPage() {
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
+    setSessionDemands([]);
   }, []);
 
   /** Owner ledger for Surface 已纳入 (user-scoped; independent of Case snapshot assets). */
@@ -3024,6 +3057,23 @@ export default function ConversationPage() {
   const handleSend = useCallback(async (overrideText: string) => {
     const displayText = overrideText.trim();
     if (!displayText) return;
+    if (activeId && isActiveConversationRunning && !hasOpenInteractiveChoice) {
+      const demandId = newSessionDemandId();
+      setSessionDemands((prev) => upsertQueuedDemand(prev, {
+        id: demandId,
+        kind: "text",
+        text: displayText,
+        status: "pending",
+      }));
+      send({
+        type: "session_demand",
+        conversation_id: activeId,
+        demand_id: demandId,
+        kind: "text",
+        text: displayText,
+      });
+      return;
+    }
     const selectedCandidate = selectedMentionRef.current || selectedMention;
     // Prefer explicit toolbar partner; else parse @token from the message body.
     const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
@@ -3117,7 +3167,23 @@ export default function ConversationPage() {
     messages,
     approvalDecisionByRequestId,
     addMessageToConversation,
+    isActiveConversationRunning,
+    hasOpenInteractiveChoice,
+    send,
   ]);
+
+  const handleCancelDemand = useCallback((demandId: string) => {
+    if (!activeId) return;
+    setSessionDemands((prev) => cancelQueuedDemand(prev, demandId));
+    send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
+  }, [activeId, send]);
+
+  const handleForceDemand = useCallback((demandId: string) => {
+    if (!activeId || interrupting) return;
+    setInterrupting(true);
+    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
+    send({ type: "session_demand_force", conversation_id: activeId, demand_id: demandId });
+  }, [activeId, interrupting, send]);
 
   const handleInterrupt = useCallback(() => {
     if (!activeId || interrupting) return;
@@ -3381,6 +3447,12 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 );
               })()}
+              <SessionDemandQueue
+                items={sessionDemands}
+                onCancel={handleCancelDemand}
+                onForceSend={handleForceDemand}
+                forceDisabled={interrupting}
+              />
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
             {/* Draft state lives in ChatComposer — page-level input re-rendered the whole stream. */}

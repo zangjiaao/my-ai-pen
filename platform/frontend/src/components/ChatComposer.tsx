@@ -730,16 +730,16 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
               >
                 {interrupting ? "中断中…" : "中断"}
               </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!input.trim()}
-                className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
-              >
-                发送
-              </button>
-            )}
+            ) : null}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!input.trim()}
+              title={running ? "工作中：加入队列" : undefined}
+              className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
+            >
+              发送
+            </button>
           </div>
         </div>
       </div>
