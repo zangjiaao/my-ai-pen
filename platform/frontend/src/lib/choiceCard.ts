@@ -193,7 +193,7 @@ export function validateChoiceCardPayload(raw: unknown): ValidateChoiceResult {
   const errors: string[] = [];
   const cardOptionIds = new Set<string>();
   let questions: WizardQuestion[] | undefined;
-  if (hasQuestions || explicitPresentation === "approval_wizard") {
+  if (hasQuestions) {
     questions = parseQuestions(o.questions, errors, cardOptionIds);
   }
 

@@ -161,7 +161,7 @@ def validate_choice_card_payload(raw: object) -> dict[str, Any]:
     errors: list[str] = []
     card_option_ids: set[str] = set()
     questions: list[dict[str, Any]] | None = None
-    if has_questions or explicit_presentation == "approval_wizard":
+    if has_questions:
         questions = _parse_questions(raw.get("questions"), errors, card_option_ids)
 
     opts_raw = raw.get("options")

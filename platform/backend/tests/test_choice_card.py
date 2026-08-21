@@ -215,6 +215,32 @@ def test_s1_wizard_questions_payload():
     assert blocked["ok"] is False
 
 
+def test_s1_wizard_presentation_projects_flat_options():
+    """Spec #450 L10: Node stamps presentation=approval_wizard on options-only next_steps."""
+    payload = {
+        "kind": "next_steps",
+        "presentation": "approval_wizard",
+        "options": [
+            {"id": "a", "title": "A", "body": "why A"},
+            {"id": "b", "title": "B", "body": "why B"},
+        ],
+    }
+    r = validate_choice_card_payload(payload)
+    assert r["ok"] is True
+    assert r["mode"] == "next_steps"
+    assert r["value"]["presentation"] == "approval_wizard"
+    assert [o["id"] for o in r["value"]["options"]] == ["a", "b"]
+    questions = parse_wizard_questions(r["value"])
+    assert len(questions) == 1
+    assert questions[0]["id"] == PROJECTED_NEXT_STEPS_QUESTION_ID
+    assert [o["id"] for o in questions[0]["options"]] == ["a", "b"]
+
+    empty = validate_choice_card_payload(
+        {"kind": "next_steps", "presentation": "approval_wizard"}
+    )
+    assert empty["ok"] is False
+
+
 def test_s1_confirm_continue_retains_sticky_target():
     """Spec #313 L10: continue demand rehydrates sticky target/scope — no empty chat-only."""
     msg = build_confirm_continue_message(

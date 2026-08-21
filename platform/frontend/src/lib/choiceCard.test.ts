@@ -129,6 +129,32 @@ const inferred = validateChoiceCardPayload({
 assert.equal(inferred.ok, true);
 if (inferred.ok) assert.equal(inferred.mode, "next_steps");
 
+// Spec #450 L10: Node stamps presentation=approval_wizard on options-only next_steps.
+const wizardFlat = validateChoiceCardPayload({
+  kind: "next_steps",
+  presentation: "approval_wizard",
+  options: [
+    { id: "a", title: "A", body: "why A" },
+    { id: "b", title: "B", body: "why B" },
+  ],
+});
+assert.equal(wizardFlat.ok, true);
+if (wizardFlat.ok) {
+  assert.equal(wizardFlat.mode, "next_steps");
+  assert.equal(wizardFlat.value.presentation, "approval_wizard");
+  const projectedFromStamp = parseWizardQuestions(wizardFlat.value);
+  assert.equal(projectedFromStamp.length, 1);
+  assert.equal(projectedFromStamp[0].id, PROJECTED_NEXT_STEPS_QUESTION_ID);
+  assert.deepEqual(
+    projectedFromStamp[0].options.map((o) => o.id),
+    ["a", "b"],
+  );
+}
+assert.equal(
+  validateChoiceCardPayload({ kind: "next_steps", presentation: "approval_wizard" }).ok,
+  false,
+);
+
 // Legacy authorize options string[] still authorize mode
 assert.equal(isNextStepsChoice({ options: ["authorize", "cancel"] }), false);
 assert.equal(
