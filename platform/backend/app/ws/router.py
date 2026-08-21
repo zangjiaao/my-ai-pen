@@ -4588,6 +4588,7 @@ async def _broadcast_session_demand(
     demand_id: str | None = None,
     kind: str | None = None,
     text: str | None = None,
+    reason: str | None = None,
 ) -> None:
     from app.services import session_demand_queue as demand_queue
 
@@ -4602,6 +4603,8 @@ async def _broadcast_session_demand(
         payload["kind"] = kind
     if text:
         payload["text"] = text
+    if reason:
+        payload["reason"] = reason
     try:
         await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
     except Exception as e:
@@ -4726,7 +4729,7 @@ async def _force_session_demand(conv_id: str, client_id: str, demand_id: str) ->
             await _dispatch_queued_text_demand(conv_id=conv_id, client_id=client_id, item=item)
     except Exception as e:
         print(f"[WS] session_demand_force dispatch error: {e}")
-        demand_queue.enqueue(conv_id, item)
+        demand_queue.enqueue(conv_id, item, restore=True)
         return False
     await _broadcast_session_demand(
         conv_id,
@@ -4797,9 +4800,9 @@ async def _drain_session_demand_queue(conv_id: str, client_id: str | None = None
             return True
     except Exception as e:
         print(f"[WS] drain session demand error: {e}")
-        # Re-queue head on failure so demand is not lost.
+        # Re-queue head on failure so demand is not lost (bypass cap).
         try:
-            demand_queue.enqueue(conv_id, item)
+            demand_queue.enqueue(conv_id, item, restore=True)
         except Exception:
             pass
     return False
@@ -7631,6 +7634,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             # Hold grant until dequeue → task_assign one-shot.
                             if replace_perm:
                                 _grant_todo_replace(conv_id)
+                            from app.services.session_demand_queue import SessionDemandQueueFull
+
                             try:
                                 await _enqueue_confirm_options_while_busy(
                                     conv_id=conv_id,
@@ -7638,6 +7643,16 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     msg=msg,
                                     selected_option_ids=selected_ids,
                                     workset_item_ids=workset_item_ids,
+                                )
+                            except SessionDemandQueueFull:
+                                print(
+                                    f"[WS] confirm_options enqueue rejected: queue_full conv={conv_id[:8]}"
+                                )
+                                await _broadcast_session_demand(
+                                    conv_id,
+                                    "session_demand_rejected",
+                                    kind="confirm_options",
+                                    reason="queue_full",
                                 )
                             except Exception as e:
                                 print(f"[WS] confirm_options enqueue error: {e}")
@@ -7688,6 +7703,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     demand_type = str(msg.get("type") or "")
                     demand_id = str(msg.get("demand_id") or msg.get("id") or "").strip()
                     if demand_type == "session_demand":
+                        from app.services.session_demand_queue import SessionDemandQueueFull
+
                         try:
                             await _enqueue_text_demand_while_busy(
                                 conv_id=conv_id,
@@ -7697,6 +7714,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             st = str(await _conversation_status(conv_id) or "").lower()
                             if st != "running":
                                 await _drain_session_demand_queue(conv_id, client_id)
+                        except SessionDemandQueueFull:
+                            await _broadcast_session_demand(
+                                conv_id,
+                                "session_demand_rejected",
+                                demand_id=demand_id,
+                                kind="text",
+                                reason="queue_full",
+                            )
                         except Exception as e:
                             print(f"[WS] session_demand enqueue error: {e}")
                     elif demand_type == "session_demand_delete":

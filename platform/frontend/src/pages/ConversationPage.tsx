@@ -123,6 +123,7 @@ import {
   newSessionDemandId,
   queuedDemandUserContent,
   removeQueuedDemand,
+  sessionDemandQueueIsFull,
   upsertQueuedDemand,
   type SessionDemandItem,
 } from "../lib/sessionDemandQueue";
@@ -1194,6 +1195,11 @@ export default function ConversationPage() {
       const id = String((msg as Record<string, unknown>).demand_id || "").trim();
       if (!id) return;
       setSessionDemands((prev) => cancelQueuedDemand(prev, id));
+    },
+    session_demand_rejected: (msg) => {
+      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
+      if (!id) return;
+      setSessionDemands((prev) => removeQueuedDemand(prev, id));
     },
     session_demand_drained: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -3067,6 +3073,7 @@ export default function ConversationPage() {
     const displayText = overrideText.trim();
     if (!displayText) return;
     if (activeId && isActiveConversationRunning && !hasOpenInteractiveChoice) {
+      if (sessionDemandQueueIsFull(sessionDemands)) return;
       const demandId = newSessionDemandId();
       setSessionDemands((prev) => upsertQueuedDemand(prev, {
         id: demandId,
@@ -3178,6 +3185,7 @@ export default function ConversationPage() {
     addMessageToConversation,
     isActiveConversationRunning,
     hasOpenInteractiveChoice,
+    sessionDemands,
     send,
   ]);
 
@@ -3192,13 +3200,8 @@ export default function ConversationPage() {
     const item = sessionDemands.find((row) => row.id === demandId);
     if (!item || item.status !== "pending") return;
     setInterrupting(true);
-    setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
-    addMessageToConversation(
-      activeId,
-      makeMessage(activeId, "user", "text", queuedDemandUserContent(item)),
-    );
     send({ type: "session_demand_force", conversation_id: activeId, demand_id: demandId });
-  }, [activeId, interrupting, sessionDemands, addMessageToConversation, send]);
+  }, [activeId, interrupting, sessionDemands, send]);
 
   const handleInterrupt = useCallback(() => {
     if (!activeId || interrupting) return;
@@ -3486,6 +3489,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 running={isActiveConversationRunning}
                 interrupting={interrupting}
                 workBurst={workBurst}
+                queueFull={sessionDemandQueueIsFull(sessionDemands)}
                 onSend={(text) => { void handleSend(text); }}
                 onInterrupt={handleInterrupt}
               />

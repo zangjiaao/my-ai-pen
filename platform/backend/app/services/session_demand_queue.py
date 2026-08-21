@@ -3,14 +3,22 @@
 While a Participant Session is in-flight, user demands (text or ChoiceCard confirm)
 enqueue unless force_interrupt. Pure in-memory queue keyed by conversation_id.
 FE may list/delete later; BE tests assert FIFO order.
+Per Case: at most MAX_DEMANDS_PER_CASE pending items.
 """
 from __future__ import annotations
 
 import uuid
 from typing import Any
 
+# Spec #277 §3.4 — hard cap per Case (in-memory; reject, do not drop oldest).
+MAX_DEMANDS_PER_CASE = 5
+
 # conv_id -> FIFO list of demand dicts (each has id + payload fields)
 _queues: dict[str, list[dict[str, Any]]] = {}
+
+
+class SessionDemandQueueFull(ValueError):
+    """This Case already has MAX_DEMANDS_PER_CASE pending demands."""
 
 
 def _cid(conv_id: object) -> str:
@@ -28,8 +36,18 @@ def clear(conv_id: object) -> None:
         _queues.pop(cid, None)
 
 
-def enqueue(conv_id: object, demand: dict | None = None, **fields: Any) -> dict[str, Any]:
-    """Append a demand; returns the stored item (with id)."""
+def enqueue(
+    conv_id: object,
+    demand: dict | None = None,
+    *,
+    restore: bool = False,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Append a demand; returns the stored item (with id).
+
+    ``restore=True`` puts back an item this process already popped/took
+    (force/drain failure). That must not be dropped by the cap.
+    """
     cid = _cid(conv_id)
     if not cid:
         raise ValueError("conv_id required")
@@ -40,7 +58,12 @@ def enqueue(conv_id: object, demand: dict | None = None, **fields: Any) -> dict[
     if not str(item.get("id") or "").strip():
         item["id"] = str(uuid.uuid4())
     item["conversation_id"] = cid
-    _queues.setdefault(cid, []).append(item)
+    q = _queues.setdefault(cid, [])
+    if not restore and len(q) >= MAX_DEMANDS_PER_CASE:
+        raise SessionDemandQueueFull(
+            f"session demand queue full ({MAX_DEMANDS_PER_CASE}) conv={cid[:8]}"
+        )
+    q.append(item)
     return dict(item)
 
 

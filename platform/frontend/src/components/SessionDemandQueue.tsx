@@ -39,7 +39,8 @@ export default function SessionDemandQueue({
               <div className="flex h-8 shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  className="rounded-full px-2 py-1 text-sm leading-5 text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink"
+                  disabled={forceDisabled}
+                  className="rounded-full px-2 py-1 text-sm leading-5 text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => onCancel(item.id)}
                 >
                   {SESSION_DEMAND_CANCEL_LABEL}

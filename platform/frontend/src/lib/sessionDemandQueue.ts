@@ -6,6 +6,9 @@
 
 export const SESSION_DEMAND_CANCEL_LABEL = "取消";
 export const SESSION_DEMAND_SEND_LABEL = "发送";
+/** Spec #277 §3.4 — same cap as backend MAX_DEMANDS_PER_CASE. */
+export const SESSION_DEMAND_MAX_PER_CASE = 5;
+export const SESSION_DEMAND_QUEUE_FULL_TITLE = "队列已满（最多 5 条）";
 
 export type SessionDemandKind = "text" | "confirm_options";
 export type SessionDemandStatus = "pending" | "cancelled";
@@ -61,6 +64,10 @@ export function removeQueuedDemand(
 
 export function pendingQueuedDemands(items: SessionDemandItem[]): SessionDemandItem[] {
   return items.filter((row) => row.status === "pending");
+}
+
+export function sessionDemandQueueIsFull(items: SessionDemandItem[]): boolean {
+  return pendingQueuedDemands(items).length >= SESSION_DEMAND_MAX_PER_CASE;
 }
 
 /** Promote a delivered demand into the same user-bubble identity as a direct send. */

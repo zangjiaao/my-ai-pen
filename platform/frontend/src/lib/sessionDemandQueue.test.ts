@@ -10,6 +10,8 @@ import {
   pendingQueuedDemands,
   queuedDemandUserContent,
   removeQueuedDemand,
+  SESSION_DEMAND_MAX_PER_CASE,
+  sessionDemandQueueIsFull,
   upsertQueuedDemand,
   type SessionDemandItem,
 } from "./sessionDemandQueue";
@@ -48,6 +50,24 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
 }
 
 {
+  const five: SessionDemandItem[] = Array.from({ length: SESSION_DEMAND_MAX_PER_CASE }, (_, i) => ({
+    id: `p${i}`,
+    kind: "text",
+    text: `t${i}`,
+    status: "pending",
+  }));
+  assert.equal(sessionDemandQueueIsFull([]), false);
+  assert.equal(sessionDemandQueueIsFull(five.slice(0, 4)), false);
+  assert.equal(sessionDemandQueueIsFull(five), true);
+  assert.equal(
+    sessionDemandQueueIsFull([...five.slice(0, 4), { ...a, status: "cancelled" }]),
+    false,
+    "cancelled rows do not count toward the cap",
+  );
+  console.log("ok: sessionDemandQueueIsFull");
+}
+
+{
   const here = dirname(fileURLToPath(import.meta.url));
   const pageSrc = readFileSync(join(here, "../pages/ConversationPage.tsx"), "utf8");
   assert.match(
@@ -55,10 +75,19 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
     /session_demand_drained[\s\S]*queuedDemandUserContent/,
     "drain must append a user bubble, not only drop queue chrome",
   );
+  const forceFn = pageSrc.match(/const handleForceDemand[\s\S]*?\}, \[/);
+  assert.ok(forceFn, "handleForceDemand must exist");
+  assert.match(forceFn[0], /session_demand_force/, "force-send still dispatches");
+  assert.doesNotMatch(
+    forceFn[0],
+    /queuedDemandUserContent|addMessageToConversation|removeQueuedDemand/,
+    "force-send must wait for session_demand_drained before promoting a user bubble",
+  );
+  const composerSrc = readFileSync(join(here, "../components/ChatComposer.tsx"), "utf8");
   assert.match(
-    pageSrc,
-    /handleForceDemand[\s\S]*queuedDemandUserContent/,
-    "force-send must append a user bubble",
+    composerSrc,
+    /demandQueueFull/,
+    "composer must not clear draft when the Session demand queue is full",
   );
   console.log("ok: ConversationPage promotes drained demands to user bubbles");
 }

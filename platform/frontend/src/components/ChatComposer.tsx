@@ -23,6 +23,7 @@ import {
   type WorkBurstProjection,
 } from "../lib/workBurstTime";
 import { commitTypedInput, useRenderAudit } from "../lib/renderAudit";
+import { SESSION_DEMAND_QUEUE_FULL_TITLE } from "../lib/sessionDemandQueue";
 
 /** @mention picker entry: workspace assistant (default seat) or product expert. */
 export type MentionTarget = {
@@ -65,6 +66,7 @@ type Props = {
   running: boolean;
   interrupting: boolean;
   workBurst: WorkBurstProjection | null;
+  queueFull?: boolean;
   onSend: (text: string) => void;
   onInterrupt: () => void;
 };
@@ -237,6 +239,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     running,
     interrupting,
     workBurst,
+    queueFull = false,
     onSend,
     onInterrupt,
   },
@@ -366,12 +369,13 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     }
   }, [mentionTargets, onSelectPartner, onGoalMode, onEngagementTemplate]);
 
+  const demandQueueFull = running && queueFull;
   const submit = useCallback(() => {
     const text = input.trim();
-    if (!text) return;
+    if (!text || demandQueueFull) return;
     setInput("");
     onSend(text);
-  }, [input, onSend]);
+  }, [input, onSend, demandQueueFull]);
 
   const beginImeComposition = useCallback(() => {
     if (imeSettleTimerRef.current != null) {
@@ -734,8 +738,14 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
             <button
               type="button"
               onClick={submit}
-              disabled={!input.trim()}
-              title={running ? "工作中：加入队列" : undefined}
+              disabled={!input.trim() || demandQueueFull}
+              title={
+                demandQueueFull
+                  ? SESSION_DEMAND_QUEUE_FULL_TITLE
+                  : running
+                    ? "工作中：加入队列"
+                    : undefined
+              }
               className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} bg-ink text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35`}
             >
               发送

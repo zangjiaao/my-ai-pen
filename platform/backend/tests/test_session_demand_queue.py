@@ -45,6 +45,25 @@ def test_delete_by_id():
     assert remaining[1]["id"] == c["id"]
 
 
+def test_enqueue_rejects_over_max_per_case():
+    for i in range(q.MAX_DEMANDS_PER_CASE):
+        q.enqueue("c1", text=f"d{i}")
+    try:
+        q.enqueue("c1", text="extra")
+        assert False, "expected SessionDemandQueueFull"
+    except q.SessionDemandQueueFull:
+        pass
+    assert q.size("c1") == q.MAX_DEMANDS_PER_CASE
+
+
+def test_restore_enqueue_bypasses_cap():
+    for i in range(q.MAX_DEMANDS_PER_CASE):
+        q.enqueue("c1", text=f"d{i}")
+    restored = q.enqueue("c1", {"id": "old", "text": "restored"}, restore=True)
+    assert restored["text"] == "restored"
+    assert q.size("c1") == q.MAX_DEMANDS_PER_CASE + 1
+
+
 def test_queues_isolated_by_conversation():
     q.enqueue("a", text="only-a")
     q.enqueue("b", text="only-b")
