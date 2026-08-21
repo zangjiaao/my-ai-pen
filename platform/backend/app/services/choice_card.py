@@ -13,6 +13,9 @@ NEXT_STEPS_MAX = 5
 WIZARD_MAX_QUESTIONS = 8
 WIZARD_MAX_OPTIONS = 8
 PROJECTED_NEXT_STEPS_QUESTION_ID = "next_steps"
+PROJECTED_AUTHORIZE_QUESTION_ID = "authorize"
+AUTHORIZE_OPTION_YES = "authorize"
+AUTHORIZE_OPTION_NO = "cancel"
 
 SOFT_GATE_NOTE = (
     "Soft gate (Spec #312/#313): stoppable/continue boundary with open Case Workset "
@@ -213,29 +216,60 @@ def validate_choice_card_payload(raw: object) -> dict[str, Any]:
     return {"ok": True, "mode": "next_steps", "value": value}
 
 
+def _projected_authorize_question(value: dict[str, Any]) -> dict[str, Any]:
+    kind = _s(value.get("kind")).lower()
+    prompt = _s(value.get("question")) or (
+        "需要授权移交" if kind == "handoff" else "需要授权"
+    )
+    return {
+        "id": PROJECTED_AUTHORIZE_QUESTION_ID,
+        "prompt": prompt,
+        "selection": "single",
+        "allow_custom": value.get("allow_custom") is not False,
+        "options": [
+            {"id": AUTHORIZE_OPTION_YES, "title": "授权", "body": ""},
+            {"id": AUTHORIZE_OPTION_NO, "title": "取消", "body": ""},
+        ],
+    }
+
+
 def parse_wizard_questions(card: dict | None) -> list[dict[str, Any]]:
     result = validate_choice_card_payload(card or {})
-    if not result.get("ok") or result.get("mode") != "next_steps":
+    if not result.get("ok"):
         return []
     value = result.get("value") if isinstance(result.get("value"), dict) else {}
-    host = value.get("questions")
-    if isinstance(host, list) and host:
-        return list(host)
-    options = value.get("options") if isinstance(value.get("options"), list) else []
-    if not options:
-        return []
-    prompt = _s(value.get("question")) or _s(value.get("preamble")) or "下一步工作包"
-    selection = value.get("selection") if value.get("selection") in {"single", "multi"} else "single"
-    allow_custom = value.get("allow_custom") is not False
-    return [
-        {
-            "id": PROJECTED_NEXT_STEPS_QUESTION_ID,
-            "prompt": prompt,
-            "selection": selection,
-            "options": options,
-            "allow_custom": allow_custom,
-        }
-    ]
+    if result.get("mode") == "next_steps":
+        host = value.get("questions")
+        if isinstance(host, list) and host:
+            return list(host)
+        options = value.get("options") if isinstance(value.get("options"), list) else []
+        if not options:
+            return []
+        prompt = _s(value.get("question")) or _s(value.get("preamble")) or "下一步工作包"
+        selection = value.get("selection") if value.get("selection") in {"single", "multi"} else "single"
+        allow_custom = value.get("allow_custom") is not False
+        return [
+            {
+                "id": PROJECTED_NEXT_STEPS_QUESTION_ID,
+                "prompt": prompt,
+                "selection": selection,
+                "options": options,
+                "allow_custom": allow_custom,
+            }
+        ]
+    return [_projected_authorize_question(value)]
+
+
+def map_authorize_decision(
+    selected_option_ids: list | None = None,
+    custom_text: str | None = None,
+) -> str | None:
+    ids = {_s(x).lower() for x in (selected_option_ids or []) if _s(x)}
+    if AUTHORIZE_OPTION_NO in ids or "deny" in ids or "reject" in ids:
+        return "cancel"
+    if AUTHORIZE_OPTION_YES in ids or "yes" in ids or _s(custom_text):
+        return "authorize"
+    return None
 
 
 def parse_choice_options(card: dict | None) -> list[dict[str, Any]]:

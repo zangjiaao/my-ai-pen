@@ -107,6 +107,12 @@ export function normalizeApprovalResponse(response: unknown): ApprovalDecision {
 }
 
 /** True when response is a structured button/wire decision (not free-text prose). */
+/** Cancel ends the in-flight turn. Authorize / confirm_options / answered continue. */
+export function shouldAbortTurnOnApprovalDecision(decision: string | null | undefined): boolean {
+  const d = String(decision || "").trim().toLowerCase();
+  return d === "cancel" || d === "cancelled" || d === "canceled";
+}
+
 export function isStructuredApprovalResponse(response: unknown): boolean {
   const raw = String(response ?? "").trim();
   if (!raw) return false;

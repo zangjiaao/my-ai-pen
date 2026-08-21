@@ -1,13 +1,14 @@
 /**
  * Spec #312 / #313 / #450 — Unified Choice Card shell.
- * authorize/handoff preset = two-button Confirm UX;
- * option cards = Approval wizard chrome (radio/check, custom last option, pager, Send, ✕).
+ * One Approval wizard chrome: radio/check, custom last option, pager, Send, ✕.
+ * Authorize/handoff project to yes/no (授权/取消) + custom; next_steps uses host options.
  */
 import { useEffect, useMemo, useState } from "react";
 import MarkdownText from "../MarkdownText";
 import {
   isNextStepsChoice,
   isQuestionAnswerValid,
+  mapAuthorizeDecision,
   parseWizardQuestions,
   reduceChoiceDecision,
   type ChoiceDecision,
@@ -35,7 +36,7 @@ export default function ChoiceCard({
   answers,
 }: {
   content: Record<string, unknown>;
-  onAuthorize?: () => void;
+  onAuthorize?: (text?: string) => void;
   onCancel?: () => void;
   onConfirmOptions?: (selectedOptionIds: string[], extras?: ConfirmOptionsExtras) => void;
   highlighted?: boolean;
@@ -46,7 +47,6 @@ export default function ChoiceCard({
   answers?: WizardAnswer[];
 }) {
   const requestId = String(content.request_id || "");
-  const optionCard = isNextStepsChoice(content);
   const selected =
     decision === "authorize" ||
     decision === "cancel" ||
@@ -54,128 +54,20 @@ export default function ChoiceCard({
     decision === "confirm_options";
   const readOnly = selected || disabled;
 
-  if (optionCard) {
-    return (
-      <ApprovalWizardBody
-        content={content}
-        requestId={requestId}
-        decision={decision}
-        highlighted={highlighted}
-        readOnly={readOnly}
-        selectedOptionIds={selectedOptionIds}
-        customText={customText}
-        answers={answers}
-        onConfirmOptions={onConfirmOptions}
-        onCancel={onCancel}
-      />
-    );
-  }
-
   return (
-    <AuthorizeBody
+    <ApprovalWizardBody
       content={content}
       requestId={requestId}
       decision={decision}
       highlighted={highlighted}
-      selected={selected}
-      disabled={disabled}
+      readOnly={readOnly}
+      selectedOptionIds={selectedOptionIds}
+      customText={customText}
+      answers={answers}
+      onConfirmOptions={onConfirmOptions}
       onAuthorize={onAuthorize}
       onCancel={onCancel}
     />
-  );
-}
-
-function AuthorizeBody({
-  content,
-  requestId,
-  decision,
-  highlighted,
-  selected,
-  disabled = false,
-  onAuthorize,
-  onCancel,
-}: {
-  content: Record<string, unknown>;
-  requestId: string;
-  decision?: ApprovalDecision;
-  highlighted: boolean;
-  selected: boolean;
-  disabled?: boolean;
-  onAuthorize?: () => void;
-  onCancel?: () => void;
-}) {
-  const authorizeSelected = decision === "authorize";
-  const cancelSelected = decision === "cancel";
-  const answeredSelected = decision === "answered";
-  const controlsDisabled = selected || disabled;
-
-  const title =
-    String(content.question || "").trim() ||
-    (String(content.kind || "") === "handoff" ? "需要授权移交" : "需要授权");
-  const body = String(content.proposed_action || content.target || "").trim();
-  const handoffName = String(content.handoff_expert_name || "").trim();
-  const handoffSubtitle =
-    handoffName && String(content.kind || "") === "handoff"
-      ? `移交至：${handoffName}`
-      : "";
-
-  return (
-    <div
-      data-testid="confirm-card"
-      data-choice-kind={String(content.kind || "confirm")}
-      data-approval-request-id={requestId}
-      data-approval-decision={decision || ""}
-      className={`my-2 rounded-md border bg-surface-elevated p-5 transition-shadow ${
-        highlighted
-          ? "border-status-running shadow-[0_0_0_3px_rgba(37,99,235,0.24)]"
-          : selected
-            ? "border-status-success"
-            : "border-hairline"
-      }`}
-    >
-      <p className="text-sm font-medium text-ink">{title}</p>
-      {handoffSubtitle ? (
-        <p className="mt-1 text-xs text-ink-muted">{handoffSubtitle}</p>
-      ) : null}
-      {body ? (
-        <MarkdownText
-          text={body}
-          className="mt-2 min-w-0 max-w-full space-y-2 text-sm leading-relaxed text-ink-secondary [overflow-wrap:anywhere]"
-        />
-      ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          data-testid="confirm-authorize"
-          type="button"
-          onClick={onAuthorize}
-          disabled={controlsDisabled}
-          aria-pressed={authorizeSelected}
-          className={`rounded-pill px-4 py-2 text-sm font-medium transition-colors disabled:cursor-default ${
-            authorizeSelected
-              ? "bg-status-success text-white"
-              : selected
-                ? "border border-hairline bg-canvas text-ink-muted"
-                : "bg-ink text-on-ink"
-          }`}
-        >
-          {authorizeSelected ? "已授权" : answeredSelected ? "已回复" : "授权"}
-        </button>
-        <button
-          data-testid="confirm-cancel"
-          type="button"
-          onClick={onCancel}
-          disabled={controlsDisabled}
-          aria-pressed={cancelSelected}
-          className={`rounded-pill px-4 py-2 text-sm transition-colors disabled:cursor-default ${
-            cancelSelected
-              ? "bg-severity-critical text-white"
-              : "border border-hairline bg-canvas text-ink"
-          }`}
-        >
-          {cancelSelected ? "已取消" : "取消"}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -224,6 +116,7 @@ function ApprovalWizardBody({
   customText,
   answers,
   onConfirmOptions,
+  onAuthorize,
   onCancel,
 }: {
   content: Record<string, unknown>;
@@ -235,18 +128,32 @@ function ApprovalWizardBody({
   customText?: string;
   answers?: WizardAnswer[];
   onConfirmOptions?: (selectedOptionIds: string[], extras?: ConfirmOptionsExtras) => void;
+  onAuthorize?: (text?: string) => void;
   onCancel?: () => void;
 }) {
+  const nextSteps = isNextStepsChoice(content);
+  const kind = String(content.kind || (nextSteps ? "next_steps" : "confirm"));
+  const proposedAction = String(content.proposed_action || (!nextSteps ? content.target : "") || "").trim();
+  const handoffName = String(content.handoff_expert_name || "").trim();
+  const handoffSubtitle =
+    handoffName && kind === "handoff" ? `移交至：${handoffName}` : "";
   const questions = useMemo(() => parseWizardQuestions(content), [content]);
+  const hydrateIds = useMemo(() => {
+    if (selectedOptionIds?.length) return selectedOptionIds;
+    if (customText?.trim()) return [];
+    if (decision === "authorize") return ["authorize"];
+    if (decision === "cancel") return ["cancel"];
+    return selectedOptionIds;
+  }, [selectedOptionIds, customText, decision]);
   const [qi, setQi] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
-    draftsFromHydration(questions, selectedOptionIds, customText, answers),
+    draftsFromHydration(questions, hydrateIds, customText, answers),
   );
 
   useEffect(() => {
     if (!readOnly) return;
-    setDrafts(draftsFromHydration(questions, selectedOptionIds, customText, answers));
-  }, [readOnly, questions, selectedOptionIds, customText, answers]);
+    setDrafts(draftsFromHydration(questions, hydrateIds, customText, answers));
+  }, [readOnly, questions, hydrateIds, customText, answers]);
 
   const confirmed =
     decision === "confirm_options" || decision === "answered" || decision === "authorize";
@@ -318,6 +225,18 @@ function ApprovalWizardBody({
     }
     const reduced = reduceChoiceDecision(content, { answers: payloadAnswers });
     if (!reduced.ok) return;
+    if (!nextSteps) {
+      const mapped = mapAuthorizeDecision(reduced.selected_option_ids, reduced.custom_text);
+      if (mapped === "cancel") {
+        onCancel?.();
+        return;
+      }
+      if (mapped === "authorize") {
+        onAuthorize?.(reduced.custom_text);
+        return;
+      }
+      return;
+    }
     onConfirmOptions?.(reduced.selected_option_ids, {
       customText: reduced.custom_text,
       answers: reduced.answers,
@@ -328,8 +247,8 @@ function ApprovalWizardBody({
 
   return (
     <div
-      data-testid="choice-card"
-      data-choice-kind="next_steps"
+      data-testid={nextSteps ? "choice-card" : "confirm-card"}
+      data-choice-kind={kind}
       data-choice-presentation="approval_wizard"
       data-choice-selection={question.selection}
       data-approval-request-id={requestId}
@@ -344,7 +263,18 @@ function ApprovalWizardBody({
     >
       <div className="px-4 pb-3 pt-4">
         <div className="flex items-start justify-between gap-3">
-          <span className="text-[13px] font-medium text-ink">{question.prompt}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-medium text-ink">{question.prompt}</span>
+            {handoffSubtitle ? (
+              <span className="mt-1 block text-xs text-ink-muted">{handoffSubtitle}</span>
+            ) : null}
+            {proposedAction && proposedAction !== question.prompt ? (
+              <MarkdownText
+                text={proposedAction}
+                className="mt-1 min-w-0 max-w-full space-y-1 text-xs leading-relaxed text-ink-secondary [overflow-wrap:anywhere]"
+              />
+            ) : null}
+          </span>
           {!readOnly ? (
             <button
               type="button"
@@ -366,7 +296,13 @@ function ApprovalWizardBody({
               <button
                 key={opt.id}
                 type="button"
-                data-testid={`choice-option-${opt.id}`}
+                data-testid={
+                  opt.id === "authorize"
+                    ? "confirm-authorize"
+                    : opt.id === "cancel"
+                      ? "confirm-cancel"
+                      : `choice-option-${opt.id}`
+                }
                 aria-pressed={on}
                 disabled={readOnly}
                 onClick={() => toggle(opt.id)}

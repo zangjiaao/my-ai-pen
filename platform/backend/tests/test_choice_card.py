@@ -1,5 +1,8 @@
 """Spec #312 / #313 pure choice card contracts (S1–S3)."""
 from app.services.choice_card import (
+    AUTHORIZE_OPTION_NO,
+    AUTHORIZE_OPTION_YES,
+    PROJECTED_AUTHORIZE_QUESTION_ID,
     PROJECTED_NEXT_STEPS_QUESTION_ID,
     SOFT_GATE_NOTE,
     apply_soft_gate_note,
@@ -9,6 +12,7 @@ from app.services.choice_card import (
     format_selected_summary,
     is_next_steps_choice,
     is_question_answer_valid,
+    map_authorize_decision,
     messages_have_legal_next_steps_choice,
     parse_wizard_questions,
     reduce_choice_decision,
@@ -29,6 +33,24 @@ def test_s1_authorize_without_options():
     )
     assert r["ok"] is True
     assert r["mode"] == "authorize"
+    questions = parse_wizard_questions(r["value"])
+    assert len(questions) == 1
+    assert questions[0]["id"] == PROJECTED_AUTHORIZE_QUESTION_ID
+    assert [o["id"] for o in questions[0]["options"]] == [
+        AUTHORIZE_OPTION_YES,
+        AUTHORIZE_OPTION_NO,
+    ]
+    assert questions[0]["allow_custom"] is True
+    assert map_authorize_decision(["authorize"]) == "authorize"
+    assert map_authorize_decision(["cancel"]) == "cancel"
+    assert map_authorize_decision([], "同意，限制在 lab") == "authorize"
+    reduced = reduce_choice_decision(
+        {"kind": "confirm", "question": "Authorize?"},
+        custom_text="同意，限制在 lab",
+    )
+    assert reduced["ok"] is True
+    assert reduced["selected_option_ids"] == []
+    assert reduced["custom_text"] == "同意，限制在 lab"
 
 
 def test_s1_next_steps_count_and_body():

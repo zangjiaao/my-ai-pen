@@ -47,7 +47,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 | L1 | Options **authored by Agent** (not platform keyword/inventory expansion as primary UI). |
 | L2 | Emit when Agent judges **valuable next work** exists (may omit); soft retry when a boundary expected a card but none arrived — **no** fixed “always four options.” Spec #313. |
 | L3 | Unified **ChoiceCard** shell; Confirm is a preset. |
-| L4 | **next_steps** default **single-select** (Spec #313); custom is a **peer option** (Spec #450), not a supplement. Authorize stays two-button until Recommendation (H2). Multi-select is not the product default. |
+| L4 | **next_steps** default **single-select** (Spec #313); custom is a **peer option** (Spec #450), not a supplement. Authorize/handoff use the **same wizard** as yes/no (授权/取消) + custom; no recommended badge. Multi-select is not the product default. |
 | L5 | Card is a **message in the stream** (not sticky-only chrome). |
 | L6 | Option fields: `id`, `title`, `body`, optional `workset_item_ids[]`, optional coarse `kind`. |
 | L7 | Confirm path: structured decision + visible summary (not silent-only). |

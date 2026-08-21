@@ -11,8 +11,6 @@ import { jsonResult, textResult } from "./common.js";
 import { registerApprovalWait, type ApprovalResult } from "../runtime/approvals.js";
 import { platformLedgerFetch } from "./platform.js";
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
-
 function speakerFields(runtime: ToolRuntime): { expert_id?: string; expert_name?: string } {
   // Always attribute the waiting turn to the *requesting* Session persona.
   // handoff_expert_* is card body only — never top-level speaker.
@@ -325,13 +323,15 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         onAbort = () => resolve({ decision: "cancel" });
         abort.addEventListener("abort", onAbort, { once: true });
       });
-      const timeoutPromise = new Promise<ApprovalResult>((resolve) => {
-        setTimeout(() => resolve({ decision: "cancel" }), DEFAULT_TIMEOUT_MS);
-      });
+      // No wall-clock auto-cancel: an unanswered card must stay parked until the
+      // user decides or interrupts. A timeout that returns cancel to the model
+      // continues the turn and can emit another 等待授权 card.
 
       let approvalResult: ApprovalResult;
       try {
-        approvalResult = await Promise.race([waitPromise, abortPromise, timeoutPromise]);
+        approvalResult = abort
+          ? await Promise.race([waitPromise, abortPromise])
+          : await waitPromise;
       } finally {
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }

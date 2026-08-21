@@ -8,6 +8,7 @@ import {
   normalizeApprovalResponse,
   registerApprovalWait,
   resolveApproval,
+  shouldAbortTurnOnApprovalDecision,
 } from "./approvals.js";
 
 clearAllApprovals();
@@ -19,6 +20,10 @@ assert.equal(normalizeApprovalResponse("confirm_options"), "confirm_options");
 // Spec #312 L9: secondary multi-card freeze must not authorize (handoff/graph).
 assert.equal(normalizeApprovalResponse("answered"), "answered");
 assert.equal(normalizeApprovalResponse("cancel"), "cancel");
+assert.equal(shouldAbortTurnOnApprovalDecision("cancel"), true);
+assert.equal(shouldAbortTurnOnApprovalDecision("authorize"), false);
+assert.equal(shouldAbortTurnOnApprovalDecision("confirm_options"), false);
+assert.equal(shouldAbortTurnOnApprovalDecision("answered"), false);
 assert.equal(normalizeApprovalResponse("取消"), "cancel");
 assert.equal(normalizeApprovalResponse("拒绝"), "cancel");
 assert.equal(normalizeApprovalResponse("no"), "cancel");

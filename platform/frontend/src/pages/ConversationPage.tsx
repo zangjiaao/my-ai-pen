@@ -2503,11 +2503,30 @@ export default function ConversationPage() {
     return () => window.clearInterval(timer);
   }, [activeId, isActiveConversationRunning, refreshConversationState, stateSnapshotLoaded]);
 
-  const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
+  const handleDecision = useCallback((
+    requestId: string,
+    decision: "authorize" | "cancel",
+    extras?: { text?: string },
+  ) => {
     if (!activeId || !requestId) return;
+    const text = String(extras?.text || "").trim() || undefined;
     setPendingApprovals(prev => prev.filter(item => item.request_id !== requestId));
-    addMessageToConversation(activeId, makeMessage(activeId, "user", "decision", { request_id: requestId, decision }));
-    send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
+    addMessageToConversation(activeId, makeMessage(activeId, "user", "decision", {
+      request_id: requestId,
+      decision,
+      text,
+      custom_text: text,
+      selected_option_ids: text ? [] : [decision],
+    }));
+    send({
+      type: "user_decision",
+      conversation_id: activeId,
+      request_id: requestId,
+      decision,
+      text,
+      custom_text: text,
+      selected_option_ids: text ? [] : [decision],
+    });
   }, [activeId, addMessageToConversation, send]);
 
   /** Spec #313 / #450: next_steps confirm → selected ids and/or custom-alone. */

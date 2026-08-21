@@ -61,6 +61,10 @@ export type ConfirmTextExtras = {
 
 /** Projected question id when wrapping flat next_steps options[] into one wizard question. */
 export const PROJECTED_NEXT_STEPS_QUESTION_ID = "next_steps";
+/** Projected yes/no question for authorize / handoff / confirm (existing 授权/取消 labels). */
+export const PROJECTED_AUTHORIZE_QUESTION_ID = "authorize";
+export const AUTHORIZE_OPTION_YES = "authorize";
+export const AUTHORIZE_OPTION_NO = "cancel";
 
 const NEXT_STEPS_MIN = 2;
 const NEXT_STEPS_MAX = 5;
@@ -252,32 +256,69 @@ export function resolveChoicePresentation(
   return "authorize";
 }
 
-/** Project host questions, or wrap next_steps options[] as one question. */
+function projectedAuthorizeQuestion(content: ChoiceCardPayload): WizardQuestion {
+  const kind = nonEmptyString(content.kind).toLowerCase();
+  const prompt =
+    nonEmptyString(content.question) ||
+    (kind === "handoff" ? "需要授权移交" : "需要授权");
+  return {
+    id: PROJECTED_AUTHORIZE_QUESTION_ID,
+    prompt,
+    selection: "single",
+    allow_custom: content.allow_custom !== false,
+    options: [
+      { id: AUTHORIZE_OPTION_YES, title: "授权", body: "" },
+      { id: AUTHORIZE_OPTION_NO, title: "取消", body: "" },
+    ],
+  };
+}
+
+/** Project host questions, wrap next_steps options[], or authorize as yes/no + custom. */
 export function parseWizardQuestions(
   content: Record<string, unknown> | null | undefined,
 ): WizardQuestion[] {
   if (!content) return [];
   const v = validateChoiceCardPayload(content);
-  if (!v.ok || v.mode !== "next_steps") return [];
-  const host = v.value.questions;
-  if (Array.isArray(host) && host.length) return host;
-  const options = Array.isArray(v.value.options) ? (v.value.options as ChoiceOption[]) : [];
-  if (!options.length) return [];
-  const prompt =
-    nonEmptyString(v.value.question) ||
-    nonEmptyString(v.value.preamble) ||
-    "下一步工作包";
-  const selection = v.value.selection === "multi" ? "multi" : "single";
-  const allow_custom = v.value.allow_custom !== false;
-  return [
-    {
-      id: PROJECTED_NEXT_STEPS_QUESTION_ID,
-      prompt,
-      selection,
-      options,
-      allow_custom,
-    },
-  ];
+  if (!v.ok) return [];
+  if (v.mode === "next_steps") {
+    const host = v.value.questions;
+    if (Array.isArray(host) && host.length) return host;
+    const options = Array.isArray(v.value.options) ? (v.value.options as ChoiceOption[]) : [];
+    if (!options.length) return [];
+    const prompt =
+      nonEmptyString(v.value.question) ||
+      nonEmptyString(v.value.preamble) ||
+      "下一步工作包";
+    const selection = v.value.selection === "multi" ? "multi" : "single";
+    const allow_custom = v.value.allow_custom !== false;
+    return [
+      {
+        id: PROJECTED_NEXT_STEPS_QUESTION_ID,
+        prompt,
+        selection,
+        options,
+        allow_custom,
+      },
+    ];
+  }
+  return [projectedAuthorizeQuestion(v.value)];
+}
+
+/** Map wizard submit on an authorize-family card to the Session decision token. */
+export function mapAuthorizeDecision(
+  selected_option_ids?: string[] | null,
+  custom_text?: string | null,
+): "authorize" | "cancel" | null {
+  const ids = (Array.isArray(selected_option_ids) ? selected_option_ids : [])
+    .map((id) => String(id || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (ids.includes(AUTHORIZE_OPTION_NO) || ids.includes("deny") || ids.includes("reject")) {
+    return "cancel";
+  }
+  if (ids.includes(AUTHORIZE_OPTION_YES) || ids.includes("yes") || nonEmptyString(custom_text)) {
+    return "authorize";
+  }
+  return null;
 }
 
 /** Parse structured options from card content (empty if authorize/legacy). */

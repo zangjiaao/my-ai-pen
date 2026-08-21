@@ -939,6 +939,10 @@ async def _set_work_burst_authorize_paused(
                 context,
                 paused=paused,
                 request_id=rid or None,
+                settle=(
+                    not paused
+                    and str(resume_status or "").strip().lower() in {"canceled", "cancelled"}
+                ),
             )
             ledger = get_ledger(context)
             # R1: if resume settled an idle burst, drop stored umk so next turn is fresh.

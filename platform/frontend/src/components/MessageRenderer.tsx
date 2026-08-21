@@ -29,7 +29,11 @@ interface Props {
   previousMessage?: Message;
   fallbackPentestNodeId?: string | null;
   platformAgentNodeId?: string | null;
-  onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
+  onDecision?: (
+    requestId: string,
+    decision: "authorize" | "cancel",
+    extras?: { text?: string },
+  ) => void;
   /** Spec #313 / #450 next_steps confirm: option ids and/or custom-alone. */
   onConfirmOptions?: (
     requestId: string,
@@ -426,7 +430,7 @@ export function AgentPendingCard({
         >
           {title}
         </span>
-        {elapsed ? (
+        {elapsed && !workBurst?.authorize_paused ? (
           <span
             data-testid="loading-state-elapsed"
             className="shrink-0 font-mono text-[12px] tabular-nums text-ink-muted"
@@ -550,7 +554,7 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
           answers={choiceAnswersByRequestId[rid]}
           highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)}
           disabled={choiceDisabled}
-          onAuthorize={() => onDecision?.(content.request_id as string, "authorize")}
+          onAuthorize={(text) => onDecision?.(content.request_id as string, "authorize", text ? { text } : undefined)}
           onCancel={() => onDecision?.(content.request_id as string, "cancel")}
           onConfirmOptions={(ids, extras) =>
             onConfirmOptions?.(String(content.request_id || ""), ids, content, extras)

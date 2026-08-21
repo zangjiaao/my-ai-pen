@@ -3,14 +3,18 @@
  */
 import assert from "node:assert/strict";
 import {
+  AUTHORIZE_OPTION_NO,
+  AUTHORIZE_OPTION_YES,
   buildConfirmOptionsText,
   expandSelectedOptions,
   formatSelectedSummary,
   isChoiceDecisionFinal,
   isNextStepsChoice,
   isQuestionAnswerValid,
+  mapAuthorizeDecision,
   parseChoiceOptions,
   parseWizardQuestions,
+  PROJECTED_AUTHORIZE_QUESTION_ID,
   PROJECTED_NEXT_STEPS_QUESTION_ID,
   reduceChoiceDecision,
   resolveChoicePresentation,
@@ -35,6 +39,34 @@ const authNoOptions = validateChoiceCardPayload({
   question: "Authorize scan?",
 });
 assert.equal(authNoOptions.ok, true);
+
+const authQuestions = parseWizardQuestions({
+  request_id: "r1",
+  kind: "handoff",
+  question: "移交渗透？",
+  proposed_action: "scope markdown",
+});
+assert.equal(authQuestions.length, 1);
+assert.equal(authQuestions[0].id, PROJECTED_AUTHORIZE_QUESTION_ID);
+assert.equal(authQuestions[0].selection, "single");
+assert.equal(authQuestions[0].allow_custom, true);
+assert.deepEqual(
+  authQuestions[0].options.map((o) => o.id),
+  [AUTHORIZE_OPTION_YES, AUTHORIZE_OPTION_NO],
+);
+assert.equal(mapAuthorizeDecision(["authorize"]), "authorize");
+assert.equal(mapAuthorizeDecision(["cancel"]), "cancel");
+assert.equal(mapAuthorizeDecision([], "先扫 login"), "authorize");
+assert.equal(mapAuthorizeDecision([]), null);
+const authReduced = reduceChoiceDecision(
+  { kind: "confirm", question: "Authorize scan?" },
+  { custom_text: "同意，限制在 lab" },
+);
+assert.equal(authReduced.ok, true);
+if (authReduced.ok) {
+  assert.deepEqual(authReduced.selected_option_ids, []);
+  assert.equal(authReduced.custom_text, "同意，限制在 lab");
+}
 
 const nextTooFew = validateChoiceCardPayload({
   kind: "next_steps",
