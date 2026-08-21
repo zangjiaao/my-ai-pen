@@ -461,6 +461,8 @@ export default function ConversationPage() {
   /** List-tail Working attribution (send_success); visibility follows work-burst. */
   const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
   const [sessionDemands, setSessionDemands] = useState<SessionDemandItem[]>([]);
+  /** Demand already taken for force-send — cancel/edit on that row would lie. */
+  const [forcingDemandId, setForcingDemandId] = useState<string | null>(null);
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
@@ -1139,6 +1141,7 @@ export default function ConversationPage() {
         setPendingChrome((cur) => reducePendingChrome(cur, { type: "terminal" }));
       }
       setInterrupting(false);
+      setForcingDemandId(null);
     }
     // Multi-role Case roster: light case_run patch; full snapshot only when multi-role.
     if (isRecord(msg.case_run)) {
@@ -1221,7 +1224,10 @@ export default function ConversationPage() {
       const m = msg as Record<string, unknown>;
       const id = String(m.demand_id || "").trim();
       const text = String(m.text || "").trim();
-      if (id) setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      if (id) {
+        setSessionDemands((prev) => removeQueuedDemand(prev, id));
+        setForcingDemandId((cur) => (cur === id ? null : cur));
+      }
       const convId = messageConversationId(m, activeId);
       if (convId && id && text) {
         addMessageToConversation(
@@ -3207,26 +3213,27 @@ export default function ConversationPage() {
   ]);
 
   const handleCancelDemand = useCallback((demandId: string) => {
-    if (!activeId) return;
+    if (!activeId || demandId === forcingDemandId) return;
     setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
     send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
-  }, [activeId, send]);
+  }, [activeId, forcingDemandId, send]);
 
   const handleEditDemand = useCallback((demandId: string) => {
-    if (!activeId) return;
+    if (!activeId || demandId === forcingDemandId) return;
     const item = sessionDemands.find((row) => row.id === demandId);
     if (!item || item.status !== "pending") return;
     setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
     send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
     composerRef.current?.setValue(item.text);
     composerRef.current?.focus();
-  }, [activeId, sessionDemands, send]);
+  }, [activeId, forcingDemandId, sessionDemands, send]);
 
   const handleForceDemand = useCallback((demandId: string) => {
     if (!activeId || interrupting) return;
     const item = sessionDemands.find((row) => row.id === demandId);
     if (!item || item.status !== "pending") return;
     setInterrupting(true);
+    setForcingDemandId(demandId);
     send({ type: "session_demand_force", conversation_id: activeId, demand_id: demandId });
   }, [activeId, interrupting, sessionDemands, send]);
 
@@ -3446,7 +3453,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       choiceDisabled={
                         interrupting
                         || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
-                        || (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands))
                       }
                       resultAnchorWorkSeconds={resultAnchorSecondsByMessageId[msg.id]}
                     />
@@ -3500,6 +3506,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 onEdit={handleEditDemand}
                 onForceSend={handleForceDemand}
                 forceDisabled={interrupting}
+                busyDemandId={forcingDemandId}
               />
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>

@@ -87,14 +87,23 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   assert.match(editFn[0], /session_demand_delete/, "edit deletes the queued demand");
   assert.match(editFn[0], /setValue/, "edit overwrites the composer draft");
   assert.doesNotMatch(editFn[0], /interrupting/, "edit must not wait for interrupt to clear");
+  assert.match(editFn[0], /forcingDemandId/, "edit must no-op on the row already taken for force-send");
   const cancelFn = pageSrc.match(/const handleCancelDemand[\s\S]*?\}, \[/);
   assert.ok(cancelFn, "handleCancelDemand must exist");
   assert.match(cancelFn[0], /removeQueuedDemand/, "cancel drops the row");
   assert.doesNotMatch(cancelFn[0], /cancelQueuedDemand/, "cancel must not leave a cancelled ghost");
+  assert.match(cancelFn[0], /forcingDemandId/, "cancel must no-op on the row already taken for force-send");
   assert.match(
     pageSrc,
     /handleConfirmOptions[\s\S]*sessionDemandQueueIsFull/,
     "confirm must refuse when the Session demand queue is full",
+  );
+  const choiceDisabled = pageSrc.match(/choiceDisabled=\{\s*([\s\S]*?)\s*\}/);
+  assert.ok(choiceDisabled, "choiceDisabled must exist");
+  assert.doesNotMatch(
+    choiceDisabled[1],
+    /sessionDemandQueueIsFull/,
+    "queue-full must not grey authorize/handoff ChoiceCards",
   );
   assert.match(
     pageSrc,
@@ -116,6 +125,8 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
     /disabled=\{forceDisabled\}[\s\S]{0,240}SESSION_DEMAND_SEND_LABEL/,
     "only force-send is gated on interrupt",
   );
+  assert.match(queueSrc, /busyDemandId/, "the force-taken row must be identifiable");
+  assert.match(queueSrc, /rowTaken/, "edit/cancel lock only the force-taken row");
   const sendJsx = queueSrc.indexOf("{SESSION_DEMAND_SEND_LABEL}");
   assert.ok(sendJsx >= 0, "send label is rendered");
   const afterSendJsx = queueSrc.slice(sendJsx);
@@ -124,7 +135,7 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   assert.doesNotMatch(
     afterSendJsx,
     /forceDisabled/,
-    "edit and cancel stay available during interrupt",
+    "edit and cancel stay available on other rows during interrupt",
   );
   console.log("ok: ConversationPage promotes drained demands to user bubbles");
 }

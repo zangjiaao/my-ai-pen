@@ -17,6 +17,7 @@ type Props = {
   onEdit: (id: string) => void;
   onForceSend: (id: string) => void;
   forceDisabled?: boolean;
+  busyDemandId?: string | null;
 };
 
 /** List-tail queue chrome: user-shaped bubble, secondary type, actions to the right. */
@@ -26,12 +27,15 @@ export default function SessionDemandQueue({
   onEdit,
   onForceSend,
   forceDisabled = false,
+  busyDemandId = null,
 }: Props) {
   const pending = items.filter((item) => item.status === "pending");
   if (!pending.length) return null;
   return (
     <div className="space-y-2" data-testid="session-demand-queue">
-      {pending.map((item) => (
+      {pending.map((item) => {
+        const rowTaken = Boolean(busyDemandId && item.id === busyDemandId);
+        return (
         <div
           key={item.id}
           className="flex min-w-0 items-center justify-end gap-2"
@@ -51,6 +55,7 @@ export default function SessionDemandQueue({
             </button>
             <button
               type="button"
+              disabled={rowTaken}
               className={QUEUE_ACTION_CLASS}
               onClick={() => onEdit(item.id)}
             >
@@ -58,6 +63,7 @@ export default function SessionDemandQueue({
             </button>
             <button
               type="button"
+              disabled={rowTaken}
               className={QUEUE_ACTION_CLASS}
               onClick={() => onCancel(item.id)}
             >
@@ -65,7 +71,8 @@ export default function SessionDemandQueue({
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
