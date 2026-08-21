@@ -105,7 +105,7 @@ Main DISPATCH (goal + success_criteria)
 
 ## Parallel subagent batch (OMP-style, Spec #302)
 
-- Tool `subagent` accepts **flat** one package or **batch** `packages[]` + optional shared `context`.
+- Tool `subagent` accepts **flat** one package or **batch** `packages[]` + optional shared `context`. Batch items may omit `target` / `scope` / `already_done` and inherit the same call’s top-level fields; `this_turn_goal` and `success_criteria` stay per-package.
 - Batch runs with `mapWithConcurrencyLimit` — `NODE4_SUBAGENT_CONCURRENCY` (default **8**, clamp 1–16) is **scheduling only** (queue when full; never reject solely for concurrency).
 - **Batch safety ceiling** `MAX_SUBAGENT_BATCH` (**32**): hard error if `packages[]` length exceeds it (DoS rail, not agent thinking limit).
 - **Per-task cumulative admitted package budget** default **128** (`NODE4_SUBAGENT_TASK_BUDGET`, max **1024**). Counts packages admitted after validation; exhaustion → clear tool error; already-running/finished work remains honest partial.

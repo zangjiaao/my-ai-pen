@@ -53,7 +53,11 @@ export const packagePriorFields = {
 };
 
 export const packageItemSchema = Type.Object({
-  target: Type.String(),
+  target: Type.Optional(
+    Type.String({
+      description: "Package target. Omit to inherit top-level target (same as scope/already_done).",
+    }),
+  ),
   scope: Type.Optional(Type.String()),
   already_done: Type.Optional(Type.String()),
   this_turn_goal: Type.String(),
@@ -109,7 +113,7 @@ export function resolvePackageInput(
     return {
       error:
         `error: ${mode} incomplete handoff — need target, scope, already_done, this_turn_goal, success_criteria ` +
-        `(batch may inherit scope/already_done from top-level; context fills shared background).`,
+        `(batch may inherit target/scope/already_done from top-level; context fills shared background).`,
     };
   }
 

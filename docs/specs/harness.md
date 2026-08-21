@@ -200,7 +200,7 @@ Lab Main-act strip (non-product): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free
 
 ### Subagent handoff contract (A1 / D3)
 
-Required structured fields on every `subagent` tool call (child does **not** inherit parent chat):
+Required structured fields on every `subagent` tool call (child does **not** inherit parent chat). Batch `packages[]` may omit `target` / `scope` / `already_done` and inherit those from the same call’s top-level fields; `this_turn_goal` and `success_criteria` stay per-package. Resolve still hard-fails if a package ends up missing any of the five:
 
 | Field | Meaning |
 |-------|---------|
