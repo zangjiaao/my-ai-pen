@@ -2,9 +2,13 @@
  * Run: npx tsx src/lib/sessionDemandQueue.test.ts  (from platform/frontend)
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   cancelQueuedDemand,
   pendingQueuedDemands,
+  queuedDemandUserContent,
   removeQueuedDemand,
   upsertQueuedDemand,
   type SessionDemandItem,
@@ -33,4 +37,28 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   const gone = removeQueuedDemand(cancelled, "b");
   assert.deepEqual(gone.map((r) => r.id), ["a"]);
   console.log("ok: cancel keeps row; remove drops drained");
+}
+
+{
+  const content = queuedDemandUserContent({ id: "d1", text: "  hello  " });
+  assert.equal(content.text, "hello");
+  assert.equal(content.message_id, "d1");
+  assert.equal(content.client_message_id, "d1");
+  console.log("ok: queuedDemandUserContent");
+}
+
+{
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pageSrc = readFileSync(join(here, "../pages/ConversationPage.tsx"), "utf8");
+  assert.match(
+    pageSrc,
+    /session_demand_drained[\s\S]*queuedDemandUserContent/,
+    "drain must append a user bubble, not only drop queue chrome",
+  );
+  assert.match(
+    pageSrc,
+    /handleForceDemand[\s\S]*queuedDemandUserContent/,
+    "force-send must append a user bubble",
+  );
+  console.log("ok: ConversationPage promotes drained demands to user bubbles");
 }

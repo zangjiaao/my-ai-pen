@@ -4652,12 +4652,15 @@ async def _dispatch_queued_text_demand(
     text = str(item.get("text") or "").strip()
     if not text:
         return
-    await _persist_and_broadcast(
-        conv_id,
+    # Persist as a user bubble (same path as user_message). Do not broadcast
+    # type=text — FE treats that as Agent progressive stream and drops it.
+    await _save_message(
         {
-            "type": "text",
+            "type": "user_message",
             "conversation_id": conv_id,
             "text": text,
+            "display_text": text,
+            "client_message_id": str(item.get("id") or "").strip() or None,
         },
         "user",
     )

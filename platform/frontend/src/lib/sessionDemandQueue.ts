@@ -62,3 +62,14 @@ export function removeQueuedDemand(
 export function pendingQueuedDemands(items: SessionDemandItem[]): SessionDemandItem[] {
   return items.filter((row) => row.status === "pending");
 }
+
+/** Promote a delivered demand into the same user-bubble identity as a direct send. */
+export function queuedDemandUserContent(item: Pick<SessionDemandItem, "id" | "text">): {
+  text: string;
+  message_id: string;
+  client_message_id: string;
+} {
+  const text = String(item.text || "").trim();
+  const id = String(item.id || "").trim();
+  return { text, message_id: id, client_message_id: id };
+}

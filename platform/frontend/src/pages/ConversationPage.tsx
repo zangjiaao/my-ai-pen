@@ -121,6 +121,7 @@ import { currentInProgressWorksetItemId } from "../lib/workset";
 import {
   cancelQueuedDemand,
   newSessionDemandId,
+  queuedDemandUserContent,
   removeQueuedDemand,
   upsertQueuedDemand,
   type SessionDemandItem,
@@ -1195,9 +1196,17 @@ export default function ConversationPage() {
       setSessionDemands((prev) => cancelQueuedDemand(prev, id));
     },
     session_demand_drained: (msg) => {
-      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
-      if (!id) return;
-      setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || "").trim();
+      const text = String(m.text || "").trim();
+      if (id) setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      const convId = messageConversationId(m, activeId);
+      if (convId && id && text) {
+        addMessageToConversation(
+          convId,
+          makeMessage(convId, "user", "text", queuedDemandUserContent({ id, text })),
+        );
+      }
     },
     conversation_title_updated: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -3180,10 +3189,16 @@ export default function ConversationPage() {
 
   const handleForceDemand = useCallback((demandId: string) => {
     if (!activeId || interrupting) return;
+    const item = sessionDemands.find((row) => row.id === demandId);
+    if (!item || item.status !== "pending") return;
     setInterrupting(true);
     setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
+    addMessageToConversation(
+      activeId,
+      makeMessage(activeId, "user", "text", queuedDemandUserContent(item)),
+    );
     send({ type: "session_demand_force", conversation_id: activeId, demand_id: demandId });
-  }, [activeId, interrupting, send]);
+  }, [activeId, interrupting, sessionDemands, addMessageToConversation, send]);
 
   const handleInterrupt = useCallback(() => {
     if (!activeId || interrupting) return;

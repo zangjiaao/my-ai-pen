@@ -5,7 +5,7 @@ import {
 } from "../lib/sessionDemandQueue";
 
 const QUEUE_BUBBLE_CLASS =
-  "max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-xs leading-relaxed text-ink-muted [overflow-wrap:anywhere]";
+  "max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm leading-5 text-ink-muted [overflow-wrap:anywhere]";
 
 type Props = {
   items: SessionDemandItem[];
@@ -29,17 +29,17 @@ export default function SessionDemandQueue({
         return (
           <div
             key={item.id}
-            className="flex min-w-0 items-end justify-end gap-2"
+            className="flex min-w-0 items-center justify-end gap-2"
             data-testid="session-demand-row"
             data-demand-id={item.id}
             data-demand-status={item.status}
           >
             <div className={QUEUE_BUBBLE_CLASS}>{item.text}</div>
             {pending ? (
-              <div className="mb-0.5 flex shrink-0 items-center gap-1">
+              <div className="flex h-8 shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  className="rounded-full px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink"
+                  className="rounded-full px-2 py-1 text-sm leading-5 text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink"
                   onClick={() => onCancel(item.id)}
                 >
                   {SESSION_DEMAND_CANCEL_LABEL}
@@ -47,7 +47,7 @@ export default function SessionDemandQueue({
                 <button
                   type="button"
                   disabled={forceDisabled}
-                  className="rounded-full px-2 py-1 text-xs text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-full px-2 py-1 text-sm leading-5 text-ink-secondary transition-colors hover:bg-canvas-inset hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => onForceSend(item.id)}
                 >
                   {SESSION_DEMAND_SEND_LABEL}
