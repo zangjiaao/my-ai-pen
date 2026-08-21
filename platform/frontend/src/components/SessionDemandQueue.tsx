@@ -51,7 +51,6 @@ export default function SessionDemandQueue({
             </button>
             <button
               type="button"
-              disabled={forceDisabled}
               className={QUEUE_ACTION_CLASS}
               onClick={() => onEdit(item.id)}
             >
@@ -59,7 +58,6 @@ export default function SessionDemandQueue({
             </button>
             <button
               type="button"
-              disabled={forceDisabled}
               className={QUEUE_ACTION_CLASS}
               onClick={() => onCancel(item.id)}
             >

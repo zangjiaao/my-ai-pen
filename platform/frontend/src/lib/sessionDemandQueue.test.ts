@@ -86,10 +86,21 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   assert.ok(editFn, "handleEditDemand must exist");
   assert.match(editFn[0], /session_demand_delete/, "edit deletes the queued demand");
   assert.match(editFn[0], /setValue/, "edit overwrites the composer draft");
+  assert.doesNotMatch(editFn[0], /interrupting/, "edit must not wait for interrupt to clear");
   const cancelFn = pageSrc.match(/const handleCancelDemand[\s\S]*?\}, \[/);
   assert.ok(cancelFn, "handleCancelDemand must exist");
   assert.match(cancelFn[0], /removeQueuedDemand/, "cancel drops the row");
   assert.doesNotMatch(cancelFn[0], /cancelQueuedDemand/, "cancel must not leave a cancelled ghost");
+  assert.match(
+    pageSrc,
+    /handleConfirmOptions[\s\S]*sessionDemandQueueIsFull/,
+    "confirm must refuse when the Session demand queue is full",
+  );
+  assert.match(
+    pageSrc,
+    /session_demand_rejected[\s\S]*setValue/,
+    "rejected text enqueue must restore the composer draft",
+  );
   const composerSrc = readFileSync(join(here, "../components/ChatComposer.tsx"), "utf8");
   assert.match(
     composerSrc,
@@ -100,5 +111,20 @@ const b: SessionDemandItem = { id: "b", kind: "text", text: "second", status: "p
   assert.match(queueSrc, /SESSION_DEMAND_SEND_LABEL/);
   assert.match(queueSrc, /SESSION_DEMAND_EDIT_LABEL/);
   assert.match(queueSrc, /SESSION_DEMAND_CANCEL_LABEL/);
+  assert.match(
+    queueSrc,
+    /disabled=\{forceDisabled\}[\s\S]{0,240}SESSION_DEMAND_SEND_LABEL/,
+    "only force-send is gated on interrupt",
+  );
+  const sendJsx = queueSrc.indexOf("{SESSION_DEMAND_SEND_LABEL}");
+  assert.ok(sendJsx >= 0, "send label is rendered");
+  const afterSendJsx = queueSrc.slice(sendJsx);
+  assert.match(afterSendJsx, /SESSION_DEMAND_EDIT_LABEL/);
+  assert.match(afterSendJsx, /SESSION_DEMAND_CANCEL_LABEL/);
+  assert.doesNotMatch(
+    afterSendJsx,
+    /forceDisabled/,
+    "edit and cancel stay available during interrupt",
+  );
   console.log("ok: ConversationPage promotes drained demands to user bubbles");
 }

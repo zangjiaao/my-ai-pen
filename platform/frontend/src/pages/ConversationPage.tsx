@@ -1196,9 +1196,26 @@ export default function ConversationPage() {
       setSessionDemands((prev) => removeQueuedDemand(prev, id));
     },
     session_demand_rejected: (msg) => {
-      const id = String((msg as Record<string, unknown>).demand_id || "").trim();
-      if (!id) return;
-      setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      const m = msg as Record<string, unknown>;
+      const id = String(m.demand_id || "").trim();
+      const kind = String(m.kind || "text");
+      const text = String(m.text || "").trim();
+      const requestId = String(m.request_id || "").trim();
+      if (id) setSessionDemands((prev) => removeQueuedDemand(prev, id));
+      if (kind === "confirm_options" && requestId && activeId) {
+        setConversationMessageData(activeId, (data) =>
+          removeMessageRecords(data, (record) => {
+            if (recordMessageType(record) !== "decision") return false;
+            const content = (record.content || {}) as Record<string, unknown>;
+            return String(content.request_id || "").trim() === requestId;
+          }),
+        );
+        return;
+      }
+      if (text) {
+        composerRef.current?.setValue(text);
+        composerRef.current?.focus();
+      }
     },
     session_demand_drained: (msg) => {
       const m = msg as Record<string, unknown>;
@@ -2592,6 +2609,7 @@ export default function ConversationPage() {
         answers: extraObj.answers,
       });
       if (!reduced.ok) return;
+      if (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands)) return;
       const expanded = expandSelectedOptions(cardContent, reduced.selected_option_ids);
       const text = buildConfirmOptionsText(cardContent, reduced.selected_option_ids, {
         customText: reduced.custom_text,
@@ -2622,7 +2640,7 @@ export default function ConversationPage() {
         answers: reduced.answers,
       });
     },
-    [activeId, addMessageToConversation, send],
+    [activeId, addMessageToConversation, send, isActiveConversationRunning, sessionDemands],
   );
 
   const markComposerRestoreHandled = useCallback(() => {
@@ -3195,14 +3213,14 @@ export default function ConversationPage() {
   }, [activeId, send]);
 
   const handleEditDemand = useCallback((demandId: string) => {
-    if (!activeId || interrupting) return;
+    if (!activeId) return;
     const item = sessionDemands.find((row) => row.id === demandId);
     if (!item || item.status !== "pending") return;
     setSessionDemands((prev) => removeQueuedDemand(prev, demandId));
     send({ type: "session_demand_delete", conversation_id: activeId, demand_id: demandId });
     composerRef.current?.setValue(item.text);
     composerRef.current?.focus();
-  }, [activeId, interrupting, sessionDemands, send]);
+  }, [activeId, sessionDemands, send]);
 
   const handleForceDemand = useCallback((demandId: string) => {
     if (!activeId || interrupting) return;
@@ -3426,7 +3444,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       choiceAnswersByRequestId={choiceAnswersByRequestId}
                       sessionActive={isActiveConversationRunning}
                       choiceDisabled={
-                        interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                        interrupting
+                        || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                        || (isActiveConversationRunning && sessionDemandQueueIsFull(sessionDemands))
                       }
                       resultAnchorWorkSeconds={resultAnchorSecondsByMessageId[msg.id]}
                     />

@@ -4589,6 +4589,7 @@ async def _broadcast_session_demand(
     kind: str | None = None,
     text: str | None = None,
     reason: str | None = None,
+    request_id: str | None = None,
 ) -> None:
     from app.services import session_demand_queue as demand_queue
 
@@ -4605,6 +4606,8 @@ async def _broadcast_session_demand(
         payload["text"] = text
     if reason:
         payload["reason"] = reason
+    if request_id:
+        payload["request_id"] = request_id
     try:
         await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
     except Exception as e:
@@ -7631,9 +7634,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         if delivery == "forward_live":
                             pass  # user_input already forwarded (incl. todo_replace_permission)
                         elif delivery == "enqueue":
-                            # Hold grant until dequeue → task_assign one-shot.
-                            if replace_perm:
-                                _grant_todo_replace(conv_id)
                             from app.services.session_demand_queue import SessionDemandQueueFull
 
                             try:
@@ -7644,6 +7644,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     selected_option_ids=selected_ids,
                                     workset_item_ids=workset_item_ids,
                                 )
+                                # Hold grant until dequeue → task_assign one-shot.
+                                if replace_perm:
+                                    _grant_todo_replace(conv_id)
                             except SessionDemandQueueFull:
                                 print(
                                     f"[WS] confirm_options enqueue rejected: queue_full conv={conv_id[:8]}"
@@ -7653,6 +7656,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     "session_demand_rejected",
                                     kind="confirm_options",
                                     reason="queue_full",
+                                    request_id=str(request_id or "").strip() or None,
                                 )
                             except Exception as e:
                                 print(f"[WS] confirm_options enqueue error: {e}")
@@ -7720,6 +7724,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "session_demand_rejected",
                                 demand_id=demand_id,
                                 kind="text",
+                                text=str(msg.get("display_text") or msg.get("text") or "").strip() or None,
                                 reason="queue_full",
                             )
                         except Exception as e:
