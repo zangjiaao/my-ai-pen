@@ -5528,7 +5528,9 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
     if not conv_id or not isinstance(msg, dict):
         return
     plan = msg.get("plan_tree")
-    if not isinstance(plan, list) or not plan:
+    # Empty list is an authoritative clear for this owner (ghost chips / wipe).
+    # Missing or non-list payload is not a clear — skip persist.
+    if not isinstance(plan, list):
         return
     try:
         from app.db.base import async_session
