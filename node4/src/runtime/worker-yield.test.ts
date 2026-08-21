@@ -88,6 +88,33 @@ assert.equal(
   assert.equal(warmYieldThenClose, "new yield report", "warm yield ignores this-package closing only");
 }
 
+{
+  const emptyYieldThenReport = lastAssistantTextFromMessages([
+    { role: "user", content: "pkg" },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "done, yielding" },
+        { type: "toolCall", id: "y1", name: "yield", arguments: { result: {} } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "yield",
+      content: [{ type: "text", text: '{"ok":true,"use_last_turn":true}' }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "## SPCX 股票数据获取报告\n成交量 123" }],
+    },
+  ]);
+  assert.equal(
+    emptyYieldThenReport,
+    "## SPCX 股票数据获取报告\n成交量 123",
+    "empty yield-turn must fall back to later report in this package",
+  );
+}
+
 assert.equal(formatYieldData({ summary: "got pong" }), "got pong");
 assert.match(formatYieldData({ reply: "pong" }), /pong/);
 
