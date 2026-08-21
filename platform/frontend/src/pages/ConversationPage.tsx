@@ -122,7 +122,10 @@ import {
   buildConfirmOptionsText,
   expandSelectedOptions,
   isChoiceDecisionFinal,
+  parseWizardAnswers,
+  reduceChoiceDecision,
   type ChoiceDecision,
+  type WizardAnswer,
 } from "../lib/choiceCard";
 import {
   selectResultAnchorMessageIds,
@@ -778,7 +781,7 @@ export default function ConversationPage() {
     return false;
   }, [pendingApprovals, messages, approvalDecisionByRequestId]);
 
-  /** Spec #312: hydrate next_steps checkboxes from structured decision payload. */
+  /** Spec #312 / #450: hydrate wizard selections from structured decision payload. */
   const choiceSelectedByRequestId = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const message of messages) {
@@ -788,6 +791,30 @@ export default function ConversationPage() {
       const raw = message.content.selected_option_ids;
       if (!Array.isArray(raw) || !raw.length) continue;
       map[requestId] = raw.map((x) => String(x || "").trim()).filter(Boolean);
+    }
+    return map;
+  }, [messages]);
+
+  const choiceCustomByRequestId = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const message of messages) {
+      if (message.msg_type !== "decision") continue;
+      const requestId = readString(message.content.request_id);
+      if (!requestId) continue;
+      const custom = readString(message.content.custom_text);
+      if (custom) map[requestId] = custom;
+    }
+    return map;
+  }, [messages]);
+
+  const choiceAnswersByRequestId = useMemo(() => {
+    const map: Record<string, WizardAnswer[]> = {};
+    for (const message of messages) {
+      if (message.msg_type !== "decision") continue;
+      const requestId = readString(message.content.request_id);
+      if (!requestId) continue;
+      const parsed = parseWizardAnswers(message.content.answers);
+      if (parsed.length) map[requestId] = parsed;
     }
     return map;
   }, [messages]);
@@ -2476,34 +2503,64 @@ export default function ConversationPage() {
     return () => window.clearInterval(timer);
   }, [activeId, isActiveConversationRunning, refreshConversationState, stateSnapshotLoaded]);
 
-  const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
+  const handleDecision = useCallback((
+    requestId: string,
+    decision: "authorize" | "cancel",
+    extras?: { text?: string },
+  ) => {
     if (!activeId || !requestId) return;
+    const text = String(extras?.text || "").trim() || undefined;
     setPendingApprovals(prev => prev.filter(item => item.request_id !== requestId));
-    addMessageToConversation(activeId, makeMessage(activeId, "user", "decision", { request_id: requestId, decision }));
-    send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
+    addMessageToConversation(activeId, makeMessage(activeId, "user", "decision", {
+      request_id: requestId,
+      decision,
+      text,
+      custom_text: text,
+      selected_option_ids: text ? [] : [decision],
+    }));
+    send({
+      type: "user_decision",
+      conversation_id: activeId,
+      request_id: requestId,
+      decision,
+      text,
+      custom_text: text,
+      selected_option_ids: text ? [] : [decision],
+    });
   }, [activeId, addMessageToConversation, send]);
 
-  /** Spec #313: next_steps confirm → selected ids + full text (title/body + optional supplement). */
+  /** Spec #313 / #450: next_steps confirm → selected ids and/or custom-alone. */
   const handleConfirmOptions = useCallback(
     (
       requestId: string,
       selectedOptionIds: string[],
       cardContent: Record<string, unknown>,
-      supplement?: string,
+      extras?: { customText?: string; answers?: WizardAnswer[] } | string,
     ) => {
-      if (!activeId || !requestId || !selectedOptionIds.length) return;
-      const expanded = expandSelectedOptions(cardContent, selectedOptionIds);
-      const text = buildConfirmOptionsText(cardContent, selectedOptionIds, supplement);
+      if (!activeId || !requestId) return;
+      const extraObj = typeof extras === "string" ? { customText: extras } : extras || {};
+      const reduced = reduceChoiceDecision(cardContent, {
+        selected_option_ids: selectedOptionIds,
+        custom_text: extraObj.customText,
+        answers: extraObj.answers,
+      });
+      if (!reduced.ok) return;
+      const expanded = expandSelectedOptions(cardContent, reduced.selected_option_ids);
+      const text = buildConfirmOptionsText(cardContent, reduced.selected_option_ids, {
+        customText: reduced.custom_text,
+        answers: reduced.answers,
+      });
       setPendingApprovals((prev) => prev.filter((item) => item.request_id !== requestId));
       addMessageToConversation(
         activeId,
         makeMessage(activeId, "user", "decision", {
           request_id: requestId,
           decision: "confirm_options",
-          selected_option_ids: selectedOptionIds,
+          selected_option_ids: reduced.selected_option_ids,
           workset_item_ids: expanded.workset_item_ids,
           text,
-          supplement: String(supplement || "").trim() || undefined,
+          custom_text: reduced.custom_text,
+          answers: reduced.answers,
         }),
       );
       send({
@@ -2511,10 +2568,11 @@ export default function ConversationPage() {
         conversation_id: activeId,
         request_id: requestId,
         decision: "confirm_options",
-        selected_option_ids: selectedOptionIds,
+        selected_option_ids: reduced.selected_option_ids,
         workset_item_ids: expanded.workset_item_ids,
         text,
-        supplement: String(supplement || "").trim() || undefined,
+        custom_text: reduced.custom_text,
+        answers: reduced.answers,
       });
     },
     [activeId, addMessageToConversation, send],
@@ -3271,6 +3329,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       highlightedApprovalId={highlightedApprovalId}
                       approvalDecisionByRequestId={approvalDecisionByRequestId}
                       choiceSelectedByRequestId={choiceSelectedByRequestId}
+                      choiceCustomByRequestId={choiceCustomByRequestId}
+                      choiceAnswersByRequestId={choiceAnswersByRequestId}
                       sessionActive={isActiveConversationRunning}
                       choiceDisabled={
                         interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)

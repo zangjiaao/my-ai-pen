@@ -11,8 +11,6 @@ import { jsonResult, textResult } from "./common.js";
 import { registerApprovalWait, type ApprovalResult } from "../runtime/approvals.js";
 import { platformLedgerFetch } from "./platform.js";
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
-
 function speakerFields(runtime: ToolRuntime): { expert_id?: string; expert_name?: string } {
   // Always attribute the waiting turn to the *requesting* Session persona.
   // handoff_expert_* is card body only — never top-level speaker.
@@ -114,6 +112,37 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         Type.String({ description: "next_steps: single (default, Spec #313) | multi" }),
       ),
       preamble: Type.Optional(Type.String({ description: "Optional markdown preamble for next_steps" })),
+      presentation: Type.Optional(
+        Type.String({
+          description:
+            "Spec #450: approval_wizard | recommendation | flat. Option cards default to approval_wizard chrome.",
+        }),
+      ),
+      allow_custom: Type.Optional(
+        Type.Boolean({
+          description: "Spec #450: custom last-row answer allowed (default true for option cards).",
+        }),
+      ),
+      questions: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String(),
+            prompt: Type.String(),
+            selection: Type.Optional(Type.String({ description: "single (default) | multi" })),
+            allow_custom: Type.Optional(Type.Boolean()),
+            options: Type.Optional(
+              Type.Array(
+                Type.Object({
+                  id: Type.String(),
+                  title: Type.String(),
+                  body: Type.Optional(Type.String()),
+                  workset_item_ids: Type.Optional(Type.Array(Type.String())),
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
     }),
     async execute(_id: string, params: any) {
       const question = String(params.question || "").trim();
@@ -135,6 +164,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       // Spec #312: normalize next_steps options (2–5, title+body, unique ids).
       let nextStepsOptions: Array<Record<string, unknown>> | undefined;
       const rawOpts = Array.isArray(params.options) ? params.options : null;
+      const rawQuestions = Array.isArray(params.questions) ? params.questions : null;
       if (kind === "next_steps" || (rawOpts && rawOpts.length && rawOpts.every((o: unknown) => o && typeof o === "object"))) {
         kind = "next_steps";
         const cleaned: Array<Record<string, unknown>> = [];
@@ -156,12 +186,18 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
           cleaned.push(opt);
         }
         if (cleaned.length < 2 || cleaned.length > 5) {
-          return textResult(
-            "error: kind=next_steps requires 2–5 options with unique id + non-empty title + body",
-            { isError: true },
-          );
+          if (!(rawQuestions && rawQuestions.length)) {
+            return textResult(
+              "error: kind=next_steps requires 2–5 options with unique id + non-empty title + body",
+              { isError: true },
+            );
+          }
+        } else {
+          nextStepsOptions = cleaned;
         }
-        nextStepsOptions = cleaned;
+      }
+      if (rawQuestions && rawQuestions.length) {
+        kind = "next_steps";
       }
 
       // Graph mode permission: require graph_id for enter/switch (exit parks current).
@@ -259,6 +295,18 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         payload.selection = selection === "multi" ? "multi" : "single";
         const preamble = String(params.preamble || "").trim();
         if (preamble) payload.preamble = preamble;
+        payload.presentation = "approval_wizard";
+        if (params.allow_custom === false) payload.allow_custom = false;
+      }
+      if (rawQuestions && rawQuestions.length) {
+        payload.kind = "next_steps";
+        payload.presentation = "approval_wizard";
+        payload.questions = rawQuestions;
+        if (params.allow_custom === false) payload.allow_custom = false;
+      }
+      const presentation = String(params.presentation || "").trim().toLowerCase();
+      if (presentation === "approval_wizard" || presentation === "recommendation" || presentation === "flat") {
+        payload.presentation = presentation;
       }
 
       await runtime.platform.send(payload as import("../types.js").PlatformMessage);
@@ -275,13 +323,15 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         onAbort = () => resolve({ decision: "cancel" });
         abort.addEventListener("abort", onAbort, { once: true });
       });
-      const timeoutPromise = new Promise<ApprovalResult>((resolve) => {
-        setTimeout(() => resolve({ decision: "cancel" }), DEFAULT_TIMEOUT_MS);
-      });
+      // No wall-clock auto-cancel: an unanswered card must stay parked until the
+      // user decides or interrupts. A timeout that returns cancel to the model
+      // continues the turn and can emit another 等待授权 card.
 
       let approvalResult: ApprovalResult;
       try {
-        approvalResult = await Promise.race([waitPromise, abortPromise, timeoutPromise]);
+        approvalResult = abort
+          ? await Promise.race([waitPromise, abortPromise])
+          : await waitPromise;
       } finally {
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
@@ -339,11 +389,14 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         .map((o) => `${o.id}: ${String(o.title || "").trim()}`)
         .filter((s) => s.length > 2)
         .join("; ");
+      const customText = String(approvalResult.custom_text || "").trim();
       const nextStepsMsg =
         decision === "confirm_options"
           ? selectedBits
             ? `User confirmed next_steps. Selected: ${selectedBits}. Honor those option bodies; do not start unselected work; do not re-show the same card.`
-            : "User confirmed next_steps. Honor the selected option bodies; do not start unselected work; do not re-show the same card."
+            : customText
+              ? `User confirmed next_steps with a custom answer: ${customText}. Honor that answer; do not re-show the same card.`
+              : "User confirmed next_steps. Honor the selected option bodies; do not start unselected work; do not re-show the same card."
           : decision === "authorize" && kind === "next_steps"
             ? "User replied on the next_steps card. Honor their reply; do not re-show the same card."
             : decision === "answered"
@@ -375,6 +428,12 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       }
       if (approvalResult.text) {
         resultPayload.user_text = approvalResult.text;
+      }
+      if (customText) {
+        resultPayload.custom_text = customText;
+      }
+      if (Array.isArray(approvalResult.answers) && approvalResult.answers.length) {
+        resultPayload.answers = approvalResult.answers;
       }
       return jsonResult(resultPayload);
     },

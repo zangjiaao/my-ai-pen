@@ -383,8 +383,12 @@ def set_authorize_paused(
     paused: bool,
     request_id: object = None,
     now: float | None = None,
+    settle: bool = False,
 ) -> dict[str, Any]:
-    """H1: pending authorize is not busy — close open intervals while paused."""
+    """H1: pending authorize is not busy — close open intervals while paused.
+
+    settle=True (user cancel): finalize the burst instead of resuming busy accrual.
+    """
     ts = float(now if now is not None else datetime.now(timezone.utc).timestamp())
     active_id = str(ledger.get("active_burst_id") or "").strip()
     if not active_id or active_id not in (ledger.get("bursts") or {}):
@@ -423,6 +427,16 @@ def set_authorize_paused(
         row["paused_workers"] = paused_workers
         row["authorize_paused"] = True
     elif not paused and row.get("authorize_paused"):
+        if settle:
+            # User declined: do not reopen paused workers (that would keep the
+            # list-tail work timer running while the Session should stop).
+            row["authorize_paused"] = False
+            row["open_workers"] = {}
+            row["paused_workers"] = {}
+            row.pop("authorize_request_id", None)
+            row.pop("authorize_request_ids", None)
+            ledger["bursts"][active_id] = row
+            return finalize_burst(ledger, burst_id=active_id, now=ts)
         # Resume: reopen workers that were busy before authorize
         paused_workers = dict(row.get("paused_workers") or {})
         open_workers = dict(row.get("open_workers") or {})
@@ -592,6 +606,7 @@ def apply_authorize_pause(
     paused: bool,
     request_id: object = None,
     now: float | None = None,
+    settle: bool = False,
 ) -> dict[str, Any]:
     ledger = get_ledger(context)
     ledger = set_authorize_paused(
@@ -599,6 +614,7 @@ def apply_authorize_pause(
         paused=paused,
         request_id=request_id,
         now=now,
+        settle=settle,
     )
     return set_ledger(context, ledger)
 

@@ -20,7 +20,12 @@ import {
 } from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
-import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
+import {
+  cancelApprovalsForConversation,
+  normalizeApprovalResponse,
+  resolveApproval,
+  shouldAbortTurnOnApprovalDecision,
+} from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 import {
   clearPendingSteers,
@@ -426,7 +431,14 @@ client.on("user_input", async (message) => {
     selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
     workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
     text: message.text,
+    custom_text: message.custom_text ?? message.customText,
+    answers: message.answers,
   });
+  // User declined the card: stop this turn. Do not feed cancel back into another LLM loop
+  // (that re-opens the work timer and can emit another 等待授权 card).
+  if (shouldAbortTurnOnApprovalDecision(normalizeApprovalResponse(response)) && conversationId) {
+    aborts.get(conversationId)?.abort();
+  }
 });
 
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */

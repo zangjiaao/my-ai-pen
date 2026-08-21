@@ -81,6 +81,24 @@ def test_parallel_workers_use_union_not_sum():
     assert work_seconds_for_burst(ledger, bid) != 1000
 
 
+def test_cancel_unpause_finalizes_burst():
+    """User cancel must not resume busy accrual or leave an open burst (list-tail timer)."""
+    ctx = {}
+    ctx = apply_worker_transition(
+        ctx, worker_key="node-a", working=True, task_id="t1", now=0.0
+    )
+    ctx = apply_authorize_pause(ctx, paused=True, request_id="req-1", now=20.0)
+    assert get_ledger(ctx).get("active_burst_id")
+    assert projection(get_ledger(ctx), now=40.0)["authorize_paused"] is True
+    ctx = apply_authorize_pause(ctx, paused=False, request_id="req-1", now=40.0, settle=True)
+    ledger = get_ledger(ctx)
+    assert ledger.get("active_burst_id") in (None, "")
+    proj = projection(ledger, now=80.0)
+    assert proj["authorize_paused"] is False
+    assert proj["accruing"] is False
+    assert live_work_seconds(ledger, now=80.0) in (None, 0, 20)
+
+
 def test_h1_authorize_gap_excluded():
     """Pending authorize does not advance work seconds."""
     ctx = {}

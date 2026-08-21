@@ -298,6 +298,7 @@ async def drive_ui(websocket_url: str, url: str) -> None:
         if output_metrics["overflowY"] not in ("auto", "scroll") or output_metrics["clientHeight"] > 280 or output_metrics["scrollHeight"] <= output_metrics["clientHeight"] or output_metrics["textLength"] < 4000 or output_metrics["bodyOverflowX"]:
             raise AssertionError(output_metrics)
         await cdp.eval("document.querySelector('[data-testid=confirm-authorize]').click(); true")
+        await cdp.eval("document.querySelector('[data-testid=choice-confirm-options]').click(); true")
         await cdp.wait_for(r"""
 (async () => {
   const conversationId = document.querySelector('[data-testid=conversation-main]')?.getAttribute('data-active-conversation-id') || '';
