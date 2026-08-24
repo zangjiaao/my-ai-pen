@@ -5218,20 +5218,32 @@ async def _handoff_operator_texts(conv_id: str) -> tuple[str, str]:
     return sticky, last_user
 
 
+def _handoff_destination_pack(approval: dict | None) -> str | None:
+    """Canonical destination pack if authorize should switch seats + dispatch.
+
+    Any known product pack is valid, including built-in ``default`` (assistant).
+    Empty/unknown pack, or a non-handoff kind without a pack id → None.
+    """
+    if not isinstance(approval, dict):
+        return None
+    kind = str(approval.get("kind") or "").strip().lower()
+    pack_raw = str(approval.get("handoff_pack_id") or "").strip()
+    if kind not in {"handoff", "transfer", "delegate"} and not pack_raw:
+        return None
+    return normalize_pack_id(pack_raw) if pack_raw else None
+
+
 async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:
     """When user Authorizes a handoff card, switch sticky expert + notify UI partner chip.
 
     Does not invent engagement from free text — pack/expert come only from the
     structured request_decision fields the agent put on the card.
+    Destination may be any known product pack, including built-in default.
     """
     if not conv_id or not isinstance(approval, dict):
         return
-    kind = str(approval.get("kind") or "").strip().lower()
-    pack_raw = str(approval.get("handoff_pack_id") or "").strip()
-    if kind not in {"handoff", "transfer", "delegate"} and not pack_raw:
-        return
-    pack = normalize_pack_id(pack_raw) if pack_raw else None
-    if not pack or pack == "default":
+    pack = _handoff_destination_pack(approval)
+    if not pack:
         return
 
     eid = str(approval.get("handoff_expert_id") or "").strip() or None
@@ -5410,8 +5422,8 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
     except Exception as e:
         print(f"[WS] partner_switch broadcast error: {e}")
 
-    # Kick off destination expert ASAP. Requester (default seat) is often still
-    # busy finishing the approval tool — free the session then dispatch.
+    # Kick off destination expert ASAP. Requester is often still busy
+    # finishing the approval tool — free the session then dispatch.
     node_id = str(getattr(expert_obj, "node_id", "") or node_hint or "").strip()
     if not node_id or node_id not in node_connections:
         print(f"[WS] handoff: destination node offline pack={pack} node={node_id[:8] if node_id else '-'}")

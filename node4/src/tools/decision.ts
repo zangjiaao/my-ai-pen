@@ -52,7 +52,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
     description:
       "Show ONE choice/authorization card and wait for user feedback (button OR free-text reply). " +
       "Click and type are the same path — the tool unblocks with the user's response. " +
-      "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
+      "For multi-agent handoff to any listed colleague (default/assistant, pentest, CTF, …): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
       "Do not write method, RoE, playbook, or ledger-dump instructions in proposed_action — those live in Profession/Runtime. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
       "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
@@ -89,7 +89,8 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       ),
       handoff_pack_id: Type.Optional(
         Type.String({
-          description: "When kind=handoff: pentest | ctf | code-audit | llm-security | alert-triage",
+          description:
+            "When kind=handoff: destination pack from platform_list_experts — default | pentest | ctf | code-audit | llm-security | alert-triage",
         }),
       ),
       handoff_expert_id: Type.Optional(Type.String()),
