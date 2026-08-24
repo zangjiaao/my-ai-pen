@@ -34,7 +34,7 @@
 - **1 conversation = 1 Case** (work group). **Shared (user-visible):** thread, Findings, evidence, scope/target, case-wide RoE. **Not** sole authority for work mode — see **Participant Session** (`docs/specs/participant-session.md` / Spec #277).
 - **Participant Session** = `conversation_id + expert_id` long session: private work mode (Free | Graph), parked Graph, working memory. Default Free (UI Graph **不指定** = Free on the wire). Graph only with declared capability + user permission. **No standalone Agent Route** pre-step — judgment to work vs propose Graph vs Expert transfer happens **inside Free** (Spec #277). Resume must not silent-divert mode via Case sticky template.
 - **Expert dispatch carries `case_context`:** **findings_summary** + path hints + **speech** (id-bearing visible talk). System This turn no longer dumps `### Thread`. Unread others’ speech is harness `### Case speech` (Session cursor). Not full tool dumps; not NLP pack invent. Insufficient alone for same-Expert fail-continue — Session continuity is required (#277).
-- **Cross-expert handoff (unified permission path):** Agent asks → user permits (card or free text → structured commit) → switch Mention; **new** Expert Session starts Free with Case-visible handoff summary. User may also @ / select Expert (queued if prior Session busy). No dependency on Case shared disk or stations.
+- **Cross-expert handoff (unified permission path):** Any product Expert on the Case (including `default` 平台助理) may ask to transfer to **any other** enabled Expert. Agent asks → user permits (card or free text → structured commit) → switch Mention; **new** Expert Session starts Free with Case-visible handoff summary. Direction is not one-way (assistant → execution only). User may also @ / select Expert (queued if prior Session busy). No dependency on Case shared disk or stations.
 - Dump source/notes as **evidence** (or clear paths in chat) so the next expert sees materials via Case + `case_context`.
 - Case evidence / proof (shipped): see `prd.md` + `docs/specs/harness.md`; historical tracker git history.
 - Historical multi-expert design notes: git history.
@@ -177,9 +177,9 @@ WS resolution order: **explicit participant** → expert_id / @Expert name → s
 
 ### Multi-agent handoff (authorized)
 
-- **default** (and any seat with `request_user_decision`) may propose `kind=handoff` with structured `handoff_pack_id` / `handoff_expert_id` + target/scope on the card.
+- **Any product Expert** (including `default` 平台助理, and any seat with `request_user_decision`) may propose `kind=handoff` to **any other** enabled Expert listed by `platform_list_experts`, with structured `handoff_pack_id` / `handoff_expert_id` + target/scope on the card. `handoff_pack_id=default` is a valid destination — platform must apply sticky switch + `task_assign`, not silently no-op.
 - **User Authorize** is required before sticky expert switch + destination `task_assign`. Cancel keeps the current seat.
-- Agents call **`platform_list_experts`** first: if no product expert for that pack (or none at all), handoff is refused — no silent switch, no inventing peers.
+- Agents call **`platform_list_experts`** first: if no product expert for that pack (or none at all), handoff is refused — no silent switch, no inventing peers. Unresolvable destination after Authorize is `handoff_failed`, not silent success.
 - Destination expert owns execution confirmation and booking after handoff; default does not scan.
 
 ## Node management UI（物理节点）
