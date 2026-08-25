@@ -17,7 +17,9 @@ export type ExpertId =
 export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consult", "workspace"]);
 
 /**
- * Structured Expert Graph templates for pentest — not free-text NLP.
+ * Structured Expert Graph templates currently declared by the pentest pack.
+ * Graph is expert-generic: every pack may declare graphs; packs with none
+ * (including built-in `default`) only offer composer 不指定.
  * Spec #278 dual-rail: composer = user Workflow preference for next send;
  * AgentRow shows Session actual Free/Graph. 不指定 omits template (A1: does not
  * force Free if Session already Graph). Soft scenario product mode retired (#76).
@@ -75,24 +77,46 @@ export const FREE_COMPOSER_WIRE_ALIASES: readonly string[] = [
 ] as const;
 
 /**
+ * Product Graph options the pack currently declares. Empty → composer 不指定 only.
+ * Not a pentest-caste gate: other Experts show the same control with no extra ids.
+ */
+export function engagementTemplatesForPack(
+  packId: string | null | undefined,
+): readonly (typeof ENGAGEMENT_TEMPLATES)[number][] {
+  const pack = String(packId || "").trim().toLowerCase();
+  if (pack === "pentest" || pack.startsWith("pentest")) return ENGAGEMENT_TEMPLATES;
+  return [];
+}
+
+export function packDeclaresEngagementTemplate(
+  packId: string | null | undefined,
+  template: EngagementTemplateId | string | null | undefined,
+): boolean {
+  const raw = String(template || "").trim().toLowerCase();
+  return engagementTemplatesForPack(packId).some((t) => t.id === raw);
+}
+
+/**
  * Spec #284 G6: structured fields for WS user_message when user selected a product Graph.
  * Case PUT sticky alone is not mode authority — this-turn wire must carry the template.
- * 不指定 / null / non-pentest → omit (never silent Graph from sticky).
+ * 不指定 / null / pack that does not declare the id → omit (never silent Graph from sticky).
  *
  * ``allow_postex`` default when omitted = catalog RoE for that Graph id
  * (e.g. redteam_deep → true, app_assessment → false), not a hard false.
  */
 export function composerEngagementWireFields(
   template: EngagementTemplateId | string | null | undefined,
-  options?: { isPentest?: boolean; allowPostex?: boolean },
+  options?: { packId?: string | null; allowPostex?: boolean },
 ): { engagement_template?: EngagementTemplateId; allow_postex?: boolean } {
-  if (options?.isPentest === false) return {};
   const raw = String(template || "").trim().toLowerCase();
   if (!raw || (FREE_COMPOSER_WIRE_ALIASES as readonly string[]).includes(raw)) {
     return {};
   }
   const known = ENGAGEMENT_TEMPLATES.find((t) => t.id === raw);
   if (!known) return {};
+  if (options && "packId" in options && !packDeclaresEngagementTemplate(options.packId, known.id)) {
+    return {};
+  }
   return {
     engagement_template: known.id,
     allow_postex:

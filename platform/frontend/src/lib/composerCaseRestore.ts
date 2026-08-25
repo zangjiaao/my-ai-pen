@@ -1,10 +1,11 @@
 /**
  * Spec #474 S1: restore composer chips from Case snapshot.
- * Partner = Case current Mention; Graph = that Participant Session; Goal = task.goal_mode
- * on a pentest partner. Case sticky engagement_template is never a restore source.
+ * Partner = Case current Mention; Graph = that Participant Session when the
+ * pack declares the id. Composer no longer restores Goal.
+ * Case sticky engagement_template is never a restore source.
  */
-import { isPentestMentionTarget, type MentionTarget } from "../components/ChatComposer";
-import type { EngagementTemplateId } from "./experts";
+import { type MentionTarget } from "../components/ChatComposer";
+import { packDeclaresEngagementTemplate, type EngagementTemplateId } from "./experts";
 
 export type ComposerRestoreExpert = {
   id: string;
@@ -22,7 +23,6 @@ export type ComposerRestoreSnapshot = {
 export type ComposerRestore = {
   partner: MentionTarget | null;
   engagementTemplate: EngagementTemplateId | null;
-  goalMode: boolean;
 };
 
 export type ComposerSnapshotAction =
@@ -207,11 +207,6 @@ function sessionGraphId(row: Record<string, unknown> | null): string {
   return "";
 }
 
-function goalModeOn(task: Record<string, unknown>): boolean {
-  const value = task.goal_mode;
-  return value === true || value === "true" || value === 1 || value === "1" || value === "yes";
-}
-
 export function restoreComposerFromCaseSnapshot(
   snapshot: ComposerRestoreSnapshot,
   mentionTargets: MentionTarget[],
@@ -221,7 +216,6 @@ export function restoreComposerFromCaseSnapshot(
   const unspecified: ComposerRestore = {
     partner: fallback,
     engagementTemplate: null,
-    goalMode: false,
   };
 
   const task = readTaskContext(snapshot);
@@ -233,20 +227,18 @@ export function restoreComposerFromCaseSnapshot(
   );
   if (!partner) return unspecified;
 
-  if (!isPentestMentionTarget(partner)) {
-    return { partner, engagementTemplate: null, goalMode: false };
-  }
-
   const session = sessionRowForExpert(snapshot, expertId);
   const agent = session ? null : agentRowForExpert(snapshot, expertId);
   const row = session || agent;
   const mode = sessionWorkMode(row);
-  const engagementTemplate =
+  let engagementTemplate =
     mode === "graph" ? engagementTemplateFromGraphId(sessionGraphId(row)) : null;
+  if (engagementTemplate && !packDeclaresEngagementTemplate(partner.packId, engagementTemplate)) {
+    engagementTemplate = null;
+  }
 
   return {
     partner,
     engagementTemplate,
-    goalMode: goalModeOn(task),
   };
 }

@@ -45,7 +45,7 @@ Pure parser: `auditCtfEventsJsonl` in `src/runtime/ctf-audit.ts`.
 
 ## Operator notes
 
-- Platform Goal switch can still supply a custom `goal_objective`; otherwise the pack seeds `defaultGoalObjective`.
+- Pack seeds `defaultGoalObjective`. Composer no longer exposes a Goal switch.
 - No challenge answer keys in skills or recipes.
 - Selected only when the node **offers** include `ctf` (platform install) and the conversation sets structured `engagement=ctf`.
 - Other roles reuse the same harness; see `docs/specs/harness.md` and `docs/prd.md`. Product runtime is Node4 only.

@@ -10,7 +10,6 @@ import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import ChatComposer, {
   ChatComposerSkeleton,
-  isPentestMentionTarget,
   type ChatComposerHandle,
   type MentionTarget,
 } from "../components/ChatComposer";
@@ -113,6 +112,7 @@ import {
   composerEngagementWireFields,
   expertLabel,
   isExpertSchedulable,
+  packDeclaresEngagementTemplate,
   resolveExpertColor,
   type EngagementTemplateId,
   type ExpertId,
@@ -340,9 +340,7 @@ export default function ConversationPage() {
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const composerRef = useRef<ChatComposerHandle>(null);
-  /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
-  const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  /** Expert Graph template only (S2/U1 #78) — null off-pentest; free is Default seat. */
+  /** Expert Graph template for next send (null = 不指定). Packs with no declared Graphs stay null. */
   const [engagementTemplate, setEngagementTemplate] = useState<EngagementTemplateId | null>(null);
   /** Post-task out-of-scope hosts → user picks next Scope (new task). */
   const [importingReport, setImportingReport] = useState(false);
@@ -360,7 +358,6 @@ export default function ConversationPage() {
     selectedMentionRef.current = null;
     setSelectedMention(null);
     setEngagementTemplate(null);
-    setGoalModeEnabled(false);
     composerRestoreCaseIdRef.current = undefined;
     pendingRestoreSnapshotRef.current = null;
   }, []);
@@ -378,7 +375,6 @@ export default function ConversationPage() {
       selectedMentionRef.current = pick;
       setSelectedMention(pick);
       setEngagementTemplate(null);
-      setGoalModeEnabled(false);
       return;
     }
     if (!targets.length) {
@@ -389,7 +385,6 @@ export default function ConversationPage() {
     selectedMentionRef.current = restored.partner;
     setSelectedMention(restored.partner);
     setEngagementTemplate(restored.engagementTemplate);
-    setGoalModeEnabled(restored.goalMode);
     composerRestoreCaseIdRef.current = caseId;
     pendingRestoreSnapshotRef.current = null;
   }, []);
@@ -2450,7 +2445,6 @@ export default function ConversationPage() {
         selectedMentionRef.current = fallback.partner;
         setSelectedMention(fallback.partner);
         setEngagementTemplate(fallback.engagementTemplate);
-        setGoalModeEnabled(fallback.goalMode);
       }
       return;
     }
@@ -2683,11 +2677,10 @@ export default function ConversationPage() {
     markComposerRestoreHandled();
     selectedMentionRef.current = target;
     setSelectedMention(target);
-    if (!isPentestMentionTarget(target)) {
-      setGoalModeEnabled(false);
+    if (!packDeclaresEngagementTemplate(target.packId, engagementTemplate)) {
       setEngagementTemplate(null);
     }
-  }, [activeId, markComposerRestoreHandled]);
+  }, [activeId, markComposerRestoreHandled, engagementTemplate]);
 
   const handleEngagementTemplate = useCallback((value: EngagementTemplateId | null) => {
     if (!shouldAcceptComposerChipOverride({
@@ -2696,15 +2689,6 @@ export default function ConversationPage() {
     })) return;
     markComposerRestoreHandled();
     setEngagementTemplate(value);
-  }, [activeId, markComposerRestoreHandled]);
-
-  const handleGoalMode = useCallback((enabled: boolean) => {
-    if (!shouldAcceptComposerChipOverride({
-      activeCaseId: activeId,
-      restoredCaseId: composerRestoreCaseIdRef.current,
-    })) return;
-    markComposerRestoreHandled();
-    setGoalModeEnabled(enabled);
   }, [activeId, markComposerRestoreHandled]);
 
   const handleImportReport = useCallback(async (file: File | null) => {
@@ -2737,7 +2721,7 @@ export default function ConversationPage() {
     scope?: { allow: string[]; deny: string[] } | null;
     forceNewConversation?: boolean;
     conversationId?: string | null;
-    /** Explicit Goal mode for this assign (UI switch). */
+    /** Optional Goal mode for this assign (not a composer chip). */
     goalMode?: boolean;
     goalObjective?: string;
     /** Explicit engagement from @expert pack (structured; not NLP). */
@@ -2774,11 +2758,9 @@ export default function ConversationPage() {
     const eng =
       String(opts.engagement || "").trim() ||
       (resolvedMention?.kind === "expert" ? String(resolvedMention.packId || "").trim() : "");
-    // Spec #284 G6: product Graph on wire only for pentest seat (pack), never template-as-pack.
-    const launchIsPentest =
-      isPentestMentionTarget(resolvedMention) || eng.toLowerCase() === "pentest";
+    // Spec #284 G6: product Graph on wire only when this pack declares the id.
     const engTemplateWire = composerEngagementWireFields(opts.engagementTemplate, {
-      isPentest: launchIsPentest,
+      packId: resolvedMention?.packId || eng || "",
       allowPostex: typeof opts.allowPostex === "boolean" ? opts.allowPostex : undefined,
     });
     const engagementPayload: Record<string, unknown> = {
@@ -3160,17 +3142,14 @@ export default function ConversationPage() {
       }
       if (openIds.size) setPendingApprovals([]);
     }
-    const isPentest = isPentestMentionTarget(resolved);
+    const packId = String(resolved?.packId || "").trim();
     // Spec #277 / #284 G6: wire once here — launch reuses same template + allowPostex (no double-derive).
-    // 不指定 / null → omit; product Graph + pentest seat → engagement_template on user_message.
-    const wireTmpl = composerEngagementWireFields(engagementTemplate, { isPentest });
+    // 不指定 / null → omit; product Graph only if this pack declares the id.
+    const wireTmpl = composerEngagementWireFields(engagementTemplate, { packId });
     const tmpl: EngagementTemplateId | "" =
       (wireTmpl.engagement_template as EngagementTemplateId | undefined) || "";
     const tmplAllowPostex =
       typeof wireTmpl.allow_postex === "boolean" ? wireTmpl.allow_postex : undefined;
-    // Pentest seat always wires explicit goal_mode true|false (not omit) so sticky
-    // Goal-on clears when the UI toggle is off (Grok Goal-off path).
-    const enableGoal = isPentest ? goalModeEnabled : undefined;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
     const usePendingAsset =
@@ -3182,7 +3161,6 @@ export default function ConversationPage() {
     await launchTaskMessage({
       displayText,
       text,
-      goalMode: enableGoal,
       engagement: resolved?.kind === "expert" ? resolved.packId : undefined,
       ...(usePendingAsset
         ? {
@@ -3191,15 +3169,15 @@ export default function ConversationPage() {
             conversationId: pendingAsset!.conversationId,
           }
         : {}),
-      // Pass already-resolved template; launchIsPentest gates allowlist again (seat axis only).
+      // Pass already-resolved template; pack declaration gates allowlist again.
       engagementTemplate: tmpl || undefined,
       allowPostex: tmplAllowPostex,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
-    // Persist Case RoE only when user explicitly selected a Graph Workflow (Spec #277:
-    // Free/不指定 mode lives on Participant Session, not by writing Case sticky "free").
+    // Persist Case RoE only when user explicitly selected a Graph this pack declares
+    // (Spec #277: Free/不指定 mode lives on Participant Session, not Case sticky "free").
     // Same postex boolean as wire (catalog default when omitted).
-    if (activeId && isPentest && tmpl) {
+    if (activeId && tmpl && packDeclaresEngagementTemplate(packId, tmpl)) {
       void authFetch(`/api/conversations/${activeId}/case`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -3213,7 +3191,6 @@ export default function ConversationPage() {
     selectedMention,
     mentionTargets,
     launchTaskMessage,
-    goalModeEnabled,
     engagementTemplate,
     activeId,
     pendingApprovals,
@@ -3535,8 +3512,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 onSelectPartner={handleSelectPartner}
                 engagementTemplate={engagementTemplate}
                 onEngagementTemplate={handleEngagementTemplate}
-                goalModeEnabled={goalModeEnabled}
-                onGoalMode={handleGoalMode}
                 running={isActiveConversationRunning}
                 interrupting={interrupting}
                 workBurst={workBurst}
