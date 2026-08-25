@@ -16,6 +16,7 @@
 | FE chat cards | Still render; `snapshotFromMessages` does **not** set findings/evidence |
 | New badge | Unchanged (#275 `created` / `is_new`) |
 | Tests | `platform/backend/tests/test_conversation_snapshot_purity.py` |
+| Leftover Task-era phase | Snapshot/chat/Tasks do **not** map `intake\|recon\|analysis\|verify\|report\|complete` (Spec [#500](https://github.com/zangjiaao/my-ai-pen/issues/500)). Historical checkpoint fields are unknown. Expert Graph L1 `graph-stage-*` is a different `phase`. |
 
 ---
 

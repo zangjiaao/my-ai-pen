@@ -5,10 +5,33 @@
  *
  * No free-text NLP for product routing — structured fields + denylist only.
  */
-import { phaseLabel } from "./phase";
 
 /** Infra/health status tokens (phase / type / status_kind). Expand only with explicit amend. */
 export const INFRA_STATUS_TOKENS = new Set<string>(["tooling_health"]);
+
+/** Retired Task-era pipeline ids. Historical rows only — never map/invent as product stages. */
+const LEGACY_TASK_PIPELINE_PHASES = new Set([
+  "intake",
+  "recon",
+  "analysis",
+  "verify",
+  "report",
+  "complete",
+]);
+
+/** Labels that old transcripts used for synthetic phase ticks (suppressor only). */
+const LEGACY_TASK_PIPELINE_LABELS: Record<string, string> = {
+  intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
+  recon: "\u653b\u51fb\u9762\u53d1\u73b0",
+  analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
+  verify: "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
+  report: "\u62a5\u544a\u6574\u7406",
+  complete: "\u4efb\u52a1\u5b8c\u6210",
+};
+
+export function isLegacyTaskPipelinePhase(value: unknown): boolean {
+  return LEGACY_TASK_PIPELINE_PHASES.has(String(value || "").trim());
+}
 
 /**
  * Gap (ms) between consecutive messages before a new centered timestamp is needed.
@@ -48,20 +71,28 @@ function parsePhaseFromText(text: string): string {
 export function isLegacyPhaseOnlyStatus(content: Record<string, unknown>): boolean {
   const phase =
     typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  if (!["intake", "recon", "analysis", "verify", "report", "complete"].includes(phase)) return false;
+  if (!isLegacyTaskPipelinePhase(phase)) return false;
   const text = String(content.text || "").trim();
   return (
     Boolean(content.synthetic) ||
     !text ||
-    text === phaseLabel(phase) ||
+    text === LEGACY_TASK_PIPELINE_LABELS[phase] ||
     text.startsWith(`Phase: ${phase}`)
   );
 }
 
+/** Snapshot/restore: leftover Task-era phase ids are unknown — do not invent intake/complete. */
+export function snapshotAgentPhase(content: Record<string, unknown>, _status?: string): string | undefined {
+  const raw =
+    typeof content.phase === "string" && content.phase.trim()
+      ? content.phase.trim()
+      : parsePhaseFromText(String(content.text || ""));
+  if (!raw || isLegacyTaskPipelinePhase(raw)) return undefined;
+  return raw;
+}
+
 export function statusNoticeDisplayText(content: Record<string, unknown>): string {
-  const phase =
-    typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  return phase ? phaseLabel(phase) : String(content.text || "");
+  return String(content.text || "");
 }
 
 /**

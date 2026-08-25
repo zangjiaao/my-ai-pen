@@ -50,7 +50,6 @@ import {
 export { TASKS_WORK_ITEM_CAP };
 
 type Tab = "status" | "surface" | "findings" | "traffic";
-type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
 type KanbanSummary = {
@@ -101,13 +100,6 @@ type StrixRun = {
   };
 };
 
-type PhasePlan = {
-  id: WorkflowPhaseId;
-  label: string;
-  status: "pending" | "running" | "done";
-  items: PlanNode[];
-};
-
 type CaseRunSummary = {
   started_at?: string;
   last_active_at?: string;
@@ -120,8 +112,6 @@ type CaseRunSummary = {
 };
 
 interface Props {
-  phase?: string;
-  activeTool?: string;
   intakeResult?: Record<string, unknown>;
   intakeStatus?: string;
   progress?: { current: number; total: number; percent: number };
@@ -197,7 +187,6 @@ function clampRightPanelWidth(width: number): number {
 }
 
 export default function RightPanel({
-  activeTool,
   intakeResult,
   intakeStatus,
   progress,
@@ -358,7 +347,6 @@ export default function RightPanel({
   // If the conversation is no longer running, never leave Main/Worker agents stuck on "running"
   // (stale checkpoint.panel_agents can lag behind conversation status).
   const displayAgents = normalizeAgentsForConversationRunning(orderedStrixAgents, running);
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || surfaceItems.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens);
   // Spec #321: history selection shows frozen revision plan_tree; live stays default.
   const viewedPlanTree = planTreeForView({
     planTree,
@@ -369,12 +357,11 @@ export default function RightPanel({
   const visiblePlanTree = isStrixWorkflow
     ? mainAgentPlanTree(viewedPlanTree, displayAgents)
     : viewedPlanTree;
-  const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
-  // Node3-style flat task list for all workflows (phase tree remains available via plan data).
+  // Node3-style flat task list for all workflows.
   // Trust plan_tree status only — do not force pending/running → done from conversation.status
   // (that caused false-green todos when status/running lagged open checklist items).
   const taskList = isStrixWorkflow
-    ? { items: phasePlan.flatMap((phase) => phase.items), hiddenCount: 0 }
+    ? { items: strixTodoPlanItems(visiblePlanTree), hiddenCount: 0 }
     : unifiedTodoItems(visiblePlanTree);
   const taskItems = taskList.items;
   const tasksHiddenCount = taskList.hiddenCount;
@@ -1032,64 +1019,6 @@ function TrafficDetailDialog({
   );
 }
 
-function OverallProgress({ progress }: { progress: { percent: number; label: string } }) {
-  return (
-    <section data-testid="overall-progress">
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <p className="text-xs text-ink-muted">Overall progress</p>
-        <p className="font-mono text-[11px] text-ink-muted">{progress.label}</p>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-pill bg-canvas-inset">
-        <div className="h-full rounded-pill bg-ink transition-[width]" style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }} />
-      </div>
-    </section>
-  );
-}
-
-function WorkflowPlan({ phases }: { phases: PhasePlan[]; running?: boolean }) {
-  if (!phases.length) {
-    return <p className="text-sm text-ink-muted">No active task plan yet</p>;
-  }
-  return (
-    <div className="space-y-3" data-testid="workflow-plan">
-      {phases.map((phase, index) => {
-        const current = phase.status === "running";
-        const done = phase.status === "done";
-        return (
-          <section key={phase.id} className="relative">
-            {index < phases.length - 1 && <span aria-hidden="true" className="absolute left-[5px] top-5 h-[calc(100%+0.75rem)] w-px bg-hairline-soft" />}
-            <div className="flex min-w-0 items-center gap-2">
-              <span aria-hidden="true" className={`relative mt-1 h-2.5 w-2.5 shrink-0 rounded-full border ${current ? "border-ink bg-ink" : done ? "border-hairline bg-hairline" : "border-hairline bg-canvas"}`} />
-              <p className={`truncate text-sm ${current ? "font-semibold text-ink" : done ? "font-medium text-ink-muted" : "font-medium text-ink-secondary"}`}>{phase.label}</p>
-            </div>
-            <div className="ml-5 mt-1.5 space-y-1.5">
-              {phase.items.length ? (
-                phase.items.map((item, itemIndex) => <PlanItem key={planNodeKey(item, itemIndex)} item={item} />)
-              ) : (
-                <p className="text-xs text-ink-muted">No tasks in this stage</p>
-              )}
-            </div>
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
-function PlanItem({ item }: { item: PlanNode }) {
-  const status = String(item.status || "pending");
-  return (
-    <div className="flex min-w-0 items-start gap-2">
-      <span aria-hidden="true" className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${planItemDotClass(status)}`} />
-      <div className="min-w-0 flex-1">
-        <p className={`break-words text-xs [overflow-wrap:anywhere] ${isTerminalPlanStatus(status) ? "text-ink-muted" : "text-ink-secondary"}`}>{String(item.title || "Untitled plan item")}</p>
-        {item.notes && <p className="mt-0.5 break-words text-[11px] text-ink-muted [overflow-wrap:anywhere]">{clip(item.notes, 140)}</p>}
-      </div>
-    </div>
-  );
-}
-
-
 function PanelSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
@@ -1148,42 +1077,10 @@ function normalizeKanban(input: KanbanSummary | undefined, nodes: PlanNode[], pr
   };
 }
 
-function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, activeTool: string | undefined, running: boolean, findingsCount: number, strixWorkflow = false): PhasePlan[] {
-  const items = agentPlanItems(nodes);
-  if (!activeTool && findingsCount === 0 && items.length === 0) {
-    return [];
-  }
-  if (strixWorkflow) {
-    const strixItems = items.sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || ""))).slice(0, 12);
-    if (!strixItems.length) return [];
-    const status: PhasePlan["status"] = strixItems.some((item) => item.status === "running")
-      ? "running"
-      : strixItems.every((item) => isTerminalPlanStatus(item.status))
-        ? "done"
-        : running
-          ? "running"
-          : "pending";
-    return [{ id: "testing", label: "Strix", status, items: strixItems }];
-  }
-  const activeId = lightweightStageId(currentStage, activeTool, running, findingsCount);
-  const phases: PhasePlan[] = [
-    { id: "recon", label: "Recon", status: "pending", items: [] },
-    { id: "testing", label: "Testing", status: "pending", items: [] },
-    { id: "verification", label: "Verification", status: "pending", items: [] },
-    { id: "summary", label: "Summary", status: "pending", items: [] },
-  ];
-  const byId = new Map(phases.map((phase) => [phase.id, phase]));
-  const activeIndex = activeId === "completed" ? phases.length : Math.max(0, phases.findIndex((phase) => phase.id === activeId));
-  phases.forEach((phase, index) => {
-    phase.status = activeId === "completed" || index < activeIndex ? "done" : index === activeIndex ? "running" : "pending";
-  });
-  for (const item of items) {
-    byId.get(workflowPhaseForPlanItem(item))?.items.push(item);
-  }
-  for (const phase of phases) {
-    phase.items = phase.items.sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || ""))).slice(0, 7);
-  }
-  return phases;
+function strixTodoPlanItems(nodes: PlanNode[]): PlanNode[] {
+  return agentPlanItems(nodes)
+    .sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")))
+    .slice(0, 12);
 }
 
 function mainAgentPlanTree(nodes: PlanNode[], agents: StrixAgentStatus[]): PlanNode[] {
@@ -1313,54 +1210,6 @@ function countLabel(base: string, count: number): string {
   return count > 0 ? `${base} (${count})` : base;
 }
 
-function workflowPhaseForPlanItem(item: PlanNode): WorkflowPhaseId {
-  const explicit = explicitWorkflowPhase(item.parent_id) || explicitWorkflowPhase(item.node_id) || explicitWorkflowPhase(item.id);
-  if (explicit) return explicit;
-  const text = `${item.title || ""} ${item.notes || ""}`.toLowerCase();
-  if (hasAny(text, ["summary", "report", "final", "cleanup"])) return "summary";
-  if (hasAny(text, ["verify", "verification", "evidence", "finding", "validate", "confirm", "reproduce"])) return "verification";
-  if (hasAny(text, ["test", "probe", "payload", "sqli", "sql injection", "xss", "csrf", "upload", "traversal", "injection"])) return "testing";
-  return "recon";
-}
-
-function explicitWorkflowPhase(value: string | null | undefined): WorkflowPhaseId | null {
-  const normalized = String(value || "").toLowerCase();
-  if (["workflow-recon", "recon"].includes(normalized) || normalized.includes("workflow-recon")) return "recon";
-  if (["workflow-testing", "testing", "test"].includes(normalized) || normalized.includes("workflow-testing")) return "testing";
-  if (["workflow-verification", "verification", "verify"].includes(normalized) || normalized.includes("workflow-verification")) return "verification";
-  if (["workflow-summary", "summary", "report"].includes(normalized) || normalized.includes("workflow-summary")) return "summary";
-  return null;
-}
-
-function overallPlanProgress(phases: PhasePlan[], kanban: KanbanSummary, progress?: { current: number; total: number; percent: number }): { percent: number; label: string } {
-  const items = phases.flatMap((phase) => phase.items);
-  if (items.length) {
-    const done = items.filter((item) => isTerminalPlanStatus(item.status)).length;
-    return { percent: Math.round((done / items.length) * 100), label: `${done}/${items.length}` };
-  }
-  const stagePercent = stageProgressPercent(phases);
-  if (stagePercent > 0) return { percent: stagePercent, label: `${stagePercent}%` };
-  const fallback = progress?.percent ?? kanban.totals?.percent ?? 0;
-  return { percent: fallback, label: fallback ? `${fallback}%` : "waiting" };
-}
-
-function stageProgressPercent(phases: PhasePlan[]): number {
-  const done = phases.filter((phase) => phase.status === "done").length;
-  const running = phases.some((phase) => phase.status === "running") ? 0.5 : 0;
-  return Math.round(((done + running) / phases.length) * 100);
-}
-
-function lightweightStageId(currentStage: string | undefined, activeTool: string | undefined, running: boolean | undefined, findingsCount: number): WorkflowPhaseId | "completed" {
-  if (currentStage === "completed") return "completed";
-  if (currentStage === "summarizing" || currentStage === "incomplete") return "summary";
-  const tool = String(activeTool || "").toLowerCase();
-  if (["browser", "scan", "traffic"].includes(tool)) return "recon";
-  if (["verifier", "finding"].includes(tool)) return "verification";
-  if (["http", "poc", "coverage", "skill"].includes(tool)) return findingsCount > 0 ? "verification" : "testing";
-  if (!running && findingsCount > 0) return "summary";
-  return currentStage === "confirming" ? "recon" : "testing";
-}
-
 /** Structured attack-surface entry: host:port + service + optional web path. */
 function markdownPreview(value: string): string {
   return String(value || "")
@@ -1372,16 +1221,6 @@ function markdownPreview(value: string): string {
 
 function isTerminalPlanStatus(status: PlanStatus | undefined): boolean {
   return status === "done" || status === "blocked" || status === "failed" || status === "skipped";
-}
-
-function planItemDotClass(status: string): string {
-  if (status === "running") return "bg-ink";
-  if (isTerminalPlanStatus(status)) return "bg-hairline";
-  return "bg-canvas-inset";
-}
-
-function planNodeKey(node: PlanNode, index: number) {
-  return String(node.node_id || node.id || `plan-node-${index}`);
 }
 
 function normalizeIntake(intakeResult?: Record<string, unknown>, intakeStatus?: string) {
@@ -1400,13 +1239,4 @@ function normalizeIntake(intakeResult?: Record<string, unknown>, intakeStatus?: 
     connectivity: connText,
     reason: String(intakeResult.reason || (intakeStatus === "failed" ? "Preflight failed" : "")),
   };
-}
-
-function hasAny(value: string, needles: string[]): boolean {
-  return needles.some((needle) => value.includes(needle));
-}
-
-function clip(value: string, limit: number): string {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}...` : normalized;
 }
