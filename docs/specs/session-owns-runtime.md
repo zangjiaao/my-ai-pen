@@ -18,7 +18,7 @@
 - Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313) — Free silent init wipe ban (still holds on live map).  
 - Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455) / [`session-dialogue-path.md`](session-dialogue-path.md) — Session-first dialogue: continue turn text = operator utterance (no engagement-book rewrap).
 
-**Does not amend:** Finding Store / book-path L0, intent NLP ban, Default seat never-Graph, subagent package idle TTL (package-level, not Participant Session).
+**Does not amend:** Finding Store / book-path L0, intent NLP ban, pack Graph capability + user permission (no Expert caste), subagent package idle TTL (package-level, not Participant Session).
 
 ---
 

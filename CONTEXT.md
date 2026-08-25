@@ -33,12 +33,12 @@ _Avoid_: implicit same-Organization visibility; row copies as sharing; Asset sha
 ### Product seats
 
 **Default**:
-The Node seat / pack with no Expert Graph capability (or product assistant without declared graphs): tools for ledger management, status understanding, and report assistance. Does not enter Expert Hard Graph unless a future pack declares Graph capability.
-_Avoid_: treating Default as the only place continuous chat exists
+Built-in Expert pack id (`default`): ledger management, status, report assist. **Same caste as every other Expert** — Graph eligibility is only “does this pack declare graph ids?” Built-in `default` currently declares none.
+_Avoid_: treating Default as a higher/lower class of Expert; hard-coding “assistant never Graph”; treating Default as the only place continuous chat exists
 
 **Expert**:
-A specialized pack instance (e.g. pentest, CTF, code audit) addressable by @mention. Runs on a **Participant Session** for the Case. Default **work mode Free** (no Graph harness); **Expert Graph × Pi** when the pack declares graph ids and the user permits enter Graph.
-_Avoid_: role seat; plugin (when meaning a full specialist pack); silent Free→Graph on resume
+Any addressable pack instance (@mention), including built-in `default`. Packs differ by Profession (mission/work), tools, skills, and declared Graphs. Runs on a **Participant Session**. Work mode **Free** unless **that pack** declares graph ids and the user permits Graph × Pi.
+_Avoid_: role seat as a second product type; plugin (when meaning a full specialist pack); silent Free→Graph on resume; “Default vs Expert” as Graph eligibility
 
 **Case**:
 One conversation = one work group. Shares user-visible thread, Findings, evidence, scope/RoE, and **visible group speech** (who said what — `expert_id` + pi `session_id`; not thinking, not tools). Each working runtime reads unread others’ speech via harness; **isSelf = current pi `session_id`**, not Expert catalog id. Same Expert after park-miss / Reset still sees prior visible talk from the previous runtime. A runtime does not re-ingest **this** pi session’s own talk or this-turn operator text.
@@ -75,16 +75,20 @@ The loop that runs an agent with tools inside a graph stage or Default seat. Pro
 _Avoid_: calling the Graph framework itself "the Agent Runtime" when Graph and Runtime are layered; treating pi-coding-agent as required Runtime
 
 **Graph × Pi**:
-The **locked** product shape: Hard Graph orchestrates flow and gates; pi Agent Runtime runs exploration inside expert graph stages. Default seat stays outside expert hard Graph.
-_Avoid_: hybrid (unqualified), soft OMP graph, Main-as-scheduler as hard Graph
+The **locked** product shape: Hard Graph orchestrates flow and gates; pi Agent Runtime runs exploration inside a pack’s graph stages. A pack without declared graphs stays Free; entry is capability + user permission, not seat caste.
+_Avoid_: hybrid (unqualified), soft OMP graph, Main-as-scheduler as hard Graph; “Default never Graph” as a special-case lock
 
 **Graph model vs Graph framework**:
 The model (Task / Agent / Feedback semantics) is required; a framework (e.g. Google ADK) is a replaceable implementation.
 _Avoid_: "must use ADK" as a product requirement without a model reason
 
 **Package (work package)**:
-A unit of Agent Graph work Main assigns to one subagent for a stage objective (often aligned with an attack-class or coverage item).
-_Avoid_: treating a batch tool call as one package; treating Todo process chores as packages
+A unit of work Main assigns to one Worker (subagent) for a single objective (often an attack-class or coverage item). Used in **Free and Graph** — Free/Graph is Main’s work mode, not a Worker type.
+_Avoid_: treating a batch tool call as one package; treating Todo process chores as packages; Graph-only workers
+
+**Package profile**:
+Named Worker overlay Main may select at spawn: short role intent, tool allowlist, and default skill. Not a product Expert seat. **Product model** (decided); code today is still one generic child template + optional `skill_id`.
+_Avoid_: 13 named product Experts as workers; encyclopedia always-on worker prompts; forking profiles by Free vs Graph
 
 **Wave (package attempt)**:
 One run of one package by a subagent from start to terminal success or failure. Retry budget is per package (product default: at most two attempts), not a stage-wide pool.
@@ -111,7 +115,7 @@ Node4-owned domain truth: multi-actor session jars, Hard Graph handoff/continuit
 _Avoid_: treating LLM transcript or Agent Runtime session files as domain authority
 
 **Hypothesis work mode**:
-Optional Expert Graph capability: host-backed **hypothesis queue** while a stage has `hypothesis_work_mode: true` (missing/false = off). Pack declares availability only. Main commits lifecycle (`active` → `confirmed` \| `killed` \| `deferred`); Sub returns structured package outcomes. Not Default seat DoD; not a second booking channel.
+Optional Expert Graph capability: host-backed **hypothesis queue** while a stage has `hypothesis_work_mode: true` (missing/false = off). Pack declares availability only. Main commits lifecycle (`active` → `confirmed` \| `killed` \| `deferred`); Sub returns structured package outcomes. Not required unless a pack Graph stage enables it; not a second booking channel.
 _Avoid_: enabling from probe/explore intent alone; agent markdown tracker as gate SOT; Active → platform confirm without Store `feedback_ok`
 
 **Hypothesis queue**:
@@ -147,6 +151,14 @@ _Avoid_: business tags only on Group; inventing org structure as required clerk 
 **Service 攻击面**:
 Durable paths under a Service (company book). A path enters only from `finding(confirm)` or an accepted HTTP(S) Traffic settle on an existing Host. Scan / SYN does not. Not Case Surface (#368 this-run NEW/TESTED).
 _Avoid_: dumping every scanned/SYN path onto the Host; calling Case Surface the company 暴露面总账; Agent creating a Host in order to hang a path
+
+**Case Surface**:
+This-Case attack-surface identities, born from Traffic settle and TARGET seed — the objective sitemap for the engagement.
+_Avoid_: Agent-invented path menus as the sitemap; treating Owner 攻击面 as this-run inventory
+
+**TESTED** (Case Surface):
+Agent-maintained, Case-shared **coverage work-state** on an existing Case Surface identity. Three values: `untested` | `tested` | `skipped` (`skipped` reason `deadend` or `roe`). The captain reviews tested / untested / skipped / newly appeared, then plans and acts again. Not inferred from Traffic or MITM. Origin/root may be marked without HTTP; child paths must already sit on the tree. Persists across park/Reset with the Case row.
+_Avoid_: purpose=test HTTP as TESTED; platform vuln priors as TESTED; Graph fail-closed on unmarked TESTED; operator chips for seen/touched/booked/deadend/skipped_roe as separate coverage states; putting coverage plan on per-seat Todo
 
 **Evidence (证据)**:
 Proof that **supports a Finding**. Created at `finding(confirm)` from grounded tool output. Case-shared so another expert can open the same proof. Not a notebook. Not operational leftover.

@@ -9,7 +9,7 @@
 - `docs/specs/timeline-activity-liveness.md` / Spec [#305](https://github.com/zangjiaao/my-ai-pen/issues/305) — mid-task liveness after tools covers T1 empty thinking until tokens; **does not** cover long post-thinking gaps when the provider stream is still open but no projectable frames, nor fail-closed incomplete streams.  
 - Spec [#350](https://github.com/zangjiaao/my-ai-pen/issues/350) (tool call lifecycle from tool-name known) — **adjacent, not this Spec.** #350 owns tool process chrome once a tool name is known. This Spec owns **LLM stream health** when no tool name is known / stream is unhealthy / stream ends without `finish_reason`.
 
-**Does not amend:** Finding Store / book-path, Task Map history (#321), Worker audit isolation (#308), intent NLP ban (`AGENTS.md`), Default seat never-Graph.
+**Does not amend:** Finding Store / book-path, Task Map history (#321), Worker audit isolation (#308), intent NLP ban (`AGENTS.md`), pack Graph capability + user permission (no Expert caste).
 
 ---
 

@@ -10,7 +10,7 @@
 - `docs/specs/choice-card-next-steps.md` / Spec [#312](https://github.com/zangjiaao/my-ai-pen/issues/312) — next_steps single-select + optional supplement; value-only emission; confirm feed shape.  
 - `docs/specs/task-graph.md` — Free Tasks = user progress SoT; Free `todo.init` replace policy (Graph stage-local merge unchanged).  
 
-**Does not amend:** book-path L0, Finding Store, Expert Graph stage L2 Spec [#281](https://github.com/zangjiaao/my-ai-pen/issues/281) merge rules, intent NLP ban (`AGENTS.md`), Default seat never-Graph.
+**Does not amend:** book-path L0, Finding Store, Expert Graph stage L2 Spec [#281](https://github.com/zangjiaao/my-ai-pen/issues/281) merge rules, intent NLP ban (`AGENTS.md`), pack Graph capability + user permission (no Expert caste).
 
 ---
 
@@ -164,7 +164,7 @@ From the operator’s view:
 - Changing Finding Store / book-path L0 or vuln identity.  
 - Making open todos a hard settlement or booking gate.  
 - Redesigning Graph L1 stages or package settlement honesty.  
-- Default seat Expert Graph.  
+- Adding Graph JSON to packs that do not declare graphs (this Spec does not mint Graph capability).  
 - Mechanical right-panel Next resurrection.  
 - Priority queues, decision-only queues, or multi-select next_steps as default.  
 - Fixed product-authored next_steps templates (four canned buttons).  

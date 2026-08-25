@@ -25,7 +25,7 @@
 - `docs/specs/product-state-ui-projection.md` / Spec [#280](https://github.com/zangjiaao/my-ai-pen/issues/280) — Tasks panel projects **live** map by default + optional historical revision view.  
 - `docs/specs/case-status-ledger-time-ui.md` / Spec [#323](https://github.com/zangjiaao/my-ai-pen/issues/323) — Task Map archive/seal **must not** reset Case token or work-seconds ledger (metering independent of map revisions).
 
-**Does not amend:** Finding Store / book-path L0, intent NLP ban (`AGENTS.md`), Default seat never-Graph, next_steps card policy beyond replace permission ids already in #313.
+**Does not amend:** Finding Store / book-path L0, intent NLP ban (`AGENTS.md`), pack Graph capability + user permission (no Expert caste), next_steps card policy beyond replace permission ids already in #313.
 
 ---
 
@@ -232,7 +232,7 @@ Ideal: implementers hang behavior on these three seams only—no fourth policy k
 - Auto-seal from Agent prose or soft settle narrative alone.  
 - Changing Finding Store, book-path L0, or package settlement honesty rules.  
 - Making open todos a hard settlement gate (#313 L5 remains).  
-- Default seat Expert Graph.  
+- Adding Graph JSON to packs that do not declare graphs (this Spec does not mint Graph capability).  
 - Intent detection via keyword/regex on user text.  
 - Fixed product-authored next_steps option catalogs.  
 - Mandatory retention GC / cross-Case global map browser.  

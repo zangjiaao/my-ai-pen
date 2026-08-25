@@ -17,7 +17,7 @@
 - Spec [#353](https://github.com/zangjiaao/my-ai-pen/issues/353) — stream stall / incomplete finish_reason. Overflow here is **context occupancy**, not stream silence.  
 - Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455) — continue turn text stays the operator utterance.
 
-**Does not amend:** Finding book-path L0, intent NLP ban, Default seat never-Graph, outer-continue product-off (`NODE4_MAX_*` = 0).
+**Does not amend:** Finding book-path L0, intent NLP ban, pack Graph capability + user permission (no Expert caste), outer-continue product-off (`NODE4_MAX_*` = 0).
 
 ---
 

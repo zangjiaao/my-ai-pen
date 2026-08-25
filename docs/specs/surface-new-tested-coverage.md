@@ -1,6 +1,6 @@
 # Spec: Surface coverage v3 — NEW · TESTED · Finding tags (no BOOK chip)
 
-**Status:** Living Spec — **shipped** (tickets [#408](https://github.com/zangjiaao/my-ai-pen/issues/408)–[#411](https://github.com/zangjiaao/my-ai-pen/issues/411); purpose axis extended by [#413](https://github.com/zangjiaao/my-ai-pen/issues/413)). Product contract remains normative.  
+**Status:** Living Spec — **v3 shipped**; **v4 amend (normative, not implemented)** — map [#504](https://github.com/zangjiaao/my-ai-pen/issues/504), tracker Spec [#518](https://github.com/zangjiaao/my-ai-pen/issues/518). Coverage work-state is Agent-maintained `untested` | `tested` | `skipped`; identities still Traffic-born.  
 **Amends:** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368) (v2 settle + seen/touched/booked internal)  
 **Related:** Owner ledger [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) (supersedes #322); product state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free coverage honesty [#406](https://github.com/zangjiaao/my-ai-pen/issues/406) / soft SEEN harness [#407](https://github.com/zangjiaao/my-ai-pen/issues/407)  
 **Field drivers:** Cases `c02e3c20-…`, `5a9cf1f6-…` — operators read Case Surface as “still untested”; Agents treated platform vuln priors as coverage and left Runtime-objective first-touch rows unadvanced; tree chip density (methods + status + severity + rollup) obscured signal.
@@ -26,15 +26,23 @@
 | Axis | Meaning | UI |
 |------|---------|-----|
 | **Novelty** | Is this identity **new to the durable surface inventory** (asset-scoped)? | Optional **NEW** badge only when true |
-| **This-engagement exercise** | Did **this Case** put **test-purpose** traffic on it (≥1 exchange)? | **TESTED** — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md); **not** hit≥2, **not** finding tags |
+| **This-engagement coverage plan** | Agent work-state on that identity: `untested` \| `tested` \| `skipped` | **TESTED** chip when `tested`; skipped is quiet or muted with reason — **not** Traffic `purpose=test`, **not** finding tags |
 | **Findings** | Confirmed product issues on this identity | **Finding severity tags only** — **no BOOK status chip** |
 
-### L2 — Runtime objectivity preserved
+**v4:** TESTED is **not** “≥1 purpose=test exchange”. That Traffic-purpose axis remains for audit/noise if needed; it **must not** write coverage work-state (job D MITM does not drive TESTED — map [#442](https://github.com/zangjiaao/my-ai-pen/issues/442) / Spec [#514](https://github.com/zangjiaao/my-ai-pen/issues/514)).
 
-- Case Surface rows still **birth from Traffic settle + TARGET seed** (v2).  
-- **TESTED** advances only via **real Traffic** on that identity (same family of rule as v2 first→later settle). **No Agent upsert to fake TESTED.**  
-- Platform vuln history **must not** alone mark TESTED or remove NEW.  
-- Internal storage may keep expand–contract maps (`seen`/`touched`/`booked` or equivalents) for Graph gates and migration; **operator vocabulary** is NEW / TESTED / finding tags.
+### L2 — Sitemap objective; coverage plan subjective
+
+- Case Surface rows still **birth from Traffic settle + TARGET seed** (v2). Agent cannot invent identities to look covered.  
+- **Coverage work-state** (`untested` default \| `tested` \| `skipped`) is **Agent-maintained** via `surface` **mark/unmark** (not Todo, not a new verb). Case-shared; stamp who marked. Persists park/Reset; Case delete clears.  
+- `skipped` **reason:** `deadend` \| `roe` (folds former operator `status=deadend` / `skipped_roe` chips). Internal Graph `seen`/`touched`/`booked` stay the probe/booking machine — **not** extra coverage chips.  
+- Origin/root may be marked without HTTP (judgment). Child paths must already exist on the tree.  
+- Platform vuln history **must not** alone mark `tested` or remove NEW.  
+- Operators **do not** tick coverage. They **copy** a canonical node block to the clipboard (hover Copy, prototype variant A).
+
+### L2b — Observe–plan–act (duty, not a new Graph gate)
+
+After each work slice the captain **looks** at the tree (tested / untested / skipped / newly appeared) → **plans** → **acts** (class packages OK; who-tests-marks) → persists → looks again until unmarked identities are `tested`, `skipped`, or **honestly paused**. Do not claim 攻击面覆盖完成 while untested remain undisclosed. **Graph stages do not fail-closed on unmarked TESTED.** `surface(summary)` counts read the work-state, not `purpose=test`.
 
 ### L3 — Durable inventory + NEW
 
@@ -45,7 +53,7 @@
 
 ### L4 — Agent coverage obligation
 
-- **Primary duty:** drive **NEW → TESTED** (or explicit **deadend / skipped_roe** with honesty).  
+- **Primary duty:** drive **NEW / untested → `tested` or `skipped`** (reason `deadend` \| `roe`) with honesty.  
 - **Secondary:** re-verify / deepen **known** inventory as judgment allows; retest **may** mark TESTED + book findings.  
 - **Forbidden as coverage proof:** `platform_list_vulnerabilities` / prior titles alone.  
 - **Soft settlement** remains: open NEW/untested must not hard-block booking by default; **honest pause** must disclose remaining NEW untested (extend #406/#407 language to NEW/TESTED).
@@ -55,14 +63,25 @@
 - **Do not show** HTTP method chips on the Surface **tree** by default (methods may remain in data, tooltip, or Agent tool payload).  
 - **Do not show** SEEN / BOOK / PRIOR as operator chips.  
 - **Parent/root rollup:** prefer **counts** (e.g. NEW n, TESTED n, vuln n) — not union of all child methods, not max-status chip that hides unfinished children, not three severity title chips.  
-- Leaf: path label + optional **NEW** + optional **TESTED** + finding tags (capped +N).
+- Leaf: path label + optional **NEW** + optional **TESTED** (when `tested`) + finding tags (capped +N).  
+- **Copy (v4):** hover **Copy** on the identity row (prototype A). Clipboard is a short plain block for **this node only**:
+
+```
+https://app.example:443/login
+is_new: true
+is_tested: true
+findings:
+- fnd_8k2a  high  Stored XSS in display name
+```
+
+`is_tested` reflects work-state `tested`. When `skipped`: `is_tested: false` and `skip: deadend|roe`. Findings: id + severity + short title, cap 8. No composer insert.
 
 ### L6 — Naming
 
 | Operator term | Rough v2 internal analogue | Notes |
 |---------------|----------------------------|--------|
 | **NEW** | (none — inventory novelty) | Not equal to “first traffic this Case” alone if inventory already knew the path |
-| **TESTED** | case_tested (≥1 purpose=test this Case; see surface-traffic-purpose-and-noise) | Not multi-hit-only touched; findings orthogonal |
+| **TESTED** | coverage work-state `tested` (v4 Agent mark) | Not Traffic purpose; not touched; findings orthogonal. `skipped` is the third value. |
 | *(no chip)* | seen only, inventory-known | Quiet — not “untested red” for every historical path |
 | *(no chip)* | booked | Finding tags carry the signal |
 
@@ -76,7 +95,7 @@
 | **Case Surface ledger** | This engagement’s live rows (Traffic + seed + confirm side-effects). |
 | **Durable surface inventory** | Asset-scoped precipitated identities across Cases (NEW baseline). |
 | **NEW** | First time identity enters durable inventory (UI badge). |
-| **TESTED** | This Case advanced exercise via real traffic (operator chip). |
+| **TESTED** | Coverage work-state `tested` on that identity (operator chip). |
 | **Finding tag** | Severity/kind chip from confirmed findings linked to identity. |
 
 ---

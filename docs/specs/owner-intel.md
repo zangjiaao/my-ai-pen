@@ -8,7 +8,7 @@
 **Amends:** `docs/specs/owner-ledger.md` — Intel wave was reserved (“not this wave”). This Spec **is** that wave.  
 **Consumed by:** `docs/specs/context-window-management.md` (compact injects **living** intel ≤50 lines after a persist pass; this-Case + login first).
 
-**Does not amend:** Finding identity / book-path L0 (#275); Case Surface (#368); intent NLP ban; Default seat never-Graph.
+**Does not amend:** Finding identity / book-path L0 (#275); Case Surface (#368); intent NLP ban; pack Graph capability + user permission (no Expert caste).
 
 ---
 

@@ -12,7 +12,7 @@
 - [`free-tasks-continue-integrity.md`](free-tasks-continue-integrity.md) / Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313) — Free Tasks integrity unchanged; confirm text remains operator-authored turn text.  
 - [`prompt-layers.md`](prompt-layers.md) / Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) — cold/first-turn layers may be heavy; park-hit turn body stays thin.
 
-**Does not amend:** Finding Store / book-path L0, owner ledger, intent NLP ban, Default seat never-Graph, work-burst / package accounting, Session auto-title ([#457](https://github.com/zangjiaao/my-ai-pen/issues/457)).
+**Does not amend:** Finding Store / book-path L0, owner ledger, intent NLP ban, pack Graph capability + user permission (no Expert caste), work-burst / package accounting, Session auto-title ([#457](https://github.com/zangjiaao/my-ai-pen/issues/457)).
 
 ---
 
@@ -148,7 +148,7 @@ Test **external behavior** at seams S1–S3 only.
 - Deleting Task/package ids or work-burst accounting.  
 - Finding Store / book-path L0 / owner-ledger identity changes.  
 - Keyword intent routing / inventing engagement from free text.  
-- Default seat executing pentest without handoff.  
+- A pack executing work its tools/skills do not support (e.g. built-in `default` running pentest without handoff to a pack that has act tools).  
 - Mandatory Session-scoped filesystem migration in v1.  
 - Subagent keep-alive redesign.  
 - Standalone CLI resume composite strings (non-product Node path) unless later aligned deliberately.  

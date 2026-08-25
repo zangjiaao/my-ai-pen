@@ -1,6 +1,6 @@
 # Agent Runtime harness — OMP-class (node4 candidate detail)
 
-> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi — **unique** product Node). **Expert Graph** (Hard Graph runner: product assessment templates / `graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Soft scenario graph is retired** as a product work mode (#68 / #76). **Default** free OMP never enters Expert Graph. **Agent Runtime** is **pi-ai + pi-agent-core** via product seam `runNode4Agent` (not pi-coding-agent). Fallback B (elevate Node5) is **retired**; `node5/` is deleted. Platform binds to exactly one Node process per deployment (Node4).  
+> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi — **unique** product Node). **Expert Graph** (Hard Graph runner: product assessment templates / `graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Soft scenario graph is retired** as a product work mode (#68 / #76). **Graph entry** = pack-declared graph ids + user permission for every Expert (built-in `default` currently declares none). **Agent Runtime** is **pi-ai + pi-agent-core** via product seam `runNode4Agent` (not pi-coding-agent). Fallback B (elevate Node5) is **retired**; `node5/` is deleted. Platform binds to exactly one Node process per deployment (Node4).  
 
 > **Commercial clean-room design** for the node4 path (no oh-my-pi / OMP source dependency).  
 > Calibrated: 2026-07-23  
@@ -172,11 +172,11 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 |-----------|----------|
 | `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
 | `subagent` | Child is a sibling `pi-{subagentId}/` under the same expert; evidence is Case-shared |
-| Work mode | **Free** (Default seat only) vs **Expert Graph** (product `app_assessment` / `redteam_deep` → Hard Graph runner; Soft retired #76; C1 continue-chat after complete) |
+| Work mode | **Free** (Session default; any Expert including `default`) vs **Graph** (that pack’s declared graph ids + user permission → Hard Graph runner; Soft retired #76; C1 continue-chat after complete) |
 
 ### OMP subagent scheduling
 
-Main (current seat session) decides when to spawn — not a separate Coordinator service and not a LangGraph DAG interpreter.
+Main (current seat session) decides when to spawn — not a separate Coordinator service and not a LangGraph DAG interpreter. **Package profiles** (named Worker overlays: intent + tool allowlist + default skill) are the product model and apply in **Free and Graph**; code today is still one generic child template + optional `skill_id`.
 
 | Path | Behavior |
 |------|----------|
@@ -188,8 +188,8 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 
 | Mode | Selection (structured only) | Discipline |
 |------|----------------------------|------------|
-| **Free** (default) | No graph / `free` | Pure OMP — Main may self-act; subagent optional; **not** Expert DoD |
-| **Expert Graph** | Product `app_assessment` (and hard aliases / thin lab ids) | Hard Graph runner owns stages; fail-closed Feedback; pi in stages; Main is not stage scheduler |
+| **Free** (Session default) | No graph / `free` / pack has no matching declared graph | Pure OMP — Main may self-act; subagent optional |
+| **Graph** | User permits a graph id **this pack declares** (`app_assessment`, …) | Hard Graph runner owns stages; fail-closed Feedback; pi in stages; Main is not stage scheduler |
 | **Soft scenario Graph** | **Retired** (#76) | No product resolve; soft pack JSON removed |
 
 Lab Main-act strip (non-product): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Expert Graph configs: `experts/pentest/graphs/hard/`. Resolve: `resolveHardGraph`.
