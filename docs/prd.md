@@ -47,7 +47,7 @@
 
 - 注册在线 Node；在节点管理安装专家包；在专家管理创建专家实例并绑定 Node（多专家可共用同一 Node）。
 - **同一会话为共享群聊**：默认与 Node 上的 **工作台助手（`default`）** 对话（查资产/漏洞、整理 finding 状态、解释进度）；需要执行时 **`@专家` / 工具栏选专家** 切换参与者。mention 是点名渠道，不是第二套任务系统。
-- 系统按所选参与者落到 Node（default 或专家 pack 的结构化 engagement）；可选 Goal mode（执行向专家）。
+- 系统按所选参与者落到 Node（default 或专家 pack 的结构化 engagement）。Graph 是专家通用控件：列出该 pack 已声明的 Graph；尚未编写的只有不指定。
 - 观察工具过程、证据与已确认 finding；高风险动作可经平台授权卡确认。
 - 刷新或重开会话后，消息与结果仍可从平台快照恢复。
 
@@ -61,7 +61,7 @@
 
 - 登录与会话：列表、新建、切换、基本管理；新建默认标题「新会话」。
 - **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题 + 任务信封里已有结构化 target / scope 时，**当前 Main**（Default 或 Expert Free）在 Task 层经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；无 target 的寒暄/台账闲聊不改名；用户手动改名后不被自动覆盖。不另开命名 Session。Graph 阶段 / Package worker 不起名。
-- 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + Goal 开关 + **参与者**（工作台助手 `default` / 专家）+ 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
+- 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + **参与者**（工作台助手 `default` / 专家）+ Graph 不指定-or-declared + 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情。
@@ -137,7 +137,7 @@ Composer participant: default | @Expert
 | **`default`（工作台助手）** | Node 内置 seat；读/整理台账；不 booking；不可当商业专家卸载 |
 | Product **Expert** | `@name` 路由实体：绑定 `node_id` + `pack_id` |
 | `engagement` / `role` | 结构化 pack id；如 `default`/`consult`、pentest、ctf |
-| `goal_mode` / `goal_objective` | 长任务目标锚点（执行向专家）；与参与者选择独立 |
+| `goal_mode` / `goal_objective` | Node 长任务 Goal 工具 / Workset 阀；Composer 不再提供 Goal 开关 |
 | Node `config.offers` | 节点已安装**专家** pack；`default` 不依赖 offers 安装 |
 
 别名折叠见 offers 文档与绑定候选上的 pack 解析；**不**从 instruction 自由文本推断 engagement。

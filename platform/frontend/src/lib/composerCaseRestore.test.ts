@@ -166,7 +166,6 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
   );
   assert.equal(out.partner?.expertId, "e-pen", "pentest partner from task.expert_id");
   assert.equal(out.engagementTemplate, "app_assessment", "Session graph → composer template");
-  assert.equal(out.goalMode, false, "goal off when task.goal_mode is false");
 }
 
 {
@@ -192,7 +191,6 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
   );
   assert.equal(out.partner?.expertId, "e-default", "missing expert → #299 default");
   assert.equal(out.engagementTemplate, null, "fallback is 不指定");
-  assert.equal(out.goalMode, false, "fallback Goal off");
 }
 
 {
@@ -206,7 +204,6 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
   );
   assert.equal(out.partner?.expertId, "e-default", "offline expert → #299 default");
   assert.equal(out.engagementTemplate, null);
-  assert.equal(out.goalMode, false);
 }
 
 {
@@ -220,7 +217,6 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
   );
   assert.equal(out.partner?.expertId, "e-pen-2", "fallback may select another pentest Expert");
   assert.equal(out.engagementTemplate, null, "fallback must not inherit the old Expert Graph");
-  assert.equal(out.goalMode, false, "fallback must not inherit the old Expert Goal");
 }
 
 {
@@ -232,31 +228,12 @@ const catalog = [assistant, pentest, otherPentest, offlinePentest];
     catalog,
     experts,
   );
-  assert.equal(out.partner?.expertId, "e-default", "non-pentest partner kept");
-  assert.equal(out.engagementTemplate, null, "non-pentest never restores Graph");
-  assert.equal(out.goalMode, false, "non-pentest never restores Goal");
-}
-
-{
-  const on = restoreComposerFromCaseSnapshot(
-    {
-      task_context: { expert_id: "e-pen", goal_mode: true },
-      sessions: { "e-pen": { work_mode: "free" } },
-    },
-    catalog,
-    experts,
+  assert.equal(out.partner?.expertId, "e-default", "assistant partner kept");
+  assert.equal(
+    out.engagementTemplate,
+    null,
+    "pack without declared Graphs stays 不指定 even if session leftover graph_id",
   );
-  assert.equal(on.goalMode, true, "pentest + goal_mode true → Goal on");
-
-  const off = restoreComposerFromCaseSnapshot(
-    {
-      task_context: { expert_id: "e-pen", goal_mode: false },
-      sessions: { "e-pen": { work_mode: "free" } },
-    },
-    catalog,
-    experts,
-  );
-  assert.equal(off.goalMode, false, "pentest + goal_mode false → Goal off");
 }
 
 {

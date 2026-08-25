@@ -10,9 +10,10 @@ import {
 } from "react";
 import { Check, ChevronDown, Target } from "lucide-react";
 import {
-  ENGAGEMENT_TEMPLATES,
   ENGAGEMENT_UNSPECIFIED_LABEL,
+  engagementTemplatesForPack,
   expertLabel,
+  packDeclaresEngagementTemplate,
   resolveExpertColor,
   type EngagementTemplateId,
 } from "../lib/experts";
@@ -62,8 +63,6 @@ type Props = {
   onSelectPartner: (target: MentionTarget) => void;
   engagementTemplate: EngagementTemplateId | null;
   onEngagementTemplate: (id: EngagementTemplateId | null) => void;
-  goalModeEnabled: boolean;
-  onGoalMode: (enabled: boolean) => void;
   running: boolean;
   interrupting: boolean;
   workBurst: WorkBurstProjection | null;
@@ -89,8 +88,6 @@ const CHAT_COMPOSER_PARTNER_CONTROL_CLASS =
   "inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-2 pr-2 text-xs leading-none";
 const CHAT_COMPOSER_MODE_CONTROL_CLASS =
   "inline-flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs leading-none";
-const CHAT_COMPOSER_GOAL_CONTROL_CLASS =
-  "inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none";
 const CHAT_COMPOSER_ACTIONS_CLASS = "flex h-8 shrink-0 items-center gap-2";
 const CHAT_COMPOSER_SUBMIT_CONTROL_CLASS =
   "inline-flex h-8 items-center rounded-pill px-4 text-xs font-medium leading-none";
@@ -116,7 +113,6 @@ export function ChatComposerSkeleton() {
           <div className={CHAT_COMPOSER_TOOLBAR_CLASS}>
             <div className={`${CHAT_COMPOSER_PARTNER_CONTROL_CLASS} w-24 bg-canvas-inset`} />
             <div className={`${CHAT_COMPOSER_MODE_CONTROL_CLASS} w-20 bg-canvas-inset`} />
-            <div className={`${CHAT_COMPOSER_GOAL_CONTROL_CLASS} w-14 bg-canvas-inset`} />
           </div>
           <div className={CHAT_COMPOSER_ACTIONS_CLASS}>
             <div className={`${CHAT_COMPOSER_SUBMIT_CONTROL_CLASS} w-14 bg-canvas-inset`} />
@@ -199,13 +195,6 @@ export function applyComposerTextareaLayout(field: HTMLTextAreaElement): void {
   }
 }
 
-/** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
-export function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
-  if (!target || target.kind !== "expert") return false;
-  const pack = String(target.packId || "").trim().toLowerCase();
-  return pack === "pentest" || pack.startsWith("pentest");
-}
-
 function getMentionState(value: string): MentionState {
   const match = value.match(/(?:^|\s)@([^\s@]*)$/);
   if (!match || match.index === undefined) return null;
@@ -235,8 +224,6 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     onSelectPartner,
     engagementTemplate,
     onEngagementTemplate,
-    goalModeEnabled,
-    onGoalMode,
     running,
     interrupting,
     workBurst,
@@ -277,9 +264,9 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
   );
 
   const activePartner = resolveActiveComposerPartner(selectedMention);
-  const showPentestControls = isPentestMentionTarget(activePartner);
+  const graphTemplates = engagementTemplatesForPack(activePartner?.packId);
   const activeModeLabel =
-    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label
+    graphTemplates.find((t) => t.id === engagementTemplate)?.label
     || ENGAGEMENT_UNSPECIFIED_LABEL;
 
   const showComposerTimer = composerTimerVisible(workBurst, running);
@@ -352,10 +339,10 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
       });
     }
     onSelectPartner(target);
-    if (!isPentestMentionTarget(target)) {
-      onGoalMode(false);
+    if (!packDeclaresEngagementTemplate(target.packId, engagementTemplate)) {
+      onEngagementTemplate(null);
     }
-  }, [input, onSelectPartner, onGoalMode]);
+  }, [input, onSelectPartner, onEngagementTemplate, engagementTemplate]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
     const selectable = mentionTargets.filter((t) => t.selectable !== false);
@@ -364,12 +351,11 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
     const target = found && found.selectable !== false ? found : fallback;
     if (!target) return;
     onSelectPartner(target);
-    if (!isPentestMentionTarget(target)) {
-      onGoalMode(false);
+    if (!packDeclaresEngagementTemplate(target.packId, engagementTemplate)) {
       setModeMenuOpen(false);
       onEngagementTemplate(null);
     }
-  }, [mentionTargets, onSelectPartner, onGoalMode, onEngagementTemplate]);
+  }, [mentionTargets, onSelectPartner, onEngagementTemplate, engagementTemplate]);
 
   const demandQueueFull = running && queueFull;
   const submit = useCallback(() => {
@@ -612,13 +598,12 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
               )}
             </div>
 
-            {showPentestControls && (
-              <div ref={modeMenuRef} className="relative">
+            <div ref={modeMenuRef} className="relative">
                 <button
                   type="button"
                   aria-haspopup="listbox"
                   aria-expanded={modeMenuOpen}
-                  title="工作流偏好（用户意图；AgentRow 显示 Session 实际模式）"
+                  title="Graph（用户意图；AgentRow 显示 Session 实际模式）"
                   onClick={() => {
                     setModeMenuOpen((open) => !open);
                     setPartnerMenuOpen(false);
@@ -637,11 +622,11 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                 {modeMenuOpen && (
                   <div
                     role="listbox"
-                    aria-label="工作流偏好"
+                    aria-label="Graph"
                     className="absolute bottom-full left-0 z-30 mb-2 w-64 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
                   >
                     <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
-                      工作流偏好
+                      Graph
                     </p>
                     <button
                       type="button"
@@ -667,7 +652,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                         <Check size={14} className="mt-0.5 shrink-0 text-ink" strokeWidth={2.25} />
                       )}
                     </button>
-                    {ENGAGEMENT_TEMPLATES.map((t) => {
+                    {graphTemplates.map((t) => {
                       const selected = t.id === engagementTemplate;
                       return (
                         <button
@@ -698,24 +683,6 @@ const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer
                   </div>
                 )}
               </div>
-            )}
-
-            {showPentestControls && (
-              <button
-                type="button"
-                aria-pressed={goalModeEnabled}
-                aria-label="Goal mode"
-                title={goalModeEnabled ? "Goal 已开启" : "开启 Goal 模式"}
-                onClick={() => onGoalMode(!goalModeEnabled)}
-                className={`${CHAT_COMPOSER_GOAL_CONTROL_CLASS} transition-colors ${
-                  goalModeEnabled
-                    ? "bg-ink text-on-ink"
-                    : "bg-canvas-inset text-ink-secondary hover:bg-surface-elevated"
-                }`}
-              >
-                Goal
-              </button>
-            )}
           </div>
           <div className={CHAT_COMPOSER_ACTIONS_CLASS}>
             {composerTimerText != null && (

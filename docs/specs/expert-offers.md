@@ -25,7 +25,7 @@
 3. **对话（共享 session）** — 用户与 **Node 上的参与者** 在同一 conversation 协作：
    - **对话对象 = 专家管理列表**（无合成「工作台助手」）。用户在专家管理创建助理/专家（含 `pack_id=default` 通用助理）。
    - **`@ExpertName` / 工具栏选专家** → 点名该专家；系统用 Expert 的 `pack_id` 作 engagement，落到绑定 Node。
-   - 可选 **Goal mode**（长任务，面向执行专家如 pentest）。
+   - **Graph 不指定**（所有专家同一控件）：列出 **该 pack 已声明** 的 Graph；尚未编写 Graph 的专家（含助理）只有不指定。
 
 **Routing primary = product Expert**；Node 是执行座位。`default` 是 pack/seat，不是对话里的独立合成角色。
 
@@ -168,7 +168,7 @@ Composer is intentionally thin:
 
 - **工作台助手 (`default`)** — default partner when no expert is selected; binds to an online Node’s built-in seat.
 - **`@Expert` / 工具栏专家** — mention/picker lists product experts only (no platform Agent peer). Injects `expert_id` / `expert_name` / `engagement` / bound `agent_node_id` (structured pack from the instance, not NLP). **Experts whose bound node is offline are not selectable** (disabled/greyed); do not rely on late dispatch error alone.
-- **Goal mode** — optional long-task switch (+ objective). For execution experts; independent of default chat.
+- **Graph** — 不指定 plus graphs **this pack declares**. Every Expert shows the control; packs with none (including built-in `default` today) list only 不指定.
 - No separate free-form pack picker on the composer (role comes from participant / Expert).
 
 Right panel Status shows engagement when a **real execution** surface is active (target or work products) — not for pure default chat.
