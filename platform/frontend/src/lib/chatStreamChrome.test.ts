@@ -7,9 +7,12 @@ import {
   calendarDayKey,
   formatChatMessageTime,
   isInfraStatusNotice,
+  isLegacyPhaseOnlyStatus,
+  isLegacyTaskPipelinePhase,
   projectStreamWithDaySeparators,
   shouldInsertStreamTimeStamp,
   shouldRenderStatusNotice,
+  snapshotAgentPhase,
   STREAM_TIME_STAMP_GAP_MS,
 } from "./chatStreamChrome.ts";
 
@@ -112,6 +115,23 @@ import {
   assert.equal(projected[0]?.kind, "time_separator");
   assert.equal(projected[1]?.kind, "message");
   console.log("ok: empty live created_at does not wipe/force stamps");
+}
+
+{
+  assert.equal(isLegacyTaskPipelinePhase("intake"), true);
+  assert.equal(isLegacyTaskPipelinePhase("complete"), true);
+  assert.equal(isLegacyTaskPipelinePhase("tool_running"), false);
+  assert.equal(isLegacyPhaseOnlyStatus({ phase: "intake", text: "目标与授权范围检查" }), true);
+  assert.equal(isLegacyPhaseOnlyStatus({ phase: "recon", synthetic: true }), true);
+  assert.equal(isLegacyPhaseOnlyStatus({ text: "Phase: analysis (iter 3)" }), true);
+  assert.equal(isLegacyPhaseOnlyStatus({ phase: "tool_running", text: "http_request" }), false);
+  assert.equal(snapshotAgentPhase({ phase: "intake" }), undefined);
+  assert.equal(snapshotAgentPhase({ phase: "complete" }), undefined);
+  assert.equal(snapshotAgentPhase({ text: "Phase: verify (iter 1)" }), undefined);
+  assert.equal(snapshotAgentPhase({ phase: "tool_running" }), "tool_running");
+  assert.equal(snapshotAgentPhase({}, "running"), undefined, "must not invent intake from running");
+  assert.equal(snapshotAgentPhase({}, "completed"), undefined, "must not invent complete from completed");
+  console.log("ok: legacy Task pipeline phase is unknown; suppressor still hides old ticks");
 }
 
 // --- Centered full datetime when necessary -----------------------------------

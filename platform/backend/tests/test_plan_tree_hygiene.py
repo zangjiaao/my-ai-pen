@@ -1,14 +1,14 @@
 """New / unbound Cases must not invent archaeology plan-phase-* Tasks."""
 
 from app.services.conversation_snapshot import (
+    agent_state_from_checkpoint,
+    agent_state_from_messages,
+    current_kanban_stage,
     ensure_plan_tree_shape,
     kanban_for_snapshot,
     merge_snapshot_plan_tree,
     normalize_kanban_buckets,
-    progress_for_checkpoint,
-    progress_for_phase,
-    todos_for_checkpoint,
-    todos_for_phase,
+    todos_for_plan_tree,
     workflow_kind_for_checkpoint,
 )
 
@@ -45,15 +45,71 @@ def test_empty_workflow_strips_legacy_plan_phase_rows():
     assert out == []
 
 
-def test_phase_helpers_do_not_invent_six_item_checklists():
-    assert todos_for_phase("intake", "running") == []
-    assert todos_for_checkpoint({"state": {"phase": "analysis"}}, "running") == []
-    assert progress_for_phase("recon", "running") == {"current": 0, "total": 0, "percent": 0}
-    assert progress_for_checkpoint({"state": {"phase": "analysis"}}, "running") == {
-        "current": 0,
-        "total": 0,
-        "percent": 0,
+def test_legacy_checkpoint_phase_is_unknown_not_mapped():
+    """Historical Task-era phase / phases_completed: read as unknown — do not map or invent."""
+    checkpoint = {
+        "state": {
+            "phase": "analysis",
+            "phases_completed": ["intake", "recon", "analysis"],
+        }
     }
+    running = agent_state_from_checkpoint(checkpoint, "running")
+    assert running["phase"] is None
+    completed = agent_state_from_checkpoint(checkpoint, "completed")
+    assert completed["phase"] is None
+    missing = agent_state_from_checkpoint(None, "completed")  # type: ignore[arg-type]
+    assert missing["phase"] is None
+
+
+def test_message_archaeology_does_not_invent_intake_or_complete():
+    assert agent_state_from_messages([], [], "running")["phase"] is None
+    assert agent_state_from_messages([], [], "completed")["phase"] is None
+
+
+def test_kanban_does_not_map_intake_report_to_stages():
+    assert current_kanban_stage("running", "executing") == "executing"
+    assert current_kanban_stage("running", None) == "executing"
+    assert current_kanban_stage("created", None) == "idle"
+    work = [{
+        "node_id": "s1",
+        "kind": "surface",
+        "level": "work_item",
+        "status": "pending",
+        "title": "login form",
+    }]
+    kanban = kanban_for_snapshot({}, work, "intake", "running", 0)
+    confirm = next(b for b in kanban["buckets"] if b["id"] == "task-confirmation")
+    assert confirm["status"] == "pending"
+    assert kanban["current_stage"] != "confirming"
+    report = kanban_for_snapshot({}, work, "report", "running", 0)
+    assert report["current_stage"] != "summarizing"
+
+
+def test_todos_for_plan_tree_are_not_keyed_on_six_phase_ids():
+    tree = [
+        {
+            "node_id": "plan-phase-recon",
+            "kind": "phase",
+            "level": "phase",
+            "title": "攻击面发现",
+            "status": "running",
+            "phase": "recon",
+        },
+        {
+            "node_id": "graph-stage-surface",
+            "kind": "phase",
+            "level": "phase",
+            "title": "Surface",
+            "status": "running",
+            "source": "plan",
+        },
+    ]
+    todos = todos_for_plan_tree(tree)
+    ids = {item["id"] for item in todos}
+    assert "recon" not in ids
+    assert "intake" not in ids
+    assert "plan-phase-recon" not in ids
+    assert ids == {"graph-stage-surface"}
 
 
 def test_empty_pentest_kanban_has_no_padded_buckets():

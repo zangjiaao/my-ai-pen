@@ -19,9 +19,7 @@ from app.services.conversation_snapshot import (  # noqa: E402
     checkpoint_assets as _checkpoint_assets,
     checkpoint_findings as _checkpoint_findings,
     checkpoint_plan_tree as _checkpoint_plan_tree,
-    progress_for_checkpoint as _progress_for_checkpoint,
     snapshot_messages as _snapshot_messages,
-    todos_for_checkpoint as _todos_for_checkpoint,
 )
 from app.models.conversation import Conversation  # noqa: E402
 from app.models.message import Message  # noqa: E402
@@ -2355,20 +2353,14 @@ class CheckpointResumeTests(unittest.TestCase):
         }
 
         agent_state = _agent_state_from_checkpoint(checkpoint)
-        progress = _progress_for_checkpoint(checkpoint, "running")
-        todos = _todos_for_checkpoint(checkpoint, "running")
 
-        self.assertEqual(agent_state["phase"], "analysis")
+        self.assertIsNone(agent_state["phase"])
         self.assertEqual(agent_state["activeTool"], "execute")
-        self.assertEqual(progress, {"current": 0, "total": 0, "percent": 0})
-        self.assertEqual(todos, [])
         self.assertEqual(_checkpoint_findings(checkpoint)[0]["id"], "cand-1")
         self.assertEqual(_checkpoint_assets(checkpoint)[0]["address"], "http://target.local")
 
     def test_checkpoint_helpers_tolerate_null_checkpoint(self):
         self.assertEqual(_agent_state_from_checkpoint(None, "running")["phase"], None)
-        self.assertEqual(_progress_for_checkpoint(None, "running"), {"current": 0, "total": 0, "percent": 0})
-        self.assertEqual(_todos_for_checkpoint(None, "running"), [])
         self.assertEqual(_checkpoint_findings(None), [])
         self.assertEqual(_checkpoint_assets(None), [])
         self.assertEqual(_checkpoint_plan_tree(None), [])
@@ -2381,7 +2373,7 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(nodes[0]["node_id"], "plan-1")
         self.assertEqual(nodes[0]["status"], "running")
         self.assertEqual(nodes[0]["endpoint"], "GET http://target.local")
-    def test_checkpoint_completed_current_phase_advances_display_phase(self):
+    def test_checkpoint_completed_current_phase_is_not_advanced(self):
         checkpoint = {
             "reason": "phase_transition",
             "state": {
@@ -2393,12 +2385,8 @@ class CheckpointResumeTests(unittest.TestCase):
         }
 
         agent_state = _agent_state_from_checkpoint(checkpoint, "running")
-        progress = _progress_for_checkpoint(checkpoint, "running")
-        todos = _todos_for_checkpoint(checkpoint, "running")
 
-        self.assertEqual(agent_state["phase"], "verify")
-        self.assertEqual(progress, {"current": 0, "total": 0, "percent": 0})
-        self.assertEqual(todos, [])
+        self.assertIsNone(agent_state["phase"])
 
     def test_user_message_route_separates_resume_from_new_assignment(self):
         self.assertEqual(_user_message_route({"text": "continue"}, "completed")["action"], "completed")

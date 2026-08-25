@@ -8,6 +8,10 @@ frontend has loaded.
 Spec #280 Wave1: panel Findings and Evidence are ledger-pure projections —
 vulnerabilities / evidence tables only. Message archaeology and checkpoint
 shadow vulns must not join those arrays.
+
+Spec #500: leftover Task-era `intake|recon|analysis|verify|report|complete`
+checkpoint fields are unknown — do not map them into Tasks, progress, kanban
+stages, or chat. Expert Graph L1 (`graph-stage-*`) is a different `phase`.
 """
 from __future__ import annotations
 
@@ -28,10 +32,16 @@ from app.models.message import Message
 from app.models.vulnerability import Vulnerability
 
 
-PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"]
 SNAPSHOT_MESSAGE_LIMIT = 120
 SNAPSHOT_TEXT_LIMIT = 2000
 SNAPSHOT_TOOL_STDOUT_LIMIT = 800
+# Retired one-Task-per-conversation pipeline. Historical rows may still store these
+# ids — treat as unknown (do not map, do not invent a Case/Tasks/progress/chat pipeline).
+_LEGACY_TASK_PIPELINE_PHASES = frozenset({"intake", "recon", "analysis", "verify", "report", "complete"})
+
+
+def is_legacy_task_pipeline_phase(value: object) -> bool:
+    return str(value or "").strip() in _LEGACY_TASK_PIPELINE_PHASES
 
 
 def _normalize_finding_severity(value: object) -> str | None:
@@ -42,14 +52,6 @@ def _normalize_finding_severity(value: object) -> str | None:
     if severity in {"critical", "high", "medium", "low", "info"}:
         return severity
     return None
-PHASE_LABELS = {
-    "intake": "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
-    "recon": "\u653b\u51fb\u9762\u53d1\u73b0",
-    "analysis": "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
-    "verify": "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
-    "report": "\u62a5\u544a\u6574\u7406",
-    "complete": "\u4efb\u52a1\u5b8c\u6210",
-}
 KANBAN_BUCKET_TITLES = {
     "task-confirmation": "\u4efb\u52a1\u786e\u8ba4",
     "attack-surface": "\u653b\u51fb\u9762\u8bc6\u522b",
@@ -301,7 +303,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         declared_plan_owners,
     )
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
-    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conv_status, workflow_kind)
+    plan_tree = ensure_plan_tree_shape(raw_plan_tree, None, set(), conv_status, workflow_kind)
     if conv_status in {"completed", "incomplete"} and workflow_kind == "pentest":
         plan_tree = normalize_terminal_pentest_plan_tree(plan_tree, conv_status)
     kanban = kanban_for_snapshot(
@@ -1383,35 +1385,20 @@ def pending_approvals_from_messages(messages: list[Message]) -> list[dict]:
     return pending
 
 
-def checkpoint_completed(checkpoint: dict) -> set[str]:
-    if not isinstance(checkpoint, dict):
-        return set()
-    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
-    completed = state.get("phases_completed") or checkpoint.get("phases_completed") or []
-    return {str(item) for item in completed if str(item) in PHASES}
-
-
-def checkpoint_phase(checkpoint: dict, status: str) -> str | None:
-    if not isinstance(checkpoint, dict):
-        return "report" if status == "completed" else None
-    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
-    phase = state.get("phase") or checkpoint.get("phase")
-    completed = checkpoint_completed(checkpoint)
-    if status == "completed":
-        return "report"
-    if phase in PHASES and phase in completed and status == "running":
-        next_index = PHASES.index(phase) + 1
-        while next_index < len(PHASES) and PHASES[next_index] in completed:
-            next_index += 1
-        return PHASES[next_index] if next_index < len(PHASES) else phase
-    return phase if phase in PHASES else None
+def _display_agent_phase(raw: object) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or is_legacy_task_pipeline_phase(text):
+        return None
+    return text
 
 
 def agent_state_from_checkpoint(checkpoint: dict, status: str = "running") -> dict:
     if not isinstance(checkpoint, dict):
         checkpoint = {}
     state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
-    phase = checkpoint_phase(checkpoint, status)
+    phase = _display_agent_phase(state.get("phase") or checkpoint.get("phase"))
     recent_tools = state.get("recent_tool_runs") if isinstance(state.get("recent_tool_runs"), list) else []
     active_tool = None
     if recent_tools:
@@ -1429,7 +1416,7 @@ def agent_state_from_checkpoint(checkpoint: dict, status: str = "running") -> di
     }
 
 
-def agent_state_from_messages(messages: list[Message], evidence: list[Evidence], status: str) -> dict:
+def agent_state_from_messages(messages: list[Message], evidence: list[Evidence], _status: str) -> dict:
     phase = None
     iteration = None
     active_tool = None
@@ -1437,7 +1424,9 @@ def agent_state_from_messages(messages: list[Message], evidence: list[Evidence],
     intake_status = None
     for m in reversed(messages):
         if m.msg_type == "status" and isinstance(m.content, dict):
-            phase = m.content.get("phase") or parse_phase(str(m.content.get("text", "")))
+            phase = _display_agent_phase(
+                m.content.get("phase") or parse_phase(str(m.content.get("text", "")))
+            )
             iteration = m.content.get("iteration")
             active_tool = m.content.get("active_tool")
             intake_result = m.content.get("intake_result")
@@ -1450,8 +1439,6 @@ def agent_state_from_messages(messages: list[Message], evidence: list[Evidence],
                 break
     if not active_tool and evidence:
         active_tool = evidence[0].source_tool or evidence[0].type
-    if not phase:
-        phase = "complete" if status == "completed" else "intake" if status == "running" else None
     return {"phase": phase, "iteration": iteration, "activeTool": active_tool, "intakeResult": intake_result, "intakeStatus": intake_status}
 
 
@@ -1460,7 +1447,7 @@ def parse_phase(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | None, status: str, elapsed_seconds: int) -> dict:
+def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], _phase: str | None, status: str, elapsed_seconds: int) -> dict:
     checkpoint_kanban = checkpoint.get("kanban") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("kanban"), dict) else None
     checkpoint_kind = workflow_kind_for_checkpoint(checkpoint)
     if status in {"completed", "incomplete"} and checkpoint_kind == "pentest":
@@ -1473,7 +1460,7 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
         kanban["totals"] = totals
         kanban["buckets"] = normalize_kanban_buckets(kanban.get("buckets") or [], kanban.get("workflow_kind"))
         kanban["elapsed_seconds"] = elapsed_seconds
-        kanban["current_stage"] = current_kanban_stage(phase, status, checkpoint, kanban.get("current_stage"))
+        kanban["current_stage"] = current_kanban_stage(status, kanban.get("current_stage"))
         return kanban
 
     work = [node for node in plan_tree or [] if isinstance(node, dict) and str(node.get("level") or "work_item") == "work_item"]
@@ -1519,8 +1506,7 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
         }
     processed = sum(1 for node in tests if is_terminal_plan_node(node))
     discovered = len(tests) or len(surfaces)
-    phase_index = PHASES.index(phase) if phase in PHASES else -1
-    task_confirmed = status in {"completed", "incomplete"} or phase_index > 0
+    task_confirmed = status in {"completed", "incomplete"}
     summary_total = 1 if tests or verification else 0
     summary_done = status in {"completed", "incomplete"}
     totals = {
@@ -1537,14 +1523,14 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
     return {
         "workflow_kind": "pentest",
         "elapsed_seconds": elapsed_seconds,
-        "current_stage": current_kanban_stage(phase, status, checkpoint, None),
+        "current_stage": current_kanban_stage(status, None),
         "totals": totals,
         "buckets": [
-            {"id": "task-confirmation", "title": KANBAN_BUCKET_TITLES["task-confirmation"], "done": 1 if task_confirmed else 0, "total": 1, "status": "done" if task_confirmed else "running" if phase == "intake" else "pending"},
-            {"id": "attack-surface", "title": KANBAN_BUCKET_TITLES["attack-surface"], "done": sum(1 for node in surfaces if is_terminal_plan_node(node)), "total": len(surfaces), "status": bucket_status(surfaces, phase == "recon")},
-            {"id": "vulnerability-discovery", "title": KANBAN_BUCKET_TITLES["vulnerability-discovery"], "done": processed, "total": len(tests), "status": bucket_status(tests, phase in {"analysis", "verify"})},
-            {"id": "vulnerability-verification", "title": KANBAN_BUCKET_TITLES["vulnerability-verification"], "done": sum(1 for node in verification if is_terminal_plan_node(node)), "total": len(verification), "status": bucket_status(verification, phase == "verify")},
-            {"id": "task-summary", "title": KANBAN_BUCKET_TITLES["task-summary"], "done": summary_total if summary_done else 0, "total": summary_total, "status": "done" if summary_done else "running" if phase == "report" else "pending"},
+            {"id": "task-confirmation", "title": KANBAN_BUCKET_TITLES["task-confirmation"], "done": 1 if task_confirmed else 0, "total": 1, "status": "done" if task_confirmed else "pending"},
+            {"id": "attack-surface", "title": KANBAN_BUCKET_TITLES["attack-surface"], "done": sum(1 for node in surfaces if is_terminal_plan_node(node)), "total": len(surfaces), "status": bucket_status(surfaces, False)},
+            {"id": "vulnerability-discovery", "title": KANBAN_BUCKET_TITLES["vulnerability-discovery"], "done": processed, "total": len(tests), "status": bucket_status(tests, False)},
+            {"id": "vulnerability-verification", "title": KANBAN_BUCKET_TITLES["vulnerability-verification"], "done": sum(1 for node in verification if is_terminal_plan_node(node)), "total": len(verification), "status": bucket_status(verification, False)},
+            {"id": "task-summary", "title": KANBAN_BUCKET_TITLES["task-summary"], "done": summary_total if summary_done else 0, "total": summary_total, "status": "done" if summary_done else "pending"},
         ],
     }
 
@@ -1708,18 +1694,14 @@ def workflow_kind_for_checkpoint(checkpoint: dict) -> str:
     return ""
 
 
-def current_kanban_stage(phase: str | None, status: str, checkpoint: dict, fallback) -> str:
+def current_kanban_stage(status: str, fallback) -> str:
     if status == "completed":
         return "completed"
     if status == "incomplete":
         return "incomplete"
-    if phase == "intake":
-        return "confirming"
-    if phase == "report":
-        return "summarizing"
     if fallback in {"confirming", "executing", "summarizing", "completed", "incomplete"}:
         return str(fallback)
-    return "executing"
+    return "executing" if status == "running" else "idle"
 
 
 def progress_for_kanban(kanban: dict) -> dict:
@@ -1798,50 +1780,22 @@ def safe_percent(current, total) -> int:
     return round((current_value / total_value) * 100) if total_value else 0
 
 
-def progress_for_phase(_phase: str | None, _status: str) -> dict:
-    """Do not invent a 6-phase denominator. Callers should use kanban totals."""
-    return {"current": 0, "total": 0, "percent": 0}
-
-
-
-
 def todos_for_plan_tree(plan_tree: list[dict]) -> list[dict]:
-    by_phase: dict[str, dict] = {}
+    out: list[dict] = []
     for node in plan_tree or []:
         if not isinstance(node, dict):
             continue
         if node.get("level") != "phase" and node.get("kind") != "phase":
             continue
-        node_id = str(node.get("node_id") or "")
-        phase = node_id.removeprefix("plan-phase-") if node_id.startswith("plan-phase-") else str(node.get("phase") or "")
-        if phase in PHASES:
-            by_phase[phase] = node
-    if not by_phase:
-        return []
-    return [
-        {
-            "id": phase,
-            "title": str(by_phase[phase].get("title") or PHASE_LABELS.get(phase) or phase),
-            "status": str(by_phase[phase].get("status") or "pending"),
-        }
-        for phase in PHASES
-        if phase in by_phase
-    ]
-
-
-def todos_for_phase(_phase: str | None, _status: str) -> list[dict]:
-    """Legacy 6-phase checklist — no longer invented for empty Cases."""
-    return []
-
-
-def progress_for_checkpoint(_checkpoint: dict, _status: str) -> dict:
-    """Do not invent a 6-phase denominator from checkpoint.phase."""
-    return {"current": 0, "total": 0, "percent": 0}
-
-
-def todos_for_checkpoint(_checkpoint: dict, _status: str) -> list[dict]:
-    """Legacy 6-phase checklist — no longer invented from checkpoint.phase."""
-    return []
+        node_id = str(node.get("node_id") or node.get("id") or "")
+        if not node_id or node_id.startswith("plan-phase-") or is_legacy_task_pipeline_phase(node_id):
+            continue
+        out.append({
+            "id": node_id,
+            "title": str(node.get("title") or node_id),
+            "status": str(node.get("status") or "pending"),
+        })
+    return out
 
 
 

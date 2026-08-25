@@ -18,7 +18,7 @@ from app.services.platform_agent import (
     answer_platform_chat,
     answer_snapshot_qa,
 )
-from app.services.conversation_snapshot import build_conversation_snapshot
+from app.services.conversation_snapshot import build_conversation_snapshot, is_legacy_task_pipeline_phase
 from app.services.expert_offers import (
     ACTION_USAGE,
     dispatch_gate_error,
@@ -2772,7 +2772,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("status_update", "phase_changed"):
             msg_type = "status"
-            # Prefer Node4 message / agent_phase over legacy phase+iteration template.
+            # Prefer Node4 message / agent_phase over leftover Task-era phase ticks.
             human = str(msg.get("message") or msg.get("text") or "").strip()
             phase = msg.get("agent_phase") or msg.get("phase")
             active_tool = msg.get("active_tool")
@@ -2780,10 +2780,10 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 text = human
             elif active_tool:
                 text = f"{active_tool}"
-            elif phase:
+            elif phase and not is_legacy_task_pipeline_phase(phase):
                 text = str(phase)
             else:
-                text = f"Phase: {msg.get('phase', '')} (iter {msg.get('iteration', '')})"
+                return None
             # Skip persisting pure harness ticks that flood the transcript.
             if human.lower() in {"model turn"} or (
                 human.lower().endswith(" running") and human.lower() not in {"still running"}

@@ -47,7 +47,6 @@ import {
   recordMessageType,
   shouldUpdateMessageRecord,
 } from "../lib/conversationMessageMerge";
-import { phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
   legacyWorkerDisplayName,
@@ -83,8 +82,10 @@ import {
   omitReleasedWorkers,
 } from "../lib/panelAgentsState";
 import {
+  isLegacyTaskPipelinePhase,
   projectStreamWithDaySeparators,
   shouldRenderStatusNotice,
+  snapshotAgentPhase,
 } from "../lib/chatStreamChrome";
 import {
   buildPendingSendSuccessEvent,
@@ -1792,7 +1793,12 @@ export default function ConversationPage() {
     },
     intake_update: (msg) => {
       const m = msg as Record<string, unknown>;
-      const phase = typeof m.phase === "string" ? m.phase : "intake";
+      const rawPhase = typeof m.agent_phase === "string"
+        ? m.agent_phase
+        : typeof m.phase === "string"
+          ? m.phase
+          : undefined;
+      const phase = rawPhase && !isLegacyTaskPipelinePhase(rawPhase) ? rawPhase : undefined;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
@@ -1800,20 +1806,18 @@ export default function ConversationPage() {
       if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
-      if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
-        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
-      }
     },
     // thinking / reasoning / agent_thinking: streamed via upsertStreamedAgentText (handlers below).
     status_update: (msg) => {
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       // Prefer agent_phase from Node4; legacy used phase.
-      const phase = typeof m.agent_phase === "string"
+      const rawPhase = typeof m.agent_phase === "string"
         ? m.agent_phase
         : typeof m.phase === "string"
           ? m.phase
           : undefined;
+      const phase = rawPhase && !isLegacyTaskPipelinePhase(rawPhase) ? rawPhase : undefined;
       const activeTool = m.active_tool != null ? String(m.active_tool) : undefined;
       const currentDetail = typeof m.current_detail === "string" ? m.current_detail : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
@@ -1876,16 +1880,6 @@ export default function ConversationPage() {
             message_id: m.message_id,
           }),
         );
-      } else if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
-        addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-          text: phaseLabel(phase),
-          phase,
-          iteration: m.iteration,
-          active_tool: m.active_tool,
-          status: m.status,
-          intake_result: m.intake_result,
-          message_id: m.message_id,
-        }));
       }
     },
     engagement_closeout: (msg) => {
@@ -3525,8 +3519,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
           {rightPanelOpen && (
             <RightPanel
               loading={caseSurfaceLoading}
-              phase={agentState.phase as string}
-              activeTool={agentState.activeTool as string}
               intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
               intakeStatus={agentState.intakeStatus as string | undefined}
               progress={progress}
@@ -3726,7 +3718,7 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   const normalizedStatus = String(status || "created") as Conversation["status"];
   const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
   const lastStatus = last(statusMessages)?.content || {};
-  const phase = readString(lastStatus.phase) || parsePhase(readString(lastStatus.text)) || (normalizedStatus === "completed" ? "complete" : normalizedStatus === "running" ? "intake" : undefined);
+  const phase = snapshotAgentPhase(lastStatus);
   const lastTool = last(messages.filter(m => m.msg_type === "tool_call" && readString(m.content.tool_name)));
   const activeTool = readString(lastStatus.active_tool) || readString(lastTool?.content.tool_name);
   const decisions = new Set(messages.filter(m => m.msg_type === "decision").map(m => readString(m.content.request_id)).filter(Boolean));
@@ -3863,20 +3855,8 @@ function strixTodoPriority(value: unknown, index: number): number {
   return (base[String(value || "").toLowerCase()] ?? 30) + index;
 }
 
-function shouldRenderPhaseStatus(message: Record<string, unknown>, workflowKind: string): boolean {
-  if (workflowKind === "pentest") return false;
-  const kanban = message.kanban;
-  if (isKanbanSummary(kanban) && kanban.workflow_kind === "pentest") return false;
-  return true;
-}
-
 function hasValues(value: Record<string, unknown> | undefined): boolean {
   return Boolean(value && Object.values(value).some(v => v !== undefined && v !== null && v !== ""));
-}
-
-function parsePhase(text: string): string | undefined {
-  const match = text.match(/Phase:\s*([^\s(]+)/);
-  return match?.[1];
 }
 
 function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIdentity = "pentest"): Record<string, unknown> {
