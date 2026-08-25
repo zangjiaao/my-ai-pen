@@ -110,6 +110,7 @@ import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import {
   composerEngagementWireFields,
+  composerTemplateForPack,
   expertLabel,
   isExpertSchedulable,
   packDeclaresEngagementTemplate,
@@ -2005,6 +2006,7 @@ export default function ConversationPage() {
       if (match) {
         selectedMentionRef.current = match;
         setSelectedMention(match);
+        setEngagementTemplate((current) => composerTemplateForPack(match.packId, current));
       }
     },
     // Spec #278 D3: sync composer Workflow control only after mode settlement (once).
@@ -2677,10 +2679,8 @@ export default function ConversationPage() {
     markComposerRestoreHandled();
     selectedMentionRef.current = target;
     setSelectedMention(target);
-    if (!packDeclaresEngagementTemplate(target.packId, engagementTemplate)) {
-      setEngagementTemplate(null);
-    }
-  }, [activeId, markComposerRestoreHandled, engagementTemplate]);
+    setEngagementTemplate((current) => composerTemplateForPack(target.packId, current));
+  }, [activeId, markComposerRestoreHandled]);
 
   const handleEngagementTemplate = useCallback((value: EngagementTemplateId | null) => {
     if (!shouldAcceptComposerChipOverride({
@@ -2735,18 +2735,17 @@ export default function ConversationPage() {
     const text = opts.text.trim() || displayText;
     if (!displayText) return;
     const goalObjectiveText = String(opts.goalObjective || "").trim();
-    // Explicit goal_mode true|false so platform sticky task can clear Goal-off
-    // (Grok: only explicit off stops Goal outer — not Esc/interrupt).
-    // When off, stamp user_stopped so Case Workset can terminal goal_stopped on assign/settle.
+    // Composer has no Goal chip. Conversation assigns send explicit Goal-off so
+    // sticky task.goal_mode (Schedules / leftover) cannot keep Workset Goal running.
+    // Grok: only explicit off stops Goal outer — not Esc/interrupt. Stamp user_stopped
+    // so Case Workset can terminal goal_stopped on assign/settle.
     const goalPayload: Record<string, unknown> =
       opts.goalMode === true
         ? {
             goal_mode: true,
             ...(goalObjectiveText ? { goal_objective: goalObjectiveText } : {}),
           }
-        : opts.goalMode === false
-          ? { goal_mode: false, user_stopped: true }
-          : {};
+        : { goal_mode: false, user_stopped: true };
 
     // Expert from toolbar picker (no @ required) or inline @mention token.
     const selectedCandidate = selectedMentionRef.current || selectedMention;
@@ -3080,6 +3079,7 @@ export default function ConversationPage() {
             scope,
             forceNewConversation: false,
             conversationId: convId,
+            goalMode: false,
           });
         } catch {
           // loadConversation / launch already surface errors; keep composer usable.
@@ -3161,6 +3161,7 @@ export default function ConversationPage() {
     await launchTaskMessage({
       displayText,
       text,
+      goalMode: false,
       engagement: resolved?.kind === "expert" ? resolved.packId : undefined,
       ...(usePendingAsset
         ? {

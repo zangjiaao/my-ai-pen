@@ -51,7 +51,7 @@ Rules:
 3. Mention expert missing, disabled, or not schedulable → fall back to #299 default; do not keep a dead chip.  
 4. **Blank `/`** (no Case) → #299 default. Optional `sessionStorage` may keep an **unsent blank-home draft** (partner + Graph) and **must** be discarded as soon as a Case exists.  
 5. Switching Case A → Case B restores **B**, never leaks A’s composer. Opening blank home clears Case composer (no bleed onto a new chat).  
-6. Heartbeat `GET /state` / mid-session snapshot **must not** overwrite composer (#278 D3). Only: this once-per-open restore, user menu edits, authorized `partner_switch`, and `work_mode_settled`.  
+6. Heartbeat `GET /state` / mid-session snapshot **must not** overwrite composer (#278 D3). Only: this once-per-open restore, user menu edits, authorized `partner_switch` (same pack-declared Graph filter as a manual partner pick), and `work_mode_settled`.  
 7. Unsent Mention / Graph change on an **existing** Case is a draft. Remount of that Case restores last **committed** Case/Session fields (send or authorized transfer / mode settlement), not an unsent chip flip. Blank-home draft is the only unsent exception.
 8. While Case snapshot or first message page is loading, render conversation, composer, and any open right-panel skeletons. On blank/new-chat mount, keep the composer skeleton until home routing and the expert catalog/default-partner pick settle; an honestly empty or all-offline catalog may render the real no-partner composer. The composer must not infer a temporary partner from mention-catalog order.
 
@@ -67,7 +67,7 @@ Next send still follows existing wire law: explicit composer Graph is permission
 | **L2** | Partner restore source is Case current Mention (`task.expert_id`). |
 | **L3** | Graph restore source is Participant Session `work_mode` / `graph_id` for **that** expert, filtered to graphs **that pack declares**. |
 | **L4** | Case sticky `engagement_template` **must not** set composer Graph on restore. Session Free + sticky Graph → 不指定. |
-| **L5** | Composer has no Goal chip. Do not restore `task.goal_mode` onto the bar. |
+| **L5** | Composer has no Goal chip. Do not restore `task.goal_mode` onto the bar. Conversation send wires **explicit Goal-off** so sticky Goal-on (Schedules / leftover) cannot keep Workset Goal running. |
 | **L6** | Restore runs **once per Case open / switch**, not on snapshot heartbeat. |
 | **L7** | Blank home uses #299. No Case ⇒ no Case restore. |
 | **L8** | Blank-home `sessionStorage` (if implemented) is not Case SOT and is dropped when a Case id exists. |

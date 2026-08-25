@@ -96,6 +96,14 @@ export function packDeclaresEngagementTemplate(
   return engagementTemplatesForPack(packId).some((t) => t.id === raw);
 }
 
+/** Keep the current Graph chip only when the new pack declares it; else 不指定. */
+export function composerTemplateForPack(
+  packId: string | null | undefined,
+  template: EngagementTemplateId | null,
+): EngagementTemplateId | null {
+  return packDeclaresEngagementTemplate(packId, template) ? template : null;
+}
+
 /**
  * Spec #284 G6: structured fields for WS user_message when user selected a product Graph.
  * Case PUT sticky alone is not mode authority — this-turn wire must carry the template.

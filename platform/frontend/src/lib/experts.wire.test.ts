@@ -9,6 +9,7 @@ import {
   engagementTemplatesForPack,
   FREE_COMPOSER_WIRE_ALIASES,
   packDeclaresEngagementTemplate,
+  composerTemplateForPack,
 } from "./experts";
 
 function assert(cond: unknown, msg: string): void {
@@ -20,6 +21,15 @@ assert(engagementTemplatesForPack("default").length === 0, "default currently de
 assert(engagementTemplatesForPack("code-audit").length === 0, "other packs currently declare none");
 assert(packDeclaresEngagementTemplate("pentest", "app_assessment"), "pentest declares app_assessment");
 assert(!packDeclaresEngagementTemplate("default", "app_assessment"), "assistant does not declare pentest Graphs");
+assert(
+  composerTemplateForPack("pentest", "app_assessment") === "app_assessment",
+  "handoff/manual partner keep Graph the pack declares",
+);
+assert(
+  composerTemplateForPack("default", "app_assessment") === null,
+  "handoff to undeclared pack drops Graph to 不指定",
+);
+assert(composerTemplateForPack("pentest", null) === null, "不指定 stays 不指定");
 
 // G6: product Graph selected on a declaring pack → engagement_template on wire
 for (const t of ENGAGEMENT_TEMPLATES) {

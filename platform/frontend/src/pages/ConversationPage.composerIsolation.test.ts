@@ -23,6 +23,16 @@ assert.match(
 );
 assert.match(
   pageSrc,
+  /await launchTaskMessage\(\{[\s\S]{0,400}goalMode:\s*false/,
+  "composer send must wire explicit Goal-off so sticky Goal-on clears",
+);
+assert.match(
+  pageSrc,
+  /partner_switch:[\s\S]{0,900}composerTemplateForPack/,
+  "authorized handoff must drop Graph the new pack does not declare",
+);
+assert.match(
+  pageSrc,
   /SessionDemandQueue/,
   "queued user text must render as list-tail chrome, not composer draft",
 );
