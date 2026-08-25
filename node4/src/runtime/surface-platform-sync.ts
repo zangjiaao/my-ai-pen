@@ -50,9 +50,11 @@ export function surfaceRowToPlatformPayload(row: SurfaceRow): Record<string, unk
     status: row.status,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    // Spec #413: dual-write case_tested for FE TESTED chip (sticky true).
-    case_tested: row.case_tested === true,
+    coverage: row.coverage,
   };
+  if (row.coverage_skip_reason) out.coverage_skip_reason = row.coverage_skip_reason;
+  if (row.coverage_marked_by) out.coverage_marked_by = row.coverage_marked_by;
+  if (row.coverage_marked_at) out.coverage_marked_at = row.coverage_marked_at;
   if (row.kind) out.kind = row.kind;
   if (row.auth) out.auth = row.auth;
   if (row.note) out.note = row.note;

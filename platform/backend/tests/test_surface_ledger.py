@@ -188,7 +188,7 @@ class TestSurfaceStatusMachine(unittest.TestCase):
         self.assertEqual(resolve_upsert_status(None, "in_probe"), "touched")
         self.assertEqual(resolve_upsert_status(None, "touched"), "touched")
         self.assertEqual(resolve_upsert_status(None, None), "seen")
-        self.assertEqual(resolve_upsert_status("open", "deadend"), "deadend")
+        self.assertEqual(resolve_upsert_status("open", "deadend"), "seen")
         self.assertEqual(resolve_upsert_status("seen", "probed"), "touched")
 
     def test_no_lateral_terminals(self):
@@ -254,7 +254,7 @@ class TestSurfaceLedgerStore(unittest.TestCase):
         self.assertEqual(row["status"], "seen")
 
     def test_normalize_preserves_case_tested_from_dual_write(self):
-        """Spec #413: Node surface_upsert must not drop case_tested (TESTED chip SoT)."""
+        """Spec #413: Node surface_upsert may still carry case_tested as audit (not TESTED chip)."""
         row = normalize_surface_row(
             _row(status="touched", case_tested=True, source="traffic"),
             conversation_id="conv-a",
@@ -312,6 +312,85 @@ class TestSurfaceLedgerStore(unittest.TestCase):
         ctx2, landed2 = merge_surfaces_into_context(ctx, later, allow_booked=False)
         self.assertTrue(ctx2["surface_ledger"]["surfaces"][0]["case_tested"])
         self.assertTrue(landed2[0]["case_tested"])
+
+    def test_coverage_work_state_from_mark_dual_write(self):
+        """Spec #518: coverage is Agent-maintained; unmark must not be sticky-OR."""
+        marked = extract_surfaces_from_upsert_message(
+            {
+                "conversation_id": "conv-a",
+                "surfaces": [
+                    {
+                        "origin_key": "https://example.com:443",
+                        "path_key": "/login",
+                        "location": "https://example.com/login",
+                        "status": "seen",
+                        "coverage": "tested",
+                        "coverage_marked_by": "pentest",
+                    }
+                ],
+            },
+            conversation_id="conv-a",
+        )
+        ctx, landed = merge_surfaces_into_context({}, marked, allow_booked=False)
+        self.assertEqual(landed[0]["coverage"], "tested")
+        self.assertEqual(ctx["surface_ledger"]["surfaces"][0]["coverage"], "tested")
+
+        unmarked = extract_surfaces_from_upsert_message(
+            {
+                "conversation_id": "conv-a",
+                "surfaces": [
+                    {
+                        "origin_key": "https://example.com:443",
+                        "path_key": "/login",
+                        "location": "https://example.com/login",
+                        "status": "seen",
+                        "coverage": "untested",
+                    }
+                ],
+            },
+            conversation_id="conv-a",
+        )
+        ctx2, landed2 = merge_surfaces_into_context(ctx, unmarked, allow_booked=False)
+        self.assertEqual(landed2[0]["coverage"], "untested")
+        self.assertEqual(ctx2["surface_ledger"]["surfaces"][0]["coverage"], "untested")
+
+        traffic = extract_surfaces_from_upsert_message(
+            {
+                "conversation_id": "conv-a",
+                "surfaces": [
+                    {
+                        "origin_key": "https://example.com:443",
+                        "path_key": "/login",
+                        "location": "https://example.com/login",
+                        "status": "touched",
+                        "source": "traffic",
+                    }
+                ],
+            },
+            conversation_id="conv-a",
+        )
+        # Traffic omit coverage → keep existing work-state.
+        ctx3, _ = merge_surfaces_into_context(ctx, traffic, allow_booked=False)
+        self.assertEqual(ctx3["surface_ledger"]["surfaces"][0]["coverage"], "tested")
+
+    def test_legacy_deadend_status_maps_to_skipped_coverage(self):
+        row = normalize_surface_row(
+            _row(status="deadend"),
+            conversation_id="conv-a",
+        )
+        assert row is not None
+        self.assertEqual(row["coverage"], "skipped")
+        self.assertEqual(row["coverage_skip_reason"], "deadend")
+        self.assertEqual(row["status"], "touched")
+
+        roe = normalize_surface_row(
+            _row(status="skipped_roe"),
+            conversation_id="conv-a",
+        )
+        assert roe is not None
+        self.assertEqual(roe["coverage"], "skipped")
+        self.assertEqual(roe["coverage_skip_reason"], "roe")
+        self.assertEqual(roe["status"], "touched")
 
     def test_identity_merge_methods_params_no_duplicate_rows(self):
         a = normalize_surface_row(

@@ -483,10 +483,9 @@ const baseTask: TaskEnvelope = {
 
   // #411: NEW → TESTED coverage; priors ≠ this-Case TESTED / coverage complete
   ok(
-    /\*\*NEW\*\*/i.test(workBody) &&
-      /\*\*TESTED\*\*/i.test(workBody) &&
-      /\*\*NEW\*\*[^*]*→\s*\*\*TESTED\*\*/i.test(workBody),
-    "T3 work.md: NEW → TESTED primary duty",
+    /surface\(op=mark\)/i.test(workBody) &&
+      /\*\*untested\*\*[^*]*→\s*\*\*tested\*\*/i.test(workBody),
+    "T3 work.md: untested → tested via surface(op=mark)",
   );
   ok(
     /priors/i.test(workBody) &&
@@ -494,8 +493,8 @@ const baseTask: TaskEnvelope = {
     "T3 work.md: priors ≠ this-Case TESTED / ≠ coverage complete",
   );
   ok(
-    /cannot fake TESTED/i.test(workBody) || /upsert optional.*cannot fake TESTED/i.test(workBody),
-    "T3 work.md: upsert cannot fake TESTED",
+    /cannot invent identities/i.test(workBody) || /cannot write coverage/i.test(workBody),
+    "T3 work.md: upsert cannot invent identities / write coverage",
   );
   ok(
     /Coverage honesty/i.test(workBody) &&

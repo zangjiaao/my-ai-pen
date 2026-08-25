@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { createMutex } from "../runtime/concurrency.js";
 import { pathKey, pathsMatch } from "../runtime/subagent-booking.js";
 import type { SubagentSurface } from "../runtime/subagent-result.js";
+import { TODO_DEADEND_NOTE_RETIRED_ERROR } from "./surface-coverage.js";
 
 export type SurfaceStatus =
   | "open"
@@ -340,7 +341,7 @@ export const SURFACE_PRODUCER_NODES = new Set(["surface", "recon"]);
 
 /**
  * Pure gate for Graph todo(done). Surface working store is coverage truth (#371: SQLite SoT).
- * Matchers may be sync (legacy ledger) or async (SurfaceSqliteStore).
+ * Spec #518: gate only reads the ledger. note=deadend|skipped_roe does not write coverage.
  */
 export async function assertTodoDoneAllowed(input: {
   task?: string;
@@ -351,84 +352,41 @@ export async function assertTodoDoneAllowed(input: {
     actionable: number;
     open_preview: string[];
   };
-  hasActedMatch: (text: string) => boolean | Promise<boolean>;
-  findByLocationHint: (
-    text: string,
-  ) =>
-    | { location: string }
-    | undefined
-    | Promise<{ location: string } | undefined>;
-}): Promise<
-  | { ok: true; ledgerOp?: { op: "deadend" | "skipped_roe"; location: string; note?: string } }
-  | { ok: false; error: string }
-> {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const task = String(input.task || "").trim();
   const phase = String(input.phase || "").trim();
   const note = String(input.note || "").trim();
   const { summary } = input;
 
-  // No ledger content → no gate
   if (summary.total < 1) return { ok: true };
-
-  // All actionable cleared
   if (summary.actionable < 1) return { ok: true };
 
-  const blob = `${task} ${phase} ${note}`;
+  if (/^(deadend|skipped_roe)\b/i.test(note)) {
+    return { ok: false, error: `error: ${TODO_DEADEND_NOTE_RETIRED_ERROR}` };
+  }
+
   const meta =
     /report|汇总|validate|台账|prior\s*re-?verif|检查台账/i.test(task) ||
     /report|汇总|validate/i.test(phase);
 
-  // Explicit deadend / skip with optional location
-  const deadendM = note.match(/^(deadend|skipped_roe)\b[:\s]*(.*)$/i);
-  if (deadendM) {
-    const kind = deadendM[1]!.toLowerCase() === "skipped_roe" ? "skipped_roe" : "deadend";
-    const rest = (deadendM[2] || "").trim();
-    const hit = await input.findByLocationHint(rest || task || note);
-    if (hit) {
-      return {
-        ok: true,
-        ledgerOp: { op: kind, location: hit.location, note: note.slice(0, 500) },
-      };
-    }
-    // Allow category-level deadend/skip without path when note is explicit
-    return { ok: true };
-  }
-
-  // probed/booked note — need acted match or path in ledger terminal
-  if (/^(probed|booked)\b/i.test(note)) {
-    if (await input.hasActedMatch(blob)) return { ok: true };
-    return {
-      ok: false,
-      error:
-        "error: todo(done) note=probed|booked requires a ledger surface path that is already probed/booked. " +
-        `Open/in_probe (${summary.actionable}): ${summary.open_preview.join(", ") || "(none)"}. ` +
-        "Dispatch subagent on an open surface, or note=deadend:<path> / skipped_roe:<path>.",
-    };
-  }
-
-  // n/a for meta tasks only
-  if (/^(n\/a|na|skip)\b/i.test(note)) {
+  if (/^(n\/a|na)\b/i.test(note)) {
     if (meta) return { ok: true };
     return {
       ok: false,
       error:
-        "error: note=n/a only for meta/report tasks. For attack categories: probe open surfaces or note=deadend|skipped_roe.",
+        "error: note=n/a only for meta/report tasks. For attack categories: surface(op=mark) after testing or surface(op=skip, reason=deadend|roe).",
     };
   }
 
-  // Path already acted appears in task/note
-  if (await input.hasActedMatch(blob)) return { ok: true };
-
-  // Meta task with any note
   if (meta && note.length >= 2) return { ok: true };
 
   const preview = summary.open_preview.join(", ") || "(no preview)";
   return {
     ok: false,
     error:
-      `error: Graph todo(done) blocked — surface ledger still has ${summary.actionable} open/in_probe path(s): ${preview}. ` +
+      `error: Graph todo(done) blocked — surface ledger still has ${summary.actionable} open path(s): ${preview}. ` +
       "Do not batch-flip categories without act. Options: (1) subagent on an open path, " +
-      "(2) note=deadend:<path> or skipped_roe:<path>, (3) note=probed after ledger shows probed. " +
+      "(2) surface(op=mark) after testing that identity, (3) surface(op=skip, reason=deadend|roe). " +
       `Task was: ${task || phase || "(phase)"}`,
   };
 }

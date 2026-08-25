@@ -88,20 +88,19 @@ Store purpose on the **Traffic exchange** (Node collect + dual-write if Traffic 
 ### L4 — Operator TESTED
 
 ```text
-TESTED  ≔  this Case has ≥1 exchange with purpose=test on that identity
-           (single test request is enough; re-verify old vulns counts)
-未测    ≔  no test-purpose traffic this Case
+Traffic purpose=test  ≔  audit: this Case had ≥1 test-purpose exchange on that identity
+Operator TESTED       ≔  Agent coverage work-state `tested` (surface mark) — not purpose=test
 ```
 
-- **Findings / booked do not define TESTED** (orthogonal). Prefer that booking still followed real requests; if create-on-book without traffic remains possible, either require traffic or set `case_tested` on successful book as a narrow exception (document in implementation).  
-- **Internal** `seen`/`touched` may remain for Graph; **operator chip** uses L4, not “second hit only”.  
-- Projection: show **TESTED** when `case_tested` (or purpose-derived flag); do not require status=`touched`.
+- **Findings / booked do not define TESTED** (orthogonal).  
+- **Internal** `seen`/`touched` remain for Graph probe machine; **operator chip** is coverage work-state (#518).  
+- Projection: show **TESTED** when coverage=`tested`. `purpose=test` must not write work-state.
 
 ### L5 — Agent / harness
 
-- Untested queue = identities that settled (or NEW) **without** `case_tested`.  
-- Soft reminders speak **test-purpose / case_tested**, not bare hit counts.  
-- Upsert still cannot fake TESTED without traffic (or without allowed book side-effect if exception locked).
+- Untested queue = identities with coverage `untested` (prefer NEW when `is_new` is present).  
+- Soft reminders speak **surface(op=mark|skip)**, not purpose=test / `case_tested`.  
+- Upsert cannot write coverage; `status=deadend|skipped_roe` is rejected.
 
 ### L6 — No PRIOR / noise chips
 
@@ -116,7 +115,7 @@ Noise is filtered at settle. NEW remains inventory novelty only.
 | **purpose** | Per-exchange classification on Traffic |
 | **case_tested** | Surface identity flag: ≥1 test-purpose hit this Case |
 | **scope gate** | Settle only in-scope origins |
-| **TESTED chip** | Operator UI for case_tested |
+| **TESTED chip** | Operator UI for coverage work-state `tested` (not case_tested) |
 
 ---
 
@@ -128,7 +127,7 @@ Noise is filtered at settle. NEW remains inventory novelty only.
 4. As an operator, a finding tag does not replace TESTED logic; a tested-clean surface can show TESTED without a vuln tag.  
 5. As an Agent author, shell/http defaults to test purpose so I need not annotate every curl.  
 6. As Runtime, out-of-scope traffic can remain in Traffic audit without polluting Surface.  
-7. As QA, fixtures cover scope skip, `${` skip, purpose defaults, single test → TESTED, browse-only → not TESTED.
+7. As QA, fixtures cover scope skip, `${` skip, purpose defaults, purpose=test does not write coverage, browse-only stays untested.
 
 ---
 
@@ -136,8 +135,8 @@ Noise is filtered at settle. NEW remains inventory novelty only.
 
 1. **Classify** in Node traffic-collect (or adjacent pure module) before/with settle.  
 2. **planTrafficSurfaceSettle** (or wrapper) applies L2 gates using task target/scope from runtime.  
-3. **Surface SQLite + platform ledger** carry `case_tested` (bool) sticky true once set; dual-write includes field for FE.  
-4. **FE** `surfaceStatusLabel` / chrome: TESTED iff `case_tested` (or mapped field); stop using multi-hit-only touched as sole TESTED signal.  
+3. **Surface SQLite + platform ledger** carry coverage work-state; `case_tested` may remain as unused audit column. Dual-write includes coverage for FE.  
+4. **FE** `surfaceStatusLabel` / chrome: TESTED iff coverage=`tested`; stop using `case_tested` or multi-hit-only touched as TESTED.  
 5. **Tests** pure classify + settle plan + projection; no live LLM.  
 6. **Docs:** this Spec + thin amend on surface-new-tested-coverage L2/L6 TESTED definition; case-surface-ledger D6.1 noise/scope note.  
 7. **Migration:** only if platform snapshot schema needs explicit column (JSON context field may suffice).
@@ -151,8 +150,8 @@ Noise is filtered at settle. NEW remains inventory novelty only.
 | Scope | allow TARGET host; reject other origin for settle |
 | Garbage path | `${` in path → no settle |
 | Purpose default | shell GET → test; browser nav → browse; seed → setup |
-| TESTED | one test exchange → case_tested; browse-only → false |
-| Dual-write | case_tested survives platform project |
+| TESTED | coverage=`tested` via surface mark; purpose=test does not write work-state |
+| Dual-write | coverage survives platform project |
 
 ---
 

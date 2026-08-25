@@ -34,7 +34,7 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
       task: Type.Optional(Type.String()),
       phase: Type.Optional(Type.String()),
       items: Type.Optional(Type.Array(Type.String())),
-      /** Graph coverage note: deadend|skipped_roe|probed|booked|n/a — blocks bare done when ledger has open surfaces */
+      /** Optional note. note=deadend|skipped_roe is retired (explicit error → surface skip). */
       note: Type.Optional(Type.String()),
       /**
        * Spec #313 Free: full todo.init replace only after explicit user permission.
@@ -83,19 +83,10 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
               phase: params.phase != null ? String(params.phase) : undefined,
               note: params.note != null ? String(params.note) : undefined,
               summary,
-              hasActedMatch: (t) => sqlite.hasActedMatch(t),
-              findByLocationHint: (t) => sqlite.findByLocationHint(t),
             });
             if (!gate.ok) {
               runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
               return textResult(gate.error, { isError: true });
-            }
-            if (gate.ledgerOp) {
-              if (gate.ledgerOp.op === "deadend") {
-                await sqlite.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
-              } else {
-                await sqlite.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
-              }
             }
           }
         } else if (legacy) {
@@ -107,19 +98,10 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
               phase: params.phase != null ? String(params.phase) : undefined,
               note: params.note != null ? String(params.note) : undefined,
               summary,
-              hasActedMatch: (t) => legacy.hasActedMatch(t),
-              findByLocationHint: (t) => legacy.findByLocationHint(t),
             });
             if (!gate.ok) {
               runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
               return textResult(gate.error, { isError: true });
-            }
-            if (gate.ledgerOp) {
-              if (gate.ledgerOp.op === "deadend") {
-                await legacy.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
-              } else {
-                await legacy.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
-              }
             }
           }
         }
@@ -271,7 +253,7 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         op,
         task: input.task || undefined,
         phase: input.phase || undefined,
-        note: input.note != null ? String(params.note || "").trim() || undefined : undefined,
+        note: params.note != null ? String(params.note).trim() || undefined : undefined,
         completed_tasks: result.completedTasks,
         open_count,
         summary: formatTodoSummary(result.phases, [], result.readOnly),

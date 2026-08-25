@@ -404,9 +404,9 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   if (!first.ok || first.skipped) throw new Error(`expected apply: ${JSON.stringify(first)}`);
   assert.equal(first.created, 1);
   assert.equal(first.updated, 0);
-  // Spec #413: shell/http purpose=test → case_tested + touched on first hit (single request enough).
+  // Spec #518: purpose=test still elevates touched; does not write coverage.
   assert.equal(first.row?.status, "touched");
-  assert.equal(first.row?.case_tested, true);
+  assert.equal(first.row?.coverage, "untested");
   assert.equal(first.row?.origin_key, "https://target.example:443");
   assert.equal(first.row?.path_key, "/vuln/sqli");
   assert.equal(first.row?.source, "traffic");
@@ -426,7 +426,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   assert.equal(second.created, 0);
   assert.equal(second.updated, 1);
   assert.equal(second.row?.status, "touched");
-  assert.equal(second.row?.case_tested, true);
+  assert.equal(second.row?.coverage, "untested");
   assert.deepEqual(second.row?.methods, ["GET", "POST"]);
 
   // Third hit stays touched (no downgrade)
@@ -494,9 +494,9 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   assert.equal(await store.count(), 1);
   const row = await store.get({ location: "http://127.0.0.1:8080/login" });
   assert.ok(row);
-  // Spec #413: http GET purpose=test → case_tested on first complete.
+  // Spec #518: http GET purpose=test → touched; coverage stays untested until mark.
   assert.equal(row?.status, "touched");
-  assert.equal(row?.case_tested, true);
+  assert.equal(row?.coverage, "untested");
   assert.equal(row?.source, "traffic");
   assert.deepEqual(row?.methods, ["GET"]);
 
@@ -508,7 +508,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   await emitHttpComplete(rt, pending2, { statusCode: 200, responseBody: "ok" });
   const row2 = await store.get({ location: "http://127.0.0.1:8080/login" });
   assert.equal(row2?.status, "touched");
-  assert.equal(row2?.case_tested, true);
+  assert.equal(row2?.coverage, "untested");
   assert.deepEqual(row2?.methods, ["GET", "POST"]);
 
   store.close();
@@ -688,20 +688,20 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   );
   assert.equal(browse.ok, true);
   if (!browse.ok || browse.skipped) throw new Error(JSON.stringify(browse));
-  assert.equal(browse.row?.case_tested, false);
+  assert.equal(browse.row?.coverage, "untested");
   assert.equal(browse.row?.status, "seen");
 
-  // Agent upsert cannot fake case_tested
+  // Agent upsert cannot write coverage
   const fake = await store.upsert(
     [{ location: "https://lab.example/home", status: "touched", case_tested: true }],
     { source: "agent" },
   );
   assert.equal(fake.ok, true);
   if (!fake.ok) throw new Error("upsert");
-  assert.equal(fake.upserted[0]?.case_tested, false, "agent cannot set case_tested");
+  assert.equal(fake.upserted[0]?.coverage, "untested", "agent cannot set coverage");
   assert.equal(fake.upserted[0]?.status, "seen", "agent cannot elevate touched without traffic allow");
 
-  // One shell test → case_tested sticky
+  // One shell test → touched; coverage still untested
   const testHit = await settleTrafficToSurface(
     rt,
     completedExchange({
@@ -713,10 +713,10 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   );
   assert.equal(testHit.ok, true);
   if (!testHit.ok || testHit.skipped) throw new Error(JSON.stringify(testHit));
-  assert.equal(testHit.row?.case_tested, true);
+  assert.equal(testHit.row?.coverage, "untested");
   assert.equal(testHit.row?.status, "touched");
 
-  // Dual-write includes case_tested
+  // Dual-write includes coverage work-state (not purpose-derived TESTED)
   await waitSurfacePlatformSyncs();
   const upserts = platform.messages.filter((m) => m.type === "surface_upsert");
   assert.ok(upserts.length >= 1);
@@ -724,7 +724,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
     .surfaces;
   assert.ok(Array.isArray(lastSurfaces) && lastSurfaces.length >= 1);
   const payload = lastSurfaces.find((s) => String(s.path_key || "") === "/home") || lastSurfaces[0];
-  assert.equal(payload?.case_tested, true, "dual-write case_tested");
+  assert.equal(payload?.coverage, "untested", "dual-write coverage");
 
   store.close();
   await rm(dir, { recursive: true, force: true });

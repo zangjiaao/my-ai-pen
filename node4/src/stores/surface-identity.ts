@@ -536,7 +536,7 @@ export type ResolveUpsertStatusOpts = {
  *   Without it, elevation to touched is refused (existing rank preserved; new rows → seen).
  * - Legacy requested/existing values are normalized (open→seen, in_probe/probed→touched).
  * - Never downgrades an existing status.
- * - Terminals deadend / skipped_roe remain allowed on ordinary upsert.
+ * - Terminals deadend / skipped_roe are ignored on upsert (#518 — use surface skip).
  */
 export function resolveUpsertStatus(
   existing: AcceptedSurfaceStatus | string | undefined,
@@ -550,9 +550,12 @@ export function resolveUpsertStatus(
       want = reqN;
     }
   }
-  // Spec #411 L2: no Agent upsert to fake TESTED without traffic-objective allow.
+  // Agent upsert cannot elevate to touched without traffic
   if (want === "touched" && !opts?.allowTested) {
     want = "seen";
+  }
+  if (want === "deadend" || want === "skipped_roe") {
+    want = existing != null && existing !== "" ? (normalizeSurfaceStatus(existing) ?? "seen") : "seen";
   }
   if (existing == null || existing === "") return want;
   const existingN = normalizeSurfaceStatus(existing);

@@ -59,7 +59,7 @@ export function formatSurfaceToolDetail(
   const op = String(args?.op || result?.op || "").trim().toLowerCase() || "summary";
   if (op === "summary" || (result && (result.total != null || result.case_tested != null))) {
     const total = result?.total;
-    const tested = result?.tested ?? result?.case_tested;
+    const tested = result?.tested;
     const touched = result?.touched;
     const booked = result?.booked;
     const parts: string[] = [];

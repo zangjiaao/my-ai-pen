@@ -8,6 +8,7 @@ import {
   collectSurfaceEntries,
   emptySurfaceLedger,
   ensureSurfaceLedger,
+  formatSurfaceCopyBlock,
   isSurfaceCaseTested,
   isSurfaceNew,
   normalizeSurfaceStatus,
@@ -97,17 +98,16 @@ function testLegacyStatusMapsToV2Presentation() {
   assert.equal(normalizeSurfaceStatus("deadend"), "deadend");
   assert.equal(normalizeSurfaceStatus("skipped_roe"), "skipped_roe");
   assert.equal(normalizeSurfaceStatus("nope"), undefined);
-  // Spec #409/#413 operator labels (not raw v2 strings).
-  // Legacy (no case_tested opts): touched family → TESTED.
+  // Spec #518 operator labels: TESTED only from coverage work-state.
   assert.equal(surfaceStatusLabel("open"), "");
-  assert.equal(surfaceStatusLabel("probed"), "TESTED");
-  assert.equal(surfaceStatusLabel("touched"), "TESTED");
+  assert.equal(surfaceStatusLabel("probed"), "");
+  assert.equal(surfaceStatusLabel("touched"), "");
   assert.equal(surfaceStatusLabel("booked"), "");
-  // Spec #413: case_tested drives TESTED; multi-hit alone does not.
-  assert.equal(surfaceStatusLabel("seen", { caseTested: true }), "TESTED");
-  assert.equal(surfaceStatusLabel("touched", { caseTested: true }), "TESTED");
-  assert.equal(surfaceStatusLabel("touched", { caseTested: false }), "");
-  assert.equal(surfaceStatusLabel("seen", { caseTested: false }), "");
+  assert.equal(surfaceStatusLabel("seen", { coverage: "tested" }), "TESTED");
+  assert.equal(surfaceStatusLabel("touched", { coverage: "tested" }), "TESTED");
+  assert.equal(surfaceStatusLabel("touched", { coverage: "untested" }), "");
+  assert.equal(surfaceStatusLabel("seen", { coverage: "skipped", skipReason: "deadend" }), "skip:deadend");
+  assert.equal(surfaceStatusLabel("seen", { coverage: "skipped", skipReason: "roe" }), "skip:roe");
 
   const ledger: SurfaceLedger = {
     version: 1,
@@ -158,9 +158,9 @@ function testLegacyStatusMapsToV2Presentation() {
   assert.equal(byPath.get("/b")?.status, "touched");
   assert.equal(byPath.get("/c")?.status, "touched");
   assert.equal(byPath.get("/d")?.status, "booked");
-  // Operator: seen quiet, touched → TESTED.
+  // Operator: status is quiet; TESTED only from coverage.
   assert.equal(surfaceStatusLabel(byPath.get("/a")?.status), "");
-  assert.equal(surfaceStatusLabel(byPath.get("/b")?.status), "TESTED");
+  assert.equal(surfaceStatusLabel(byPath.get("/b")?.status), "");
 }
 
 /** Spec #409 — operator status label map + NEW false-safe projection. */
@@ -170,25 +170,24 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(normalizeSurfaceStatus("touched"), "touched");
   assert.equal(normalizeSurfaceStatus("booked"), "booked");
 
-  // Operator chips (legacy status fallback when case_tested omitted).
+  // Operator chips follow coverage work-state, not status.
   assert.equal(surfaceStatusLabel("seen"), "");
   assert.equal(surfaceStatusLabel("open"), "");
-  assert.equal(surfaceStatusLabel("touched"), "TESTED");
-  assert.equal(surfaceStatusLabel("in_probe"), "TESTED");
-  assert.equal(surfaceStatusLabel("probed"), "TESTED");
+  assert.equal(surfaceStatusLabel("touched"), "");
+  assert.equal(surfaceStatusLabel("in_probe"), "");
+  assert.equal(surfaceStatusLabel("probed"), "");
   assert.equal(surfaceStatusLabel("booked"), "");
-  assert.equal(surfaceStatusLabel("deadend"), "deadend");
-  assert.equal(surfaceStatusLabel("skipped_roe"), "skipped_roe");
+  assert.equal(surfaceStatusLabel("deadend"), "");
+  assert.equal(surfaceStatusLabel("skipped_roe"), "");
   assert.equal(surfaceStatusLabel(undefined), "");
   assert.equal(surfaceStatusLabel("PRIOR"), "");
   assert.equal(surfaceStatusLabel("prior"), "");
 
   assert.equal(surfaceShowsStatusChip("seen"), false);
-  assert.equal(surfaceShowsStatusChip("touched"), true);
+  assert.equal(surfaceShowsStatusChip("touched"), false);
   assert.equal(surfaceShowsStatusChip("booked"), false);
-  assert.equal(surfaceShowsStatusChip("deadend"), true);
-  assert.equal(surfaceShowsStatusChip("touched", { caseTested: false }), false);
-  assert.equal(surfaceShowsStatusChip("seen", { caseTested: true }), true);
+  assert.equal(surfaceShowsStatusChip("touched", { coverage: "untested" }), false);
+  assert.equal(surfaceShowsStatusChip("seen", { coverage: "tested" }), true);
 
   // NEW false-safe until inventory flag present.
   assert.equal(isSurfaceNew(undefined), false);
@@ -215,7 +214,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
         location: "https://op.example/quiet",
         kind: "url",
         status: "seen",
-        case_tested: false,
+        coverage: "untested",
       },
       {
         origin_key: "https://op.example:443",
@@ -223,7 +222,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
         location: "https://op.example/tested",
         kind: "url",
         status: "touched",
-        case_tested: true,
+        coverage: "tested",
       },
       {
         origin_key: "https://op.example:443",
@@ -231,7 +230,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
         location: "https://op.example/browse-multi",
         kind: "url",
         status: "touched",
-        case_tested: false,
+        coverage: "untested",
       },
       {
         origin_key: "https://op.example:443",
@@ -263,9 +262,9 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(entries.find((e) => e.path === "/novel")!.isNew, true);
   assert.equal(entries.find((e) => e.path === "/old")!.isNew, undefined);
   assert.equal(entries.find((e) => e.path === "/old")!.status, "touched");
-  assert.equal(entries.find((e) => e.path === "/tested")!.caseTested, true);
-  assert.equal(entries.find((e) => e.path === "/browse-multi")!.caseTested, false);
-  assert.equal(entries.find((e) => e.path === "/quiet")!.caseTested, false);
+  assert.equal(entries.find((e) => e.path === "/tested")!.coverage, "tested");
+  assert.equal(entries.find((e) => e.path === "/browse-multi")!.coverage, "untested");
+  assert.equal(entries.find((e) => e.path === "/quiet")!.coverage, "untested");
 
   const tree = buildSurfaceTree(entries);
   const byPath = new Map(tree[0]!.children.map((c) => [c.path, c]));
@@ -278,7 +277,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(testedChrome.showStatusChip, true);
   assert.equal(
     surfaceStatusLabel(byPath.get("/tested")!.status, {
-      caseTested: byPath.get("/tested")!.caseTested,
+      coverage: byPath.get("/tested")!.coverage,
     }),
     "TESTED",
   );
@@ -286,7 +285,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
 
   // Browse multi-hit (status=touched, case_tested=false) → no TESTED chip.
   const browseChrome = surfaceTreeRowChrome(byPath.get("/browse-multi")!, { open: true });
-  assert.equal(browseChrome.showStatusChip, false, "case_tested false → no TESTED");
+  assert.equal(browseChrome.showStatusChip, false, "coverage untested → no TESTED");
 
   const bookedChrome = surfaceTreeRowChrome(byPath.get("/booked")!, { open: true });
   assert.equal(bookedChrome.showStatusChip, false, "booked → no BOOK chip");
@@ -299,8 +298,8 @@ function testOperatorStatusProjectionNewTestedNoBook() {
 
   const oldChrome = surfaceTreeRowChrome(byPath.get("/old")!, { open: true });
   assert.equal(oldChrome.showNewBadge, false);
-  assert.equal(oldChrome.showStatusChip, true);
-  assert.equal(surfaceStatusLabel(byPath.get("/old")!.status), "TESTED");
+  assert.equal(oldChrome.showStatusChip, false);
+  assert.equal(surfaceStatusLabel(byPath.get("/old")!.status), "");
 }
 
 function testDirtyAssetsDoNotSeedProjection() {
@@ -535,4 +534,39 @@ testLiveUpsertMergesByIdentity();
 testLiveUpsertUpdatesStatusDisplayWithoutDowngrade();
 testEmptyVsSettledPresentation();
 testFindingsBadgeOnlyMatchingLedgerPaths();
+{
+  const leaf = formatSurfaceCopyBlock({
+    originKey: "https://app.example:443",
+    pathKey: "/login",
+    isNew: true,
+    coverage: "tested",
+    findings: [{ id: "fnd_8k2a", severity: "high", title: "Stored XSS in display name" }],
+  });
+  assert.equal(
+    leaf,
+    [
+      "https://app.example:443/login",
+      "is_new: true",
+      "is_tested: true",
+      "findings:",
+      "- fnd_8k2a  high  Stored XSS in display name",
+    ].join("\n"),
+  );
+  const skipped = formatSurfaceCopyBlock({
+    originKey: "https://app.example:443",
+    pathKey: "/",
+    isNew: false,
+    coverage: "skipped",
+    skipReason: "roe",
+  });
+  assert.equal(
+    skipped,
+    [
+      "https://app.example:443/",
+      "is_new: false",
+      "is_tested: false",
+      "skip: roe",
+    ].join("\n"),
+  );
+}
 console.log("surfaceModel.ledger.test.ts: ok");

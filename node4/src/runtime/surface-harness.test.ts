@@ -33,41 +33,39 @@ assert.match(mid, /priors/i, "mid-run priors note");
 assert.match(incompleteSeenSurfaceStopReminder(1, ["/x"]), /NEW untested/i);
 assert.match(midRunSeenSurfaceNudge(2), /NEW untested/i);
 
-// --- selectNewUntestedSurfaces: prefer is_new; untested = !case_tested (#413) ---
+// --- selectNewUntestedSurfaces: untested = coverage not tested/skipped (#518) ---
 {
-  // Legacy rows without case_tested: status=touched treated as tested (expand-contract).
   const fallback = selectNewUntestedSurfaces([
     { status: "seen", path_key: "/a" },
     { status: "touched", path_key: "/b" },
     { status: "seen", path_key: "/c" },
   ]);
   assert.equal(fallback.mode, "seen_fallback");
-  assert.equal(fallback.count, 2);
-  assert.deepEqual(fallback.samples, ["/a", "/c"]);
+  assert.equal(fallback.count, 3);
+  assert.deepEqual(fallback.samples, ["/a", "/b", "/c"]);
 }
 
 {
-  // Explicit case_tested: browse multi-hit (touched + false) stays untested.
   const purpose = selectNewUntestedSurfaces([
-    { status: "seen", case_tested: false, path_key: "/browse" },
-    { status: "touched", case_tested: false, path_key: "/browse2" },
-    { status: "touched", case_tested: true, path_key: "/tested" },
-    { status: "seen", case_tested: true, path_key: "/single-test" },
+    { status: "seen", coverage: "untested", path_key: "/browse" },
+    { status: "touched", coverage: "untested", path_key: "/browse2" },
+    { status: "touched", coverage: "tested", path_key: "/tested" },
+    { status: "seen", coverage: "skipped", path_key: "/skip" },
   ]);
   assert.equal(purpose.mode, "seen_fallback");
-  assert.equal(purpose.count, 2, "!case_tested only");
+  assert.equal(purpose.count, 2, "untested coverage only");
   assert.deepEqual(purpose.samples, ["/browse", "/browse2"]);
 }
 
 {
   const withNew = selectNewUntestedSurfaces([
-    { status: "seen", is_new: true, case_tested: false, path_key: "/novel" },
-    { status: "seen", is_new: false, case_tested: false, path_key: "/old" },
-    { status: "touched", is_new: true, case_tested: true, path_key: "/tested-new" },
-    { status: "seen", is_new: true, case_tested: false, path_key: "/novel2" },
+    { status: "seen", is_new: true, coverage: "untested", path_key: "/novel" },
+    { status: "seen", is_new: false, coverage: "untested", path_key: "/old" },
+    { status: "touched", is_new: true, coverage: "tested", path_key: "/tested-new" },
+    { status: "seen", is_new: true, coverage: "untested", path_key: "/novel2" },
   ]);
   assert.equal(withNew.mode, "new_untested");
-  assert.equal(withNew.count, 2, "only is_new && !case_tested");
+  assert.equal(withNew.count, 2, "only is_new && untested");
   assert.deepEqual(withNew.samples, ["/novel", "/novel2"]);
 }
 

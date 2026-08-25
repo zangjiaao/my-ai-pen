@@ -457,7 +457,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             "2) needs_more_evidence or timeout with worker_status=idle → resume_agent_id=agent_id same path.",
             "3) Orthogonal paths → cold packages[] only.",
             "4) Finished with worker → op=release agent_id=… (or idle TTL auto-release).",
-            "5) Graph: todo(done) needs act/deadend/skip on surfaces.",
+            "5) Graph: todo(done) needs surface(op=mark) or surface(op=skip) on open identities.",
             "6) Task package budget: NODE4_SUBAGENT_TASK_BUDGET (default 128); concurrency queues, does not reject.",
           ].join(" "),
           idle_workers: idlePoolFor(runtime)?.listIdle() ?? [],

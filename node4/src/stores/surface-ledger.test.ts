@@ -39,36 +39,21 @@ await store.markBooked("http://127.0.0.1:8080/vulnerabilities/sqli/");
 sum = store.summary();
 assert.equal(sum.booked, 1);
 
-// Gate: open xss still blocks bare done
 const blocked = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: undefined,
   summary: store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
 assert.equal(blocked.ok, false);
 
-// Gate: path acted match allows
-const okPath = await assertTodoDoneAllowed({
-  task: "SQLi at /vulnerabilities/sqli",
-  summary: store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
-});
-assert.equal(okPath.ok, true);
-
-// Gate: deadend note
 const dead = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: "deadend: /vulnerabilities/xss_r no reflection",
   summary: store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
-assert.equal(dead.ok, true);
-if (!dead.ok) throw new Error("expected deadend allow");
-assert.equal(dead.ledgerOp?.op, "deadend");
+assert.equal(dead.ok, false);
+if (dead.ok) throw new Error("expected deadend note to be rejected");
+assert.match(dead.error, /surface\(op=skip/);
 
 await store.markDeadend("/vulnerabilities/xss_r/", "no reflection");
 sum = store.summary();
@@ -77,8 +62,6 @@ assert.equal(sum.actionable, 0);
 const clear = await assertTodoDoneAllowed({
   task: "anything",
   summary: store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
 assert.equal(clear.ok, true);
 
