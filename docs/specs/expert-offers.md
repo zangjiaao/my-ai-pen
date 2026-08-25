@@ -13,7 +13,7 @@
 | **Node offers / install** | Runtime expert capability on a worker Node | Platform `node.config.offers` + Node4 install root |
 | **Product Expert instance** | User-facing persona: `@name` → Node + pack | Platform table `experts` |
 
-- A **Node** is a **container** / agent **runtime** (Node4): always **`default`**, plus zero or more installed expert packs.
+- A **Node** is a **container** / agent **runtime** (Node4): always **`default`**, plus zero or more installed expert packs. **`default` is the same caste as every other Expert** — packs differ by Profession, tools, skills, and declared Graphs. Graph entry is pack capability + user permission (Spec #277); built-in `default` currently declares none.
 - **Multiple product Experts may bind to the same Node** (shared runtime, different pack routes or labels).
 - Task assignment carries **explicit structured** `engagement` / `role` / participant (from UI, Expert instance, or API). The platform **does not** invent engagement by NLP of free-text instructions.
 - Remote marketplace / network hot-load of packs is **out of scope**.

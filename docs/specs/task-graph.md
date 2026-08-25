@@ -5,12 +5,12 @@
 
 **Expert Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **retired** as a product work mode (not Expert DoD).
 
-**Product seats:** **Default** = free platform assistant (never Expert Graph unless a future pack declares Graph capability). **Expert** = pack persona on a **Participant Session** (`docs/specs/participant-session.md` / Spec #277): default **work mode Free** (UI Graph **不指定**); **Expert Graph × Pi** only after explicit user permission for a **declared** graph id (`app_assessment`, `redteam_deep`, …). Silent Free→Graph on resume is forbidden. After Graph `task_complete`, same-session follow-ups stay in the Graph envelope without auto full re-run (C1); exit Graph **parks** harness and returns Free. Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
+**Experts (one caste):** every addressable pack — including built-in `default` — is an Expert. Packs differ by Profession, tools, skills, and **declared Graphs**. **Participant Session** (`docs/specs/participant-session.md` / Spec #277): default **work mode Free** (UI Graph **不指定**); **Graph × Pi** only after explicit user permission for a graph id **that pack declares**. Built-in `default` currently declares none. Silent Free→Graph on resume is forbidden. After Graph `task_complete`, same-session follow-ups stay in the Graph envelope without auto full re-run (C1); exit Graph **parks** harness and returns Free. Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
 
 ## One sentence
 
-**Default / free OMP** — Main loop schedules itself (Default seat never Expert Graph).  
-**Expert Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates; **Expert pentest DoD**. Product template `app_assessment` resolves here.  
+**Free OMP** — Main loop schedules itself (any Expert whose Session is not in Graph; including `default`).  
+**Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates. Pentest DoD uses declared product graphs (`app_assessment`, …).  
 **Soft scenario Graph** — **retired** (historical only; no product UI / no product resolve).  
 **Case** holds long-term shared state. Continue-chat / retest stay in the Graph engagement envelope after runner completes (#68).
 
@@ -57,14 +57,14 @@ Hard Graph stages share the **same platform message contracts** free Expert / De
 | **Subagent lifecycle** | `subagent_started` / `subagent_finished` on the platform sink when packages spawn |
 | **Worker chips** | Package-owned L2 todos may carry `agent_id` / `owner_agent_name` for Tasks chips |
 
-Probe-class stages that allow `subagent` **prefer packages** when multi-class work is justified (harness steer, not answer keys / fixed N / hard quotas). **Anti-micro-spawn** for trivial single-URL chores. Expert Graph packages **require `plan_node_id`** (L2 anchor). Serial Main remains allowed if Feedback accepts. Soft product mode stays retired; Default never enters Expert Graph.
+Probe-class stages that allow `subagent` **prefer packages** when multi-class work is justified (harness steer, not answer keys / fixed N / hard quotas). **Anti-micro-spawn** for trivial single-URL chores. Graph packages **require `plan_node_id`** (L2 anchor). Serial Main remains allowed if Feedback accepts. Soft product mode stays retired. Workers (Package profiles) are available to Main in Free and Graph — work mode is Main’s, not a Worker caste.
 
 ## Modes
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Default / free OMP** | No Expert Graph template; **Default seat only** | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
-| **Expert Graph × Pi** | Product templates `app_assessment` / `redteam_deep` / `hypothesis_cycle` (aliases), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1`; thin lab ids | Runner drives stages (ordered harness **or** engagement edges when declared); hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** (whitelist `choice_key` only on Gate nodes) |
+| **Free OMP** | Session Graph unspecified / pack has no matching declared graph | Pure OMP; Main may self-act; voluntary subagent (Package profiles when shipped); not Graph DoD |
+| **Graph × Pi** | User permits a graph id **this pack declares** (`app_assessment` / `redteam_deep` / …), `graphDiscipline=hard`, or lab `NODE4_HARD_GRAPH=1` | Runner drives stages; hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** (whitelist `choice_key` only on Gate nodes) |
 | **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed |
 
 Product Expert UI Graph control: **不指定** (= Free) plus declared scenario Graphs (`app_assessment`, `redteam_deep`, …). Mode authority is **per Participant Session**, not Case sticky template alone (`docs/specs/participant-session.md`).  

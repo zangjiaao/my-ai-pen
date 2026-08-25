@@ -17,7 +17,7 @@
 | 部件 | 职责 |
 |------|------|
 | **平台** | 登录、会话、消息、资产、漏洞、证据、节点注册、授权确认、任务下发/中继与结果展示；**台账 SOT**（数据面，不设对话人格 Agent） |
-| **Node（产品绑定运行时）** | 全部用户可见的 Agent 运行时：内置 **`default`**（台账读写 Tools、闲聊与整理；**不**进专家硬 Graph）+ 已安装**专家包**（渗透/CTF 等；专家执行可走 **Hard Graph × Pi**）。产品实现路径为 **`node4/`**（唯一血统）。 |
+| **Node（产品绑定运行时）** | 全部用户可见的 Agent 运行时：内置 **`default`** 与已安装**专家包**同一套 Expert 规则（Profession / 工具 / 技能 / 已声明 Graph 不同）。`default` 当前无声明 Graph（台账读写、闲聊与整理）； pentest 等包可走 **Hard Graph × Pi**。产品实现路径为 **`node4/`**（唯一血统）。 |
 
 产品形态：**一个平台（工作台/台账）+ 一个已绑定的 Node（产品路径 Node4 / Graph × Pi）**。  
 
@@ -165,7 +165,7 @@ Lab（DVWA/Juice 等）仅用于**离线对照与工程调试**，不作为「�
 2. 渗透 pack：按 OMP 原则用真实 lab events 减样板，少加 gate。
 3. 平台 ↔ 绑定 Node 候选 WS 硬化与可观测性。
 4. 执行 `docs/project-cleanup-plan.md`（docs 收敛 + legacy 树删除门槛）。
-5. Node 路径已锁 Graph × Pi / Node4（ADR 0001 B1）；**Expert 渗透 DoD = Hard Graph × Pi**（成熟 hard 图主路径）；Soft/Default 为轻助理，非 Expert DoD。不重开双核 PK；Exit C 仍为 Runtime 互换退路。
+5. Node 路径已锁 Graph × Pi / Node4（ADR 0001 B1）；**渗透 DoD = Hard Graph × Pi**（成熟 hard 图主路径）。专家一视同仁：进图只看出 pack 是否声明 Graph + 用户许可（`default` 当前无图）。Soft 退役。不重开双核 PK；Exit C 仍为 Runtime 互换退路。
 
 ---
 

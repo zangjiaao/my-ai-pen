@@ -4,7 +4,8 @@
 
 Accepted (2026-07-23)  
 **Amended (2026-07-24)** — Runtime package boundary (Wayfinder map [#37](https://github.com/zangjiaao/my-ai-pen/issues/37); construction spec [#47](https://github.com/zangjiaao/my-ai-pen/issues/47)).  
-**Amended (2026-07-24)** — **B1 retire fallback B** + **X1 hard-delete `node5/`** (Wayfinder map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59); task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67)). Hard Graph Node4 reached P1 scorecard parity vs Node5 lab on Juice + DVWA; product unique Node lineage = **Node4 Hard Graph × Pi**. Exit C remains.
+**Amended (2026-07-24)** — **B1 retire fallback B** + **X1 hard-delete `node5/`** (Wayfinder map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59); task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67)). Hard Graph Node4 reached P1 scorecard parity vs Node5 lab on Juice + DVWA; product unique Node lineage = **Node4 Hard Graph × Pi**. Exit C remains.  
+**Amended (2026-08-26)** — Graph entry is **pack-declared graph ids + user permission** for every Expert, including built-in `default`. No Default-vs-Expert caste; `default` currently declares no Graphs. Aligns Spec [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) Graph capability tables. Decision 4 below is superseded.
 
 ## Context
 
@@ -24,7 +25,7 @@ Map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) ran offline P1 parit
 1. **Product kernel direction: Graph × Pi** on the Node4 lineage.
 2. **Hard Graph** is product-owned (ordered stages + fail-closed Feedback), not soft scenario menus and not a requirement to ship ADK Python `Workflow`.
 3. **Agent Runtime** for Expert stages (and Default seat loops) is **pi-ai + pi-agent-core** via product seam **`runNode4Agent`**: stateful **Agent**, **AgentTool**, events/hooks. This is what “pi” means in Graph × Pi — **not** the pi-coding-agent product shell.
-4. **Default** never enters Expert Hard Graph.
+4. **Superseded (2026-08-26):** Graph entry is not a Default-vs-Expert caste. Every Expert pack (including built-in `default`) enters Hard Graph only when **that pack declares graph ids** and the user permits. Built-in `default` currently declares none (ledger assist); adding `graphs/hard/*` later uses the same rule. Do not hard-code “assistant never Graph.”
 5. **Unique product Node lineage = Node4** (`node4/`). There is **no** co-equal product kernel and **no** live `node5/` tree. Task / Agent / Feedback three-layer semantics live in product Hard Graph docs (`docs/specs/task-graph.md`); git history holds the former Node5 lab source if archaeology is needed.
 6. **Fallback B retired (B1).** Elevating pure Node5 as product Node is **not** a standing exit. Do not reintroduce a Python ADK product process or treat historical Node5 as a bindable candidate.
 7. **Exit ramp C** (Graph × ADK-TS or other Runtime swap) remains when the Agent / pi-ai contract itself is inadequate or cost ≫ swapping Runtime — after any temporary migration buffer. C is a **Runtime swap under Graph ownership**, not “ship Node5.”
@@ -36,7 +37,7 @@ Map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) ran offline P1 parit
 
 ## Consequences
 
-- Soft scenario Graph is **retired as a product work mode** (#68 / #76). Expert structured work is **Graph-only** (Hard Graph runner). Default free OMP never enters Expert Graph.
+- Soft scenario Graph is **retired as a product work mode** (#68 / #76). Structured work uses the Hard Graph runner when the pack declares graphs and the user permits. Packs without declared graphs stay Free (built-in `default` today).
 - Expert Graph path: mature hard graph primary (`graphs/hard/app_assessment.json`); thin lab alias only; product template `app_assessment` resolves to Expert Graph; Hard Graph runner + pi stage executor.
 - Living docs describe **one** product Node lineage (Node4) — not co-equal kernels, not “A in pursuit / B on standby.”
 - Multi-expert packs share the same base; CTF/audit full Hard Graphs are later waves.

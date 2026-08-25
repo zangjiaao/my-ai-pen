@@ -60,8 +60,7 @@ Both waves are **normative in this Spec**. Implementation may phase delivery; Sp
 |-------|------|
 | **Platform / Node4** | Optional, domain-agnostic **hypothesis memory** capability: lifecycle slots, Main commit API, Sub outcome shape, settlement/Store **boundary**, run hang points, promote hooks. |
 | **Pack** | Availability flag; candidate **payload** schema extension; knowledge skills; graph JSON stage flags. |
-| **Graph stage** | Explicit `hypothesis_work_mode: true` to enable queue for that stage. |
-| **Default seat** | **Never** requires this mode (no Expert Graph). |
+| **Graph stage** | Explicit `hypothesis_work_mode: true` to enable queue for that stage. Packs without a declared Graph never require this mode. |
 
 **Anti-bloat:** Prefer “existing mode + new payload / Graph switch” over new meta-modes. New meta-mode only if a **second expert** reuses the shape.
 

@@ -112,6 +112,8 @@ docker pull "$PEN_SANDBOX_IMAGE"
 
 **Labels / ops (shipped):** component still `browser-sandbox` for janitor filter compatibility; also `myaipen.conversation_id`, `myaipen.expert_id`, `myaipen.seat_key` (and legacy `parent_task_id` = seatKey). Search by conversation/expert/seat. Janitor **rm** only expired product boxes **not** mapped as live sticky seats in this process (idle **stop** leaves map entry).
 
+**Seat HTTP observer (job D):** product law lives only in [`traffic-audit-activity.md`](traffic-audit-activity.md) (P1 in-box proxy + CA, one pipe, CA lifetime = this box). This file does not co-own Traffic.
+
 **Historical Spec #320:** parent-task key + task-end dispose — **superseded**; image pin / no Strix **kept**.
 
 ---

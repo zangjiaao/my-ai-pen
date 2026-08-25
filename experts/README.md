@@ -24,7 +24,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-The product Node (**Node4 lineage / Graph × Pi** — unique product Node) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Graph) plus optional expert packs. **Expert pentest DoD** = **Expert Graph × Pi** only (product Graphs: mature `graphs/hard/app_assessment.json`, deep `graphs/hard/redteam_deep.json`; thin lab alias for assessment only). Expert UI has **no free/OMP scene** — free is Default only. **Soft scenario graphs are retired** as a product work mode (#68 / #76). After Graph complete, continue-chat stays in-envelope without auto full re-run (C1 / #78). Expert Graph stages use pi inside a product-owned runner (Task + Agent fan-out + Feedback process metrics). ADR 0001 B1: fallback B retired; no live Node5 tree.
+The product Node (**Node4 lineage / Graph × Pi**) runs **Expert packs** (one caste). Built-in `default` is a pack that currently declares **no** Graphs (ledger assist). Other catalog packs add tools/skills and may declare `graphs/hard/*.json`. **Pentest DoD** = **Graph × Pi** when the user permits a declared graph (`app_assessment`, `redteam_deep`; thin lab alias for assessment only). **Every Expert Session defaults to Free** (UI Graph **不指定**). **Soft scenario graphs are retired** (#68 / #76). After Graph complete, continue-chat stays in-envelope without auto full re-run (C1 / #78). Graph stages use pi inside a product-owned runner. ADR 0001 B1: fallback B retired; no live Node5 tree.
 
 **Model B — platform citizen base + specialist overlay:**
 

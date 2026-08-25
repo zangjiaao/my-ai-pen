@@ -16,7 +16,7 @@
 - `docs/specs/participant-session.md` / Spec [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) — Participant usage rollup hangs on Session identity; Case `case_run` is sum.  
 - `docs/specs/task-map-history.md` / Spec [#321](https://github.com/zangjiaao/my-ai-pen/issues/321) — **decoupled**: Task Map archive/seal **must not** reset Case token or work-seconds ledger.
 
-**Does not amend:** Finding Store / book-path L0, intent NLP ban (`AGENTS.md`), #321 Task Map lifecycle events, Default seat never-Graph, Worker audit dialog content (#308).
+**Does not amend:** Finding Store / book-path L0, intent NLP ban (`AGENTS.md`), #321 Task Map lifecycle events, pack Graph capability + user permission (no Expert caste), Worker audit dialog content (#308).
 
 ---
 

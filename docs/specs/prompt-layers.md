@@ -190,10 +190,10 @@ The **conceptual** ownership above still guides pack authors and future moves. *
 
 ### 3.4 Seat vs work mode
 
-- **Default** and **Expert** are **sibling seats**. Shared content is **Base only** — not Default Profession ⊂ Expert Profession.  
-- **Free** and **Graph** are **work modes** on an Expert Participant Session; they select **Runtime** variants.  
-- Default **never** enters Expert Graph (ADR 0001).  
-- Free is default Expert work mode; Graph only with declared capability + user permission.  
+- **Default** and **Expert** are **sibling packs** (one caste). Shared content is **Base only** — not Default Profession ⊂ Expert Profession.  
+- **Free** and **Graph** are **work modes** on a Participant Session; they select **Runtime** variants.  
+- **Graph** only when **that pack** declares graph ids and the user permits (Spec #277). Built-in `default` currently declares none.  
+- Free is the default work mode for every Expert.  
 - Layer selection is **structured only** — no free-text NLP invent of engagement/mode.
 
 ### 3.5 Path recipes (normative)
@@ -207,10 +207,10 @@ Package:        Base(trimmed) + Profession(compact) + Runtime(worker tools + opt
 
 | Path | Notes |
 |------|--------|
-| **Default Main** | Runtime has no Free/Graph mode block; ledger-oriented tools; RoE instance via `formatRoeInjection` in Runtime (§3.3.1). |
+| **Default Main** | Same Free / Graph recipes **if** that pack declares graphs; today `default` has no Graph Runtime block; ledger-oriented tools; RoE via `formatRoeInjection` in Runtime (§3.3.1). |
 | **Expert Free Main** | Runtime Free is **thin**; Graph L1 catalog allowed; no Graph settlement long text; full RoE inject in Runtime. |
 | **Expert Graph stage** | Profession core/compact **required** after P3; Runtime is stage contract + stage tools/skills + fail-closed destructive line (not full Free RoE block). |
-| **Package worker** | Same seam; thinner Profession; optional single skill body in Runtime; return contract. |
+| **Package worker** | Same seam; thinner Profession; optional single skill body (and, when shipped, Package profile overlay) in Runtime; return contract. Independent of whether Main is Free or Graph. |
 
 **After P3:** Graph stage captains must not be methodology-poorer than Package workers on profession-core contract markers.
 
@@ -349,7 +349,7 @@ Standing-first language tests; Graph L1 catalog injection tests; skill L1 no-bod
 - Bulk new skill/ref encyclopedias  
 - UI dual-rail redesign; multi-Expert true-parallel  
 - Translating raw tool stdout  
-- Default becoming an execution seat or gaining Expert Graph  
+- Inventing Graph files for a pack in this Spec (Graph remains pack-declared)  
 - Six-layer (L0–L5) as ongoing product taxonomy  
 
 ---
