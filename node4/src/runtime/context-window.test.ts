@@ -8,6 +8,7 @@ import {
   CHECKPOINT_POINTER,
   PERSIST_PASS_MARKER,
   buildCheckpointMessages,
+  collectCheckpointRehydrate,
   createContextWindowTransform,
   estimateOccupancy,
   findKeepTailStart,
@@ -93,6 +94,7 @@ const history: AgentMessage[] = [
   { role: "assistant", content: [{ type: "text", text: "working" }], timestamp: 5 } as unknown as AgentMessage,
 ];
 const shrunk = buildCheckpointMessages(history, 3, {
+  surfaceText: "total=3 seen=1 touched=1 booked=1 tested=1 untested=1 skipped=1",
   findingsLines: ["- [high] SQLi @ /login id=f1"],
   intelLines: ["- i1 kind=config hang=a:80 — WAF in front"],
 });
@@ -100,8 +102,36 @@ const blob = JSON.stringify(shrunk);
 assert.ok(!blob.includes(toolBody), "pre-slice tool bodies must not survive shrink");
 assert.ok(blob.includes("current slice"), "keep-tail current user turn stays");
 assert.ok(blob.includes(CHECKPOINT_POINTER), "checkpoint pointer present");
+assert.ok(blob.includes("tested=1") && blob.includes("untested=1") && blob.includes("skipped=1"), "coverage work-state rehydrated");
+assert.ok(!blob.includes("deadend="), "checkpoint must not teach retired deadend count");
 assert.ok(blob.includes("SQLi"), "findings board rehydrated");
 assert.ok(blob.includes("WAF"), "living intel rehydrated");
+
+{
+  const rehydrate = await collectCheckpointRehydrate({
+    surfaceSqlite: {
+      summary: async () => ({
+        total: 3,
+        open: 1,
+        in_probe: 1,
+        probed: 0,
+        booked: 1,
+        deadend: 0,
+        skipped: 1,
+        tested: 1,
+        untested: 1,
+        actionable: 1,
+        open_preview: ["/login"],
+      }),
+    },
+    task: {},
+  } as never);
+  assert.equal(
+    rehydrate.surfaceText,
+    "total=3 seen=1 touched=1 booked=1 tested=1 untested=1 skipped=1",
+  );
+  assert.doesNotMatch(rehydrate.surfaceText || "", /deadend=/);
+}
 
 const withPass = withPersistPass(history);
 assert.ok(JSON.stringify(withPass).includes(PERSIST_PASS_MARKER));
