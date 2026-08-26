@@ -20,6 +20,10 @@ import {
 } from "./hard-graph-runner.js";
 import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
+import {
+  pdcaSettleEnabled,
+  projectOverlayFromRuntime,
+} from "./pdca-settlement.js";
 import { HardGraphPlanStore, emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
 import {
   createUsageLedgerFromEnv,
@@ -562,6 +566,9 @@ export async function runHardGraphExpertTask(options: {
     locationStrings,
     goalMode: Boolean(parentRuntime.goals?.isActive?.() || task.goalObjective),
     goalObjective: task.goalObjective,
+    overlay: pdcaSettleEnabled()
+      ? await projectOverlayFromRuntime(parentRuntime).catch(() => undefined)
+      : undefined,
   });
 
   // Terminal checkpoint via shared builder (same plan_tree / llm_usage shapes as mid-run).

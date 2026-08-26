@@ -11,6 +11,10 @@ import {
   type HardGraphTerminal,
 } from "./hard-graph-runner.js";
 import {
+  applyBaseHonestyToGraphStatus,
+  type LiveStateOverlay,
+} from "./pdca-settlement.js";
+import {
   filterEmitableWorksetCandidates,
   worksetCandidatesFromHardSettle,
   type WorksetCandidate,
@@ -47,8 +51,13 @@ export async function settleHardGraphTask(options: {
   locationStrings?: string[];
   goalMode?: boolean;
   goalObjective?: string;
+  /** Spec #519: optional live overlay — Graph may not complete while base honesty is dirty. */
+  overlay?: LiveStateOverlay;
 }): Promise<HardGraphSettlementResult> {
-  const harnessStatus = hardGraphToHarnessStatus(options.terminal);
+  let harnessStatus = hardGraphToHarnessStatus(options.terminal);
+  if (options.overlay) {
+    harnessStatus = applyBaseHonestyToGraphStatus(harnessStatus, options.overlay);
+  }
   const workMode = `hard_graph:${options.graphId}:terminal:${options.terminal}`;
   const endTime = new Date().toISOString();
 

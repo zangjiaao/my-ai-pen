@@ -330,10 +330,12 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
 
       let approvalResult: ApprovalResult;
       try {
+        runtime.lifecycle.pendingUserDecision = true;
         approvalResult = abort
           ? await Promise.race([waitPromise, abortPromise])
           : await waitPromise;
       } finally {
+        runtime.lifecycle.pendingUserDecision = false;
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
       const decision = approvalResult.decision;

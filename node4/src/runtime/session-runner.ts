@@ -23,6 +23,14 @@ import {
   resolveOuterContinueBudgets,
   normalizeProductStopReason,
 } from "./loop-policy.js";
+import {
+  emptyOverlay,
+  mapPdcaVerdictToHarnessStatus,
+  pdcaSettleEnabled,
+  projectOverlayFromRuntime,
+  settleParticipantTurn,
+  type ParticipantTurnSettlement,
+} from "./pdca-settlement.js";
 import { selectNewUntestedSurfaces } from "./surface-harness.js";
 import { hasNamedEngagement } from "./attack-surface.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -531,6 +539,9 @@ export async function runNode4Task(
   let prematureStopCount = 0;
   let goalContinueCount = 0;
   let stopReason = "natural";
+  let pdcaPreviousOverlay = emptyOverlay();
+  let pdcaNoProgressStreak = 0;
+  let pdcaLastSettlement: ParticipantTurnSettlement | undefined;
   const cancelled = () => Boolean(signal?.aborted);
 
   // Optional seed goal mode from structured task field (not free-text NLP),
@@ -675,6 +686,9 @@ export async function runNode4Task(
         selfExpertName: task.expertName,
         thisTurnText: userPrompt,
       });
+      if (pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat) {
+        pdcaPreviousOverlay = await projectOverlayFromRuntime(runtime).catch(() => emptyOverlay());
+      }
       await promptAndAssert(
         userPrompt,
         "user",
@@ -761,7 +775,44 @@ export async function runNode4Task(
         continueCount,
         toolsInLastSegment: toolsInLast,
       });
-      if (!decision.continue) break;
+      if (!decision.continue) {
+        // Spec #519: natural stop is a settle proposal. Host may replan when
+        // Product state still names unresolved work (flag off = legacy settle).
+        if (pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat && !cancelled()) {
+          try {
+            const overlayNow = await projectOverlayFromRuntime(runtime);
+            const pdca = settleParticipantTurn({
+              overlay: overlayNow,
+              previousOverlay: pdcaPreviousOverlay,
+              noProgressStreak: pdcaNoProgressStreak,
+            });
+            pdcaLastSettlement = pdca;
+            pdcaPreviousOverlay = overlayNow;
+            pdcaNoProgressStreak = pdca.nextNoProgressStreak;
+            if (pdca.verdict === "replan" && pdca.replanPrompt) {
+              stopReason = "pdca_replan";
+              segmentCounter.tools = 0;
+              runtime.lifecycle.toolsInLastSegment = 0;
+              if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
+              await loggingPlatform.send({
+                type: "status_update",
+                conversation_id: task.conversationId,
+                task_id: task.taskId,
+                message: `pdca replan unresolved=${pdca.unresolved.length} reason=${pdca.reason}`,
+                agent_phase: "continue",
+                status: "running",
+                llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+              });
+              await promptAndAssert(pdca.replanPrompt, "harness");
+              continue;
+            }
+            stopReason = pdca.reason;
+          } catch {
+            /* overlay read must not crash settlement */
+          }
+        }
+        break;
+      }
 
       if (decision.kind === "booking_gap") bookingContinueUsed = true;
       if (decision.kind === "premature") prematureStopCount += 1;
@@ -878,15 +929,18 @@ export async function runNode4Task(
     const handedOff = stopReason === "handed_off";
     // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
     // Authorized handoff supersede is a successful Default finish, not an abort.
+    const pdcaOn = pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat;
     const harnessStatus = chatOnly
       ? cancelled() && !handedOff
         ? "incomplete"
         : "completed"
-      : resolveHarnessTerminalStatus({
-          bookedFindingCount: booked.count,
-          aborted: cancelled() && !handedOff,
-          stopReason,
-        });
+      : pdcaOn && pdcaLastSettlement && !(cancelled() && !handedOff)
+        ? mapPdcaVerdictToHarnessStatus(pdcaLastSettlement.verdict)
+        : resolveHarnessTerminalStatus({
+            bookedFindingCount: booked.count,
+            aborted: cancelled() && !handedOff,
+            stopReason,
+          });
     const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
     const endTime = new Date().toISOString();
 
@@ -945,6 +999,13 @@ export async function runNode4Task(
       workset_source: settlePkg.worksetSource,
       goal_mode: goals.isActive() || Boolean(task.goalObjective),
       goal_objective: task.goalObjective || undefined,
+      ...(pdcaLastSettlement
+        ? {
+            pdca_verdict: pdcaLastSettlement.verdict,
+            pdca_unresolved: pdcaLastSettlement.unresolved,
+            pdca_reason: pdcaLastSettlement.reason,
+          }
+        : {}),
     });
 
     try {

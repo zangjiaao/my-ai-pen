@@ -10,6 +10,12 @@ import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import type { PlatformSink, TaskEnvelope } from "../types.js";
 import { GoalStore } from "../stores/goal.js";
+import {
+  mapPdcaVerdictToHarnessStatus,
+  pdcaSettleEnabled,
+  projectOverlayFromRuntime,
+  settleParticipantTurn,
+} from "./pdca-settlement.js";
 import { registerActiveSession } from "./active-session-registry.js";
 import {
   attachNode4SessionObservability,
@@ -94,7 +100,7 @@ export async function runParkedWorkingContinue(options: {
   const workMode = parked.workMode;
   const startedAt = new Date().toISOString();
   let reparked = false;
-  let harnessStatus: "completed" | "incomplete" = "incomplete";
+  let harnessStatus: "completed" | "incomplete" | "blocked" = "incomplete";
 
   // Rebind live task/platform onto stored runtime when present.
   if (parked.runtime) {
@@ -234,6 +240,7 @@ export async function runParkedWorkingContinue(options: {
   }
 
   let stop: "aborted" | "completed" | "error" = "completed";
+  let pdcaPreviousOverlay: Awaited<ReturnType<typeof projectOverlayFromRuntime>> | undefined;
   try {
     if (cancelled()) {
       stop = "aborted";
@@ -246,6 +253,9 @@ export async function runParkedWorkingContinue(options: {
         selfExpertName: task.expertName,
         thisTurnText: userTurn,
       });
+      if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
+        pdcaPreviousOverlay = await projectOverlayFromRuntime(parked.runtime).catch(() => undefined);
+      }
       await session.prompt(userTurn, {
         prefixHarness: formatCaseSpeechHarness(speech.lines) || undefined,
       });
@@ -297,6 +307,20 @@ export async function runParkedWorkingContinue(options: {
       workMode,
       openTodoCount,
     });
+    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime && !aborted) {
+      try {
+        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
+        const pdca = settleParticipantTurn({
+          overlay: overlayNow,
+          previousOverlay: pdcaPreviousOverlay,
+          aborted,
+        });
+        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
+      } catch {
+        // Overlay read failed: do not complete from empty Todo / missing snapshot.
+        if (harnessStatus === "completed") harnessStatus = "incomplete";
+      }
+    }
     const decision = decideCaptainEndDisposition({
       aborted,
     });

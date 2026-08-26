@@ -63,7 +63,7 @@ Probe-class stages that allow `subagent` **prefer packages** when multi-class wo
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Free OMP** | Session Graph unspecified / pack has no matching declared graph | Pure OMP; Main may self-act; voluntary subagent (Package profiles when shipped); not Graph DoD |
+| **Free OMP** | Session Graph unspecified / pack has no matching declared graph | Pure OMP; Main may self-act; voluntary subagent (Package profiles when shipped); parallel work → dispatch packages and do not compete on the same probe (login / clarification / `finding(confirm)` stay on Main). Host PDCA settle (#519, `NODE4_PDCA_SETTLE`) only vetoes false completion from Product state — not Graph DoD |
 | **Graph × Pi** | User permits a graph id **this pack declares** (`app_assessment` / `redteam_deep` / …), `graphDiscipline=hard`, or lab `NODE4_HARD_GRAPH=1` | Runner drives stages; hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** (whitelist `choice_key` only on Gate nodes) |
 | **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed |
 

@@ -275,6 +275,11 @@ export type ToolRuntime = {
      * Not gate SOT; does not store full skill bodies.
      */
     skillBodyFingerprints?: Record<string, string>;
+    /**
+     * Spec #519: true while a required user decision is outstanding
+     * (request_user_decision wait). Overlay projects this as paused.
+     */
+    pendingUserDecision?: boolean;
   };
 };
 
