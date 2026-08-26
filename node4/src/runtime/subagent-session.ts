@@ -68,7 +68,7 @@ export {
   type BuildSubagentPromptOptions,
 };
 
-/** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
+/** Act tools for child workers — no nested subagent; finding is read-only (list/get). */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
   "todo",
   "shell",
@@ -81,6 +81,9 @@ export const SUBAGENT_CHILD_TOOL_NAMES = [
   "script",
   "fact",
   "surface",
+  "finding",
+  "platform_list_intel",
+  "platform_get_intel",
   "skill",
   "yield",
 ] as const;
@@ -185,8 +188,8 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
       "If session cookies were seeded from parent, try them first — re-login only when auth fails.",
       "Write process facts with fact(upsert) when cognition is confirmed.",
       "When done or blocked, write the complete report in this turn, then yield({ result: {} }) with no data. Do not write another message after yield. Do not write settlement.json as the return channel.",
-      "Parent books findings — you never finding(confirm).",
-      "Never call subagent. Never book product findings (no finding tool).",
+      "Parent books findings — you never finding(confirm) or finding(upsert).",
+      "Never call subagent. finding(list|get) and platform_list_intel / platform_get_intel are read-only Case blackboard.",
     ],
     toolNames: [...SUBAGENT_CHILD_TOOL_NAMES],
     bookingMode: "none",
@@ -445,6 +448,7 @@ async function runWarmPackage(args: {
   warm.agentId = agentId;
   if (warm.childRuntime?.lifecycle) {
     warm.childRuntime.lifecycle.workerYield = undefined;
+    warm.childRuntime.lifecycle.processQuality = input.parent.lifecycle.processQuality;
   }
 
   if (!(await pool.noteLive(warm))) {
@@ -720,6 +724,7 @@ async function runColdPackage(args: {
       subagentDepth: 1,
       abortSignal: abort,
       workerAudit: auditScope,
+      processQuality: parent.lifecycle.processQuality,
     },
   };
 

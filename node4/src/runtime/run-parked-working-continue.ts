@@ -11,11 +11,16 @@ import type { Node4Config } from "../config.js";
 import type { PlatformSink, TaskEnvelope } from "../types.js";
 import { GoalStore } from "../stores/goal.js";
 import {
+  formatLiveStateHarness,
+  lastDeltaFromRuntime,
   mapPdcaVerdictToHarnessStatus,
   pdcaSettleEnabled,
+  persistPdcaOnRuntime,
   projectOverlayFromRuntime,
   settleParticipantTurn,
+  type ParticipantTurnSettlement,
 } from "./pdca-settlement.js";
+import { joinHarnessPrefixes } from "./harness-channel.js";
 import { registerActiveSession } from "./active-session-registry.js";
 import {
   attachNode4SessionObservability,
@@ -241,6 +246,7 @@ export async function runParkedWorkingContinue(options: {
 
   let stop: "aborted" | "completed" | "error" = "completed";
   let pdcaPreviousOverlay: Awaited<ReturnType<typeof projectOverlayFromRuntime>> | undefined;
+  let pdcaLast: ParticipantTurnSettlement | undefined;
   try {
     if (cancelled()) {
       stop = "aborted";
@@ -257,7 +263,12 @@ export async function runParkedWorkingContinue(options: {
         pdcaPreviousOverlay = await projectOverlayFromRuntime(parked.runtime).catch(() => undefined);
       }
       await session.prompt(userTurn, {
-        prefixHarness: formatCaseSpeechHarness(speech.lines) || undefined,
+        prefixHarness: joinHarnessPrefixes(
+          formatCaseSpeechHarness(speech.lines),
+          pdcaSettleEnabled() && workMode === "free" && pdcaPreviousOverlay
+            ? formatLiveStateHarness(pdcaPreviousOverlay, lastDeltaFromRuntime(parked.runtime!))
+            : undefined,
+        ),
       });
       parked.speechCursor = speech.cursorAfter || parked.speechCursor;
       if (cancelled()) {
@@ -307,14 +318,17 @@ export async function runParkedWorkingContinue(options: {
       workMode,
       openTodoCount,
     });
-    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime && !aborted) {
+    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
       try {
         const overlayNow = await projectOverlayFromRuntime(parked.runtime);
         const pdca = settleParticipantTurn({
           overlay: overlayNow,
           previousOverlay: pdcaPreviousOverlay,
+          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
           aborted,
         });
+        persistPdcaOnRuntime(parked.runtime, pdca);
+        pdcaLast = pdca;
         harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
       } catch {
         // Overlay read failed: do not complete from empty Todo / missing snapshot.
@@ -398,6 +412,13 @@ export async function runParkedWorkingContinue(options: {
     workset_source: settlePkg.worksetSource,
     goal_mode: goalModeOn,
     goal_objective: task.goalObjective || undefined,
+    ...(pdcaLast
+      ? {
+          pdca_verdict: pdcaLast.verdict,
+          pdca_unresolved: pdcaLast.unresolved,
+          pdca_reason: pdcaLast.reason,
+        }
+      : {}),
   } as any);
 
   return {

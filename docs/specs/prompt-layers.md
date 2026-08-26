@@ -57,7 +57,7 @@ Learned from pi-coding-agent (`research/pi/packages/coding-agent/src/core/system
 |---------|---------------------|----------|----------------|
 | **System** | Four layers, one string, Standing-first | Policy, how this seat works, this-run switches, this-turn facts | Operator utterance; skill encyclopedia; tool JSON schema |
 | **User turn** | Operator utterance only (`task.instruction`) | What the user typed (or a slash-template expansion of that) | Case inject, Todo reminder, work-mode, RoE, Target/Scope, outer continue |
-| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint; **unread Case speech** (`### Case speech`; isSelf = this pi `session_id`) | Operator utterance; this working runtime’s own speech; always-on policy |
+| **Harness** | Product `role=harness`; provider maps to user + `## Runtime` (`convertNode4MessagesToLlm`) | Outer continue / goal / budget; occupancy persist-pass and checkpoint; **unread Case speech** (`### Case speech`; isSelf = this pi `session_id`); **Case live index + named TurnDelta** when `NODE4_PDCA_SETTLE=1` (`### Case live index`, capped identities — not a Case dump) | Operator utterance; this working runtime’s own speech; always-on policy; unbounded Surface/Finding/Intel lists |
 | **Tool result** | Appended tool text | Mid-run todo / booking / surface nudges (`### This-run …`) | Operator utterance |
 | **Tool definitions** | Name + description + parameters (parallel to text) | How to call the tool | Policy essays, start-order, Case facts |
 | **Skill body** | After `skill(get)` / worker load | Attack-class procedure | Always-on Profession; Graph settlement law |

@@ -6172,6 +6172,7 @@ def _package_settle_status_content(msg: dict) -> dict:
         if session_cont:
             out["parked_continue"] = True
             out["session_continue"] = True
+        _copy_pdca_settle_fields(msg, out)
         return out
     text = "Session continue settled" if session_cont else "Package complete"
     out = {"text": text, "status": "completed", "summary": summary}
@@ -6180,7 +6181,21 @@ def _package_settle_status_content(msg: dict) -> dict:
     if session_cont:
         out["parked_continue"] = True
         out["session_continue"] = True
+    _copy_pdca_settle_fields(msg, out)
     return out
+
+
+def _copy_pdca_settle_fields(msg: dict, out: dict) -> None:
+    """Keep host PDCA verdict on the persisted status row (Spec #529)."""
+    for key in ("pdca_verdict", "pdca_reason", "pdca_unresolved"):
+        if key in msg and msg.get(key) is not None:
+            out[key] = msg[key]
+    verdict = str(out.get("pdca_verdict") or "").strip()
+    reason = str(out.get("pdca_reason") or "").strip()
+    if verdict:
+        suffix = f"pdca {verdict}" + (f"/{reason}" if reason else "")
+        text = str(out.get("text") or "").strip()
+        out["text"] = f"{text} · {suffix}" if text else suffix
 
 
 def _package_error_status_content(msg: dict) -> dict:

@@ -1638,11 +1638,15 @@ export default function ConversationPage() {
               : "Session continue paused - "
             : status === "blocked"
               ? "Package blocked - "
-              : "Package incomplete - ") + String(m.summary || ""),
+              : "Package incomplete - ") + String(m.summary || "")
+          + (m.pdca_verdict ? ` · pdca ${String(m.pdca_verdict)}${m.pdca_reason ? `/${String(m.pdca_reason)}` : ""}` : ""),
         status: status === "blocked" ? "blocked" : "incomplete",
         audit: m.audit,
         summary: m.summary,
         parked_continue: sessionContinue || undefined,
+        pdca_verdict: m.pdca_verdict,
+        pdca_reason: m.pdca_reason,
+        pdca_unresolved: m.pdca_unresolved,
         message_id: m.message_id,
       }));
       void fetchAll();
@@ -1953,11 +1957,15 @@ export default function ConversationPage() {
             : "Package incomplete - "
           : "Package complete - ";
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: settleLabel + summaryText,
+        text: settleLabel + summaryText
+          + (m.pdca_verdict ? ` · pdca ${String(m.pdca_verdict)}${m.pdca_reason ? `/${String(m.pdca_reason)}` : ""}` : ""),
         status: incomplete ? status : "completed",
         summary: m.summary || {},
         audit: m.audit,
         parked_continue: sessionContinue || undefined,
+        pdca_verdict: m.pdca_verdict,
+        pdca_reason: m.pdca_reason,
+        pdca_unresolved: m.pdca_unresolved,
         message_id: m.message_id,
       }));
       void fetchAll();

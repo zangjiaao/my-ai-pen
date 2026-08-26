@@ -53,6 +53,12 @@ export function formatHarnessForLlm(text: string): string {
   return `${RUNTIME_HEADING}\n${t}`;
 }
 
+/** Join Case-speech / live-index prefixes; empty parts dropped. */
+export function joinHarnessPrefixes(...parts: Array<string | undefined>): string | undefined {
+  const kept = parts.map((p) => String(p || "").trim()).filter(Boolean);
+  return kept.length ? kept.join("\n\n") : undefined;
+}
+
 export function convertNode4MessagesToLlm(messages: AgentMessage[]): Message[] {
   const out: Message[] = [];
   for (const message of messages) {

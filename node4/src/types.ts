@@ -280,6 +280,15 @@ export type ToolRuntime = {
      * (request_user_decision wait). Overlay projects this as paused.
      */
     pendingUserDecision?: boolean;
+    /** Spec #519: no-progress streak persisted across park. */
+    pdcaNoProgressStreak?: number;
+    /** Spec #519: last named TurnDelta entries for the next harness index. */
+    pdcaLastDeltaEntries?: Array<{
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      summary: string;
+    }>;
   };
 };
 

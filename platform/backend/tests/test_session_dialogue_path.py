@@ -231,6 +231,19 @@ def test_p2_package_incomplete_and_error_copy():
     assert paused["text"] == "Session continue paused"
     blocked = _package_settle_status_content({"status": "blocked", "summary": {}})
     assert blocked["text"] == "Package blocked"
+    pdca = _package_settle_status_content(
+        {
+            "status": "blocked",
+            "summary": {},
+            "pdca_verdict": "blocked",
+            "pdca_reason": "no_progress_budget",
+            "pdca_unresolved": [{"kind": "surface", "id": "s1"}],
+        }
+    )
+    assert pdca["pdca_verdict"] == "blocked"
+    assert pdca["pdca_reason"] == "no_progress_budget"
+    assert pdca["pdca_unresolved"][0]["id"] == "s1"
+    assert "pdca blocked/no_progress_budget" in pdca["text"]
     err = _package_error_status_content(
         {"message": "stream failed", "parked_continue": True}
     )

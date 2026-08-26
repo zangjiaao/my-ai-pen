@@ -7,6 +7,7 @@
  */
 
 import { isSurfaceActionable, coerceSurfaceCoverage } from "../stores/surface-coverage.js";
+import { hasOpenApproval } from "./approvals.js";
 import { HARNESS_CONTINUE_NOTICE } from "./harness-channel.js";
 import type { ToolRuntime } from "../types.js";
 
@@ -98,6 +99,7 @@ export type ParticipantTurnSettlement = TerminalConsistencyResult & {
   replanPrompt?: string;
 };
 
+/** Lab flag. End-of-burst settle still runs on chat-only expert (no target yet); skip ledger-assist seats at the caller. */
 export function pdcaSettleEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = String(env.NODE4_PDCA_SETTLE || "").trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
@@ -342,15 +344,17 @@ export function evaluateTerminalConsistency(options: {
   noProgressStreak?: number;
   maxNoProgress?: number;
 }): TerminalConsistencyResult {
-  if (options.aborted) {
-    return { verdict: "incomplete", unresolved: collectUnresolved(options.overlay), reason: "aborted" };
-  }
+  // HITL wait beats interrupt: Stop while a card is open is paused (session kept).
+  // Card Cancel clears pending first, then abort → incomplete below.
   if (options.overlay.pendingUserDecision) {
     return {
       verdict: "paused",
       unresolved: [{ kind: "decision", id: "user", summary: "pending user decision" }],
       reason: "pending_user_decision",
     };
+  }
+  if (options.aborted) {
+    return { verdict: "incomplete", unresolved: collectUnresolved(options.overlay), reason: "aborted" };
   }
   const unresolved = collectUnresolved(options.overlay);
   if (unresolved.length === 0) {
@@ -366,6 +370,59 @@ export function evaluateTerminalConsistency(options: {
     };
   }
   return { verdict: "replan", unresolved, reason: "unresolved_state" };
+}
+
+/** Index-like harness view (capped identities). Not a Case dump. */
+export function formatLiveStateHarness(overlay: LiveStateOverlay, delta?: TurnDelta): string {
+  const ident = (row: PdcaIdentity) =>
+    row.summary && row.summary !== row.id ? `${row.id} — ${row.summary}` : row.id;
+  const lines: string[] = [
+    "### Case live index",
+    `Surfaces: untested=${overlay.surfaces.untested} tested=${overlay.surfaces.tested} skipped=${overlay.surfaces.skipped}` +
+      (overlay.surfaces.omitted ? ` (actionable omitted=${overlay.surfaces.omitted})` : ""),
+  ];
+  if (overlay.surfaces.actionable.length) {
+    lines.push("Actionable surfaces:");
+    for (const s of overlay.surfaces.actionable) lines.push(`  - ${ident(s)}`);
+  }
+  if (overlay.hypotheses.active.length) {
+    lines.push("Active hypotheses:");
+    for (const h of overlay.hypotheses.active) lines.push(`  - ${ident(h)}`);
+  }
+  if (overlay.hypotheses.omitted) {
+    lines.push(`  (hypotheses omitted=${overlay.hypotheses.omitted})`);
+  }
+  lines.push(`Findings booked=${overlay.findings.booked}`);
+  if (overlay.findings.feedbackOkUnbooked.length) {
+    lines.push("feedback_ok unbooked:");
+    for (const f of overlay.findings.feedbackOkUnbooked) lines.push(`  - ${ident(f)}`);
+  }
+  if (overlay.findings.omitted) {
+    lines.push(`  (findings omitted=${overlay.findings.omitted})`);
+  }
+  if (overlay.packages.running.length) {
+    lines.push("Running packages:");
+    for (const p of overlay.packages.running) lines.push(`  - ${ident(p)}`);
+  }
+  if (overlay.pendingWorkerReconciliation.length) {
+    lines.push("Pending Worker reconciliation:");
+    for (const w of overlay.pendingWorkerReconciliation) lines.push(`  - ${ident(w)}`);
+  }
+  if (overlay.pendingWorkerOmitted) {
+    lines.push(`  (workers omitted=${overlay.pendingWorkerOmitted})`);
+  }
+  if (overlay.pendingUserDecision) lines.push("Pending user decision: yes");
+  lines.push(
+    "Full records stay on-demand: surface(list|get), finding(list|get), platform_list_intel / platform_get_intel.",
+  );
+  if (delta && (delta.entries.length > 0 || delta.omitted > 0)) {
+    lines.push("Turn changes:");
+    for (const e of delta.entries) {
+      lines.push(`  [${e.action}] ${e.entity_type} ${e.entity_id}: ${e.summary}`);
+    }
+    if (delta.omitted) lines.push(`  (delta omitted=${delta.omitted})`);
+  }
+  return lines.join("\n");
 }
 
 export function formatReplanPrompt(delta: TurnDelta, unresolved: PdcaIdentity[]): string {
@@ -420,6 +477,20 @@ export function settleParticipantTurn(options: {
     replanPrompt:
       result.verdict === "replan" ? formatReplanPrompt(delta, result.unresolved) : undefined,
   };
+}
+
+export function persistPdcaOnRuntime(
+  runtime: ToolRuntime,
+  pdca: ParticipantTurnSettlement,
+): void {
+  runtime.lifecycle.pdcaNoProgressStreak = pdca.nextNoProgressStreak;
+  runtime.lifecycle.pdcaLastDeltaEntries = pdca.delta.entries;
+}
+
+export function lastDeltaFromRuntime(runtime: ToolRuntime): TurnDelta | undefined {
+  const entries = runtime.lifecycle.pdcaLastDeltaEntries;
+  if (!entries?.length) return undefined;
+  return { entries, omitted: 0 };
 }
 
 export function mapPdcaVerdictToHarnessStatus(
@@ -522,6 +593,8 @@ export async function projectOverlayFromRuntime(runtime: ToolRuntime): Promise<L
     runningPackages: runningPackagesFromRuntime(runtime),
     pendingWorkers: pendingWorkersFromRuntime(runtime),
     findings,
-    pendingUserDecision: Boolean(runtime.lifecycle.pendingUserDecision),
+    pendingUserDecision:
+      Boolean(runtime.lifecycle.pendingUserDecision) ||
+      hasOpenApproval(runtime.task?.conversationId),
   });
 }

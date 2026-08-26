@@ -9,6 +9,7 @@ import {
   computeTurnDelta,
   emptyOverlay,
   evaluateTerminalConsistency,
+  formatLiveStateHarness,
   formatReplanPrompt,
   mapPdcaVerdictToHarnessStatus,
   pdcaSettleEnabled,
@@ -168,6 +169,18 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(settled.verdict, "incomplete");
 }
 
+// --- Stop while a user decision is still open → paused (not aborted) ---
+// Chat-only expert (no target) must still reach this contract; session-runner
+// must not skip settle just because chatOnly.
+{
+  const settled = settleParticipantTurn({
+    overlay: overlay({ pendingUserDecision: true }),
+    aborted: true,
+  });
+  assert.equal(settled.verdict, "paused");
+  assert.equal(settled.reason, "pending_user_decision");
+}
+
 // --- Open todos alone do not block completed ---
 {
   const settled = settleParticipantTurn({
@@ -191,6 +204,50 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.ok(JSON.stringify(delta).length < dump.length);
   const noOp = computeTurnDelta(after, after);
   assert.equal(noOp.entries.length, 0, "pre/post same snapshot is not an added-everything dump");
+}
+
+// --- Live index is capped identities, not a Case JSON dump ---
+{
+  const snap = projectLiveStateOverlay({
+    surfaces: [{ id: "login", location: "http://t/login", status: "seen", coverage: "untested" }],
+  });
+  const index = formatLiveStateHarness(snap);
+  assert.match(index, /login/);
+  assert.match(index, /untested=1/);
+  assert.doesNotMatch(index, /"actionable":\s*\[/);
+}
+
+// --- High-value booked finding appears as a named TurnDelta, not a Case dump ---
+{
+  const before = projectLiveStateOverlay({
+    surfaces: [{ id: "s1", location: "http://t/a", status: "seen", coverage: "untested" }],
+  });
+  const after = projectLiveStateOverlay({
+    surfaces: [{ id: "s1", location: "http://t/a", status: "seen", coverage: "untested" }],
+    findings: [{ id: "f1", status: "booked", title: "RCE" }],
+  });
+  const delta = computeTurnDelta(before, after);
+  const index = formatLiveStateHarness(after, delta);
+  assert.match(index, /\[added\] finding f1|booked 0 → 1/);
+  assert.doesNotMatch(index, /"findings":\s*\{/);
+}
+
+// --- Cold and parked share verdict including no-progress streak ---
+{
+  const snap = projectLiveStateOverlay({
+    surfaces: [{ id: "s1", location: "http://t/login", status: "seen", coverage: "untested" }],
+  });
+  const opts = {
+    overlay: snap,
+    previousOverlay: snap,
+    noProgressStreak: 1,
+    maxNoProgress: 2,
+  };
+  const cold = settleParticipantTurn(opts);
+  const parked = settleParticipantTurn(opts);
+  assert.equal(cold.verdict, "blocked");
+  assert.equal(parked.verdict, cold.verdict);
+  assert.deepEqual(parked.unresolved.map((u) => u.id), cold.unresolved.map((u) => u.id));
 }
 
 // --- High-value new Finding in delta; still replan if Surface remains ---

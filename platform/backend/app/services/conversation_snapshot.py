@@ -1312,7 +1312,19 @@ def compact_message_content(msg_type: str, content: dict, stats: dict) -> dict:
                 result["omitted_tool_items"] = omitted_items
         return {key: value for key, value in result.items() if value not in (None, "", [])}
     if msg_type == "status":
-        keys = ("text", "phase", "iteration", "active_tool", "status", "summary", "agent_source", "agent_node_id")
+        keys = (
+            "text",
+            "phase",
+            "iteration",
+            "active_tool",
+            "status",
+            "summary",
+            "agent_source",
+            "agent_node_id",
+            "pdca_verdict",
+            "pdca_reason",
+            "pdca_unresolved",
+        )
         return {key: compact_value(content.get(key), stats) for key in keys if key in content and content.get(key) is not None}
     if msg_type in {"text", "thinking", "reasoning", "agent_thinking"}:
         keys = ("text", "agent_source", "agent_node_id", "agent_mode", "agent_target", "client_message_id")

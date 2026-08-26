@@ -171,6 +171,16 @@ export function cancelApprovalsForConversation(conversationId: string): void {
   }
 }
 
+/** True while request_user_decision still has an unanswered wait for this Case. */
+export function hasOpenApproval(conversationId: string): boolean {
+  const cid = String(conversationId || "").trim();
+  if (!cid) return false;
+  for (const entry of pending.values()) {
+    if (entry.conversationId === cid) return true;
+  }
+  return false;
+}
+
 /** Test helper: clear all waits. */
 export function clearAllApprovals(): void {
   for (const [, entry] of [...pending.entries()]) {

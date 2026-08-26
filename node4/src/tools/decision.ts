@@ -335,7 +335,9 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
           ? await Promise.race([waitPromise, abortPromise])
           : await waitPromise;
       } finally {
-        runtime.lifecycle.pendingUserDecision = false;
+        // Interrupt during the wait: leave the flag so settle can emit paused.
+        // Authorize/cancel: clear so a following abort is a normal incomplete.
+        if (!abort?.aborted) runtime.lifecycle.pendingUserDecision = false;
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
       const decision = approvalResult.decision;
