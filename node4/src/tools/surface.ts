@@ -1,9 +1,9 @@
 /**
  * Surface tool — Case attack-surface ledger (Spec #368 / #370 / #383 D5).
  *
- * Primary Agent ops: summary | list | get (management view).
+ * Primary Agent ops: summary | list | get | mark | unmark | skip.
  * Normal fill is Runtime: Traffic settle + TARGET seed; booked via finding(confirm).
- * upsert remains registered as non-primary (corrective / debug / import / tests).
+ * Coverage work-state is Agent-maintained (mark/skip). upsert cannot write coverage.
  *
  * Working store: Node SQLite (caseDir/surfaces/ledger.sqlite). Offline ok without Platform.
  * Online (#374): local commit required for ok; async Platform surface_upsert (platform_sync pending→ok|error).
@@ -20,6 +20,11 @@ import {
   type SurfaceUpsertItem,
 } from "../stores/surface-sqlite.js";
 import {
+  SKIP_REASON_REQUIRED_ERROR,
+  UPSERT_TERMINAL_STATUS_ERROR,
+  coerceSurfaceSkipReason,
+} from "../stores/surface-coverage.js";
+import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
 } from "../runtime/surface-platform-sync.js";
@@ -30,6 +35,14 @@ function resolveSourceAgentId(runtime: ToolRuntime): string {
   if (wa != null && String(wa).trim()) return String(wa).trim();
   if ((runtime.lifecycle.subagentDepth || 0) >= 1) return "worker";
   return "main";
+}
+
+function resolveCoverageMarkedBy(runtime: ToolRuntime): string {
+  const expert = String(runtime.task?.expertId || "").trim() || "main";
+  const wa = runtime.lifecycle.workerAudit?.agentId;
+  if (wa != null && String(wa).trim()) return `${expert}/${String(wa).trim()}`;
+  if ((runtime.lifecycle.subagentDepth || 0) >= 1) return `${expert}/worker`;
+  return expert;
 }
 
 function asItemList(params: Record<string, unknown>): SurfaceUpsertItem[] {
@@ -72,20 +85,23 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
     name: "surface",
     label: "Attack surface ledger",
     description: [
-      "Query the Case attack-surface working ledger (Node SQLite) — Agent management view.",
-      "PRIMARY ops: summary | list | get.",
-      "summary: counts + new_untested + tested(=case_tested from purpose=test traffic) + samples; primary duty NEW→TESTED (or deadend).",
-      `list: default seen+touched actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT} (max same); returns returned/total_matching/has_more.`,
+      "Query and maintain the Case attack-surface working ledger (Node SQLite).",
+      "PRIMARY ops: summary | list | get | mark | unmark | skip.",
+      "Identities are born from Traffic settle + TARGET seed — do not invent paths.",
+      "Coverage work-state (Case-shared): untested (default) | tested | skipped. Who tests, marks. Operators do not tick.",
+      "mark: existing identity → tested. unmark → untested. skip: existing identity → skipped with reason=deadend|roe.",
+      "Origin/root may be marked without HTTP if the seed row exists; child paths must already be on the tree.",
+      "summary: tested/untested/skipped counts from work-state (not Traffic purpose=test). Primary duty: look at the tree → plan → act → mark/skip → look again.",
+      `list: default seen+touched untested queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT}. status=all for full ledger.`,
       "get: by id, location, or origin_key+path_key.",
-      "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; TESTED only via purpose=test Traffic (case_tested; ≥1 enough); booked only via finding(confirm).",
-      "Platform vuln priors alone ≠ this-Case TESTED / ≠ coverage complete — re-verify context only.",
-      "Optional upsert (non-primary): rare correctives — cannot set booked; cannot fake TESTED/case_tested without traffic.",
+      "Platform vuln priors alone ≠ TESTED / ≠ coverage complete. Disclose remaining untested on pause. Coverage never hard-blocks booking.",
+      "Optional upsert (non-primary): rare correctives for identity attrs. Cannot set booked. Cannot set coverage. status=deadend|skipped_roe is rejected — use skip.",
       "Main and Worker share the same Case ledger. Offline ok — no Platform required.",
       "Prefer this tool over fact(op=surface).",
       `Write hard-cap ${SURFACE_WRITE_HARD_CAP} rows; prefer ≤${SURFACE_UPSERT_BATCH_MAX} per optional upsert call.`,
     ].join(" "),
     parameters: Type.Object({
-      op: Type.String({ description: "summary | list | get | upsert (upsert non-primary)" }),
+      op: Type.String({ description: "summary | list | get | mark | unmark | skip | upsert (upsert non-primary)" }),
       /** Single location (upsert/get) */
       location: Type.Optional(Type.String()),
       /** Batch upsert items (non-primary) */
@@ -108,8 +124,14 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       status: Type.Optional(
         Type.String({
           description:
-            "upsert: seen|deadend|skipped_roe (not booked; touched/TESTED only via Traffic settle — agent cannot fake). list: filter or comma-list or 'all' (default seen+touched)",
+            "upsert: seen only (not booked; not deadend/skipped_roe — use skip). list: filter or comma-list or 'all' (default seen+touched untested)",
         }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: "skip: deadend | roe (required for op=skip)" }),
+      ),
+      coverage: Type.Optional(
+        Type.String({ description: "list filter: untested | tested | skipped" }),
       ),
       kind: Type.Optional(Type.String()),
       auth: Type.Optional(Type.String()),
@@ -164,45 +186,38 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             path_key: s.path_key,
             origin_key: s.origin_key,
             status: s.status,
-            case_tested: s.case_tested === true,
+            coverage: s.coverage,
           })),
           ...bookedSample.surfaces.map((s) => ({
             location: s.location,
             path_key: s.path_key,
             origin_key: s.origin_key,
             status: s.status,
-            case_tested: s.case_tested === true,
+            coverage: s.coverage,
           })),
         ].slice(0, SURFACE_SUMMARY_SAMPLE_MAX);
-        // Spec #411/#413: NEW untested queue — prefer is_new when present; untested = !case_tested.
         const allRows = await store.all();
         const newQueue = selectNewUntestedSurfaces(allRows, SURFACE_SUMMARY_SAMPLE_MAX);
-        const testedCount = allRows.filter((r) => r.case_tested === true).length;
         return jsonResult({
           ok: true,
           op: "summary",
           total: cov.total,
           seen: cov.open,
           touched: cov.in_probe,
-          /** Operator vocabulary: TESTED = case_tested (≥1 purpose=test this Case). */
-          tested: testedCount,
-          case_tested: testedCount,
-          /** Primary coverage queue: NEW untested (or !case_tested fallback until is_new dual-write). */
+          tested: cov.tested,
+          untested: cov.untested,
+          skipped: cov.skipped,
           new_untested: newQueue.count,
           booked: cov.booked,
-          deadend: cov.deadend,
-          skipped_roe: cov.skipped,
-          /** seen + touched still needing act */
           actionable: cov.actionable,
           counts: {
             seen: cov.open,
             touched: cov.in_probe,
-            tested: testedCount,
-            case_tested: testedCount,
+            tested: cov.tested,
+            untested: cov.untested,
+            skipped: cov.skipped,
             new_untested: newQueue.count,
             booked: cov.booked,
-            deadend: cov.deadend,
-            skipped_roe: cov.skipped,
           },
           new_untested_samples: newQueue.samples,
           new_untested_mode: newQueue.mode,
@@ -210,14 +225,15 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           samples,
           guidance:
             cov.total === 0
-              ? "Ledger empty. Fill is Runtime-passive: real Traffic settle + TARGET seed. Explore with http/session/browser so requests land; then re-check summary. upsert is optional corrective only — not required."
-              : "Coverage snapshot. Primary duty: NEW untested → TESTED (purpose=test traffic sets case_tested; ≥1 enough) or deadend. Browse/seed alone ≠ TESTED. Platform vuln priors ≠ TESTED / ≠ coverage complete. upsert cannot fake case_tested. Open NEW untested never blocks booking — disclose on pause. Use surface(list) for pages.",
+              ? "Ledger empty. Fill is Runtime-passive: real Traffic settle + TARGET seed. Explore with http/session/browser so requests land; then re-check summary. Coverage: surface(op=mark|unmark|skip) on existing identities."
+              : "Coverage snapshot (work-state). Primary duty: look at untested/new → plan → act → surface(op=mark) or surface(op=skip, reason=deadend|roe) → look again. Traffic purpose=test does not mark TESTED. Platform vuln priors ≠ TESTED / ≠ coverage complete. Cannot invent identities. Open untested never blocks booking — disclose on pause. Use surface(list) for pages.",
         });
       }
 
       if (op === "list") {
         const result = await store.list({
           status: params?.status,
+          coverage: params?.coverage,
           origin_key: params?.origin_key,
           limit: params?.limit,
           offset: params?.offset,
@@ -233,8 +249,8 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           offset: result.offset,
           guidance:
             result.has_more
-              ? "More rows match — page with offset+=limit. Default filter is seen+touched; status=all for full ledger."
-              : "Actionable queue page (seen+touched by default). Ledger fills from Traffic settle + TARGET seed; finding(confirm) marks booked. surface(summary) for counts; upsert is optional corrective only.",
+              ? "More rows match — page with offset+=limit. Default filter is seen+touched untested; status=all for full ledger."
+              : "Actionable queue page (seen+touched untested by default). Ledger fills from Traffic settle + TARGET seed; coverage via mark/skip. surface(summary) for counts.",
         });
       }
 
@@ -254,6 +270,47 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
         return jsonResult({ ok: true, op: "get", surface: row });
       }
 
+      if (op === "mark" || op === "unmark" || op === "skip") {
+        const coverage =
+          op === "mark" ? "tested" : op === "unmark" ? "untested" : "skipped";
+        const reasonRaw = params?.reason;
+        if (op === "skip") {
+          const r = String(reasonRaw || "").trim().toLowerCase();
+          if (r !== "deadend" && r !== "roe") {
+            return textResult(`error: ${SKIP_REASON_REQUIRED_ERROR}`, { isError: true });
+          }
+        }
+        const written = await store.setCoverage({
+          id: params?.id,
+          location: params?.location,
+          origin_key: params?.origin_key,
+          path_key: params?.path_key,
+          coverage,
+          skip_reason: op === "skip" ? coerceSurfaceSkipReason(reasonRaw) : undefined,
+          marked_by: resolveCoverageMarkedBy(runtime),
+        });
+        if (!written.ok) {
+          return textResult(`error: ${written.error}`, { isError: true });
+        }
+        const platformOnline = isSurfacePlatformOnline(runtime);
+        if (platformOnline) {
+          void enqueueSurfacePlatformSync(runtime, [written.surface]);
+        }
+        return jsonResult({
+          ok: true,
+          op,
+          surface: written.surface,
+          coverage: written.surface.coverage,
+          coverage_skip_reason: written.surface.coverage_skip_reason,
+          guidance:
+            op === "skip"
+              ? "Coverage skipped. Graph todo(done) treats skipped as not-open. Status (seen/touched/booked) is unchanged."
+              : op === "mark"
+                ? "Coverage tested. Who-tests-marks. Status (seen/touched/booked) is unchanged."
+                : "Coverage returned to untested.",
+        });
+      }
+
       if (op === "upsert") {
         const items = asItemList(params || {});
         if (!items.length) {
@@ -261,6 +318,13 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             "error: surface(upsert) requires location or surfaces[{location,…}]",
             { isError: true },
           );
+        }
+        const terminal = items.find((it) => {
+          const st = String(it.status || "").trim().toLowerCase();
+          return st === "deadend" || st === "skipped_roe";
+        });
+        if (terminal) {
+          return textResult(`error: ${UPSERT_TERMINAL_STATUS_ERROR}`, { isError: true });
         }
         if (items.length > SURFACE_UPSERT_BATCH_MAX) {
           return textResult(
@@ -305,7 +369,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      return textResult("error: op must be summary|list|get|upsert", { isError: true });
+      return textResult("error: op must be summary|list|get|mark|unmark|skip|upsert", { isError: true });
     },
   };
 }

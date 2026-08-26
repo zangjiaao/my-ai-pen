@@ -2,7 +2,7 @@
  * Spec #413 / L3 — Traffic exchange purpose classification.
  *
  * purpose = test | browse | setup | noise | unknown
- * Drives Surface case_tested (TESTED chip) when purpose=test (≥1 exchange).
+ * Audit axis only — does not write operator TESTED / coverage work-state (#518).
  *
  * Order: explicit declaration → tool-family defaults → heuristics.
  */
@@ -242,7 +242,7 @@ export function withClassifiedPurpose<T extends Record<string, unknown>>(
   return { ...exchange, purpose };
 }
 
-/** Purpose drives operator TESTED (case_tested). Fail-closed: only test. */
+/** Audit: purpose=test historically marked case_tested. Does not write coverage (#518). */
 export function purposeMarksCaseTested(
   purpose: TrafficPurpose | string | null | undefined,
 ): boolean {

@@ -142,18 +142,17 @@ const tool = createSurfaceTool(runtime);
   );
   assert.ok(r.ok);
   if (r.ok) {
-    assert.equal(r.upserted[0]!.status, "touched", "source=traffic may set TESTED");
-    assert.equal(r.upserted[0]!.case_tested, true, "purpose=test settle sets case_tested");
+    assert.equal(r.upserted[0]!.status, "touched", "source=traffic may set touched");
   }
 
-  // Agent cannot invent case_tested on another path
+  // Agent cannot invent coverage via upsert case_tested
   const fake = await store.upsert(
     [{ location: "https://host.example/login", status: "touched", case_tested: true }],
     { source: "agent" },
   );
   assert.ok(fake.ok);
   if (fake.ok) {
-    assert.equal(fake.upserted[0]!.case_tested, false, "agent cannot fake case_tested");
+    assert.equal(fake.upserted[0]!.coverage, "untested", "agent upsert cannot write coverage");
   }
 }
 
@@ -167,17 +166,23 @@ const tool = createSurfaceTool(runtime);
   await toolJson(tool, {
     op: "upsert",
     location: "https://host.example/admin",
-    status: "deadend",
+    status: "seen",
+  });
+  await toolJson(tool, {
+    op: "skip",
+    location: "https://host.example/admin",
+    reason: "deadend",
   });
   const r = await toolJson(tool, { op: "list" });
   assert.ok(r.data);
   assert.equal(r.data!.ok, true);
-  assert.equal(r.data!.returned, 2, "default excludes deadend/booked");
+  assert.equal(r.data!.returned, 2, "default excludes skipped/booked");
   assert.equal(r.data!.total_matching, 2);
   assert.equal(r.data!.has_more, false);
   const list = r.data!.surfaces as Array<Record<string, unknown>>;
   for (const s of list) {
     assert.ok(s.status === "seen" || s.status === "touched");
+    assert.equal(s.coverage, "untested");
   }
 }
 
@@ -210,38 +215,27 @@ const tool = createSurfaceTool(runtime);
   assert.ok((r.data!.total as number) >= 3);
   assert.equal(typeof r.data!.seen, "number");
   assert.equal(typeof r.data!.touched, "number");
-  // Spec #413: tested = case_tested count (≥1 purpose=test), not multi-hit-only touched.
+  // Spec #518: tested = coverage work-state, not purpose=test / case_tested.
   assert.equal(typeof r.data!.tested, "number");
-  assert.equal(r.data!.tested, r.data!.case_tested);
-  assert.ok((r.data!.tested as number) >= 1, "traffic case_tested counted as tested");
-  // Spec #411/#413: new_untested queue = !case_tested (seen_fallback when no is_new)
-  assert.equal(typeof r.data!.new_untested, "number");
+  assert.equal(typeof r.data!.untested, "number");
+  assert.equal(typeof r.data!.skipped, "number");
   assert.equal(
-    r.data!.new_untested,
-    (r.data!.total as number) - (r.data!.tested as number),
-    "untested = total − case_tested (no is_new flags)",
+    (r.data!.tested as number) + (r.data!.untested as number) + (r.data!.skipped as number),
+    r.data!.total,
   );
+  assert.equal(typeof r.data!.new_untested, "number");
   assert.equal((r.data!.counts as Record<string, number>).new_untested, r.data!.new_untested);
   assert.ok(Array.isArray(r.data!.new_untested_samples));
   assert.equal(r.data!.new_untested_mode, "seen_fallback");
   assert.equal(typeof r.data!.booked, "number");
-  assert.equal(typeof r.data!.deadend, "number");
-  assert.equal(typeof r.data!.skipped_roe, "number");
   assert.equal(typeof r.data!.actionable, "number");
-  assert.equal(
-    (r.data!.actionable as number),
-    (r.data!.seen as number) + (r.data!.touched as number),
-  );
-  assert.ok((r.data!.deadend as number) >= 1, "admin deadend counted");
+  assert.ok((r.data!.skipped as number) >= 1, "admin skip counted");
   const counts = r.data!.counts as Record<string, number>;
   assert.ok(counts);
   assert.equal(counts.seen, r.data!.seen);
   assert.equal(counts.touched, r.data!.touched);
   assert.equal(counts.tested, r.data!.tested);
-  assert.equal(counts.case_tested, r.data!.tested);
-  assert.equal(counts.booked, r.data!.booked);
-  assert.equal(counts.deadend, r.data!.deadend);
-  assert.equal(counts.skipped_roe, r.data!.skipped_roe);
+  assert.equal(counts.skipped, r.data!.skipped);
   assert.ok(Array.isArray(r.data!.sample_paths));
   assert.ok(Array.isArray(r.data!.samples));
   const samples = r.data!.samples as Array<Record<string, unknown>>;
@@ -249,10 +243,9 @@ const tool = createSurfaceTool(runtime);
     assert.ok(typeof s.location === "string" || typeof s.path_key === "string");
     assert.ok(typeof s.status === "string");
   }
-  // Tool description posture: summary is primary; guidance must not require upsert deposit
   assert.ok(typeof r.data!.guidance === "string");
   assert.doesNotMatch(String(r.data!.guidance), /must (?:deposit|upsert|register)/i);
-  assert.match(String(r.data!.guidance), /priors.*≠|NEW untested/i, "guidance: priors ≠ coverage / NEW duty");
+  assert.match(String(r.data!.guidance), /priors.*≠|NEW untested|op=mark/i, "guidance: priors ≠ coverage / mark duty");
 }
 
 // --- summary empty ledger ---
@@ -392,7 +385,7 @@ const tool = createSurfaceTool(runtime);
   assert.ok(probed);
   // Expand-contract: unmigrated legacy "probed" may remain until rewrite; normalize on read path of list.
   assert.ok(
-    probed!.status === "probed" || probed!.status === "touched",
+    String(probed!.status) === "probed" || probed!.status === "touched",
     `expected probed or touched, got ${probed!.status}`,
   );
   migStore.close();

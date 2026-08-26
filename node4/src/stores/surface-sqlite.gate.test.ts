@@ -41,46 +41,47 @@ await store.markBooked("http://127.0.0.1:8080/vulnerabilities/sqli/");
 sum = await store.summary();
 assert.equal(sum.booked, 1);
 
-// Gate: open xss still blocks bare done
+// Gate: remaining untested xss still blocks bare done
 const blocked = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: undefined,
   summary: await store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
 assert.equal(blocked.ok, false);
 
-// Gate: path acted match allows
-const okPath = await assertTodoDoneAllowed({
+// Spec #518: mentioning an already-booked path does not green todo while others remain open
+const stillOpen = await assertTodoDoneAllowed({
   task: "SQLi at /vulnerabilities/sqli",
   summary: await store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
-assert.equal(okPath.ok, true);
+assert.equal(stillOpen.ok, false);
 
-// Gate: deadend note
+// Spec #518: note=deadend is retired — explicit error, does not write coverage
 const dead = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: "deadend: /vulnerabilities/xss_r no reflection",
   summary: await store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
-assert.equal(dead.ok, true);
-if (!dead.ok) throw new Error("expected deadend allow");
-assert.equal(dead.ledgerOp?.op, "deadend");
+assert.equal(dead.ok, false);
+if (dead.ok) throw new Error("expected deadend note to be rejected");
+assert.match(dead.error, /surface\(op=skip/);
 
-await store.markDeadend("/vulnerabilities/xss_r/", "no reflection");
+const skipped = await store.setCoverage({
+  location: "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+  coverage: "skipped",
+  skip_reason: "deadend",
+  marked_by: "test",
+});
+assert.ok(skipped.ok);
 sum = await store.summary();
 assert.equal(sum.actionable, 0);
+const xss = await store.get({ location: "http://127.0.0.1:8080/vulnerabilities/xss_r/" });
+assert.equal(xss?.status, "seen", "skip does not change status");
+assert.equal(xss?.coverage, "skipped");
 
 const clear = await assertTodoDoneAllowed({
   task: "anything",
   summary: await store.summary(),
-  hasActedMatch: (t) => store.hasActedMatch(t),
-  findByLocationHint: (t) => store.findByLocationHint(t),
 });
 assert.equal(clear.ok, true);
 

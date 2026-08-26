@@ -5,12 +5,13 @@
  */
 import { useMemo, useState } from "react";
 import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
-import { ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Plus } from "lucide-react";
 import { authFetch } from "../lib/api";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 import type { SurfaceEntry } from "../lib/surfaceModel";
 import ConfirmDialog from "./ConfirmDialog";
 import {
+  formatSurfaceCopyBlock,
   preferSurfaceStatus,
   surfaceMethodChips,
   surfaceShowsStatusChip,
@@ -44,11 +45,9 @@ export type SurfaceTreeNode = {
   status?: string;
   /** Spec #409: true when any own entry is inventory-new (false-safe). */
   isNew?: boolean;
-  /**
-   * Spec #413: true when any own entry has case_tested (purpose=test traffic this Case).
-   * When false explicitly on leaves with the flag dual-written, suppress multi-hit TESTED.
-   */
-  caseTested?: boolean;
+  /** Spec #518 — coverage work-state on own entries. */
+  coverage?: "untested" | "tested" | "skipped";
+  coverageSkipReason?: "deadend" | "roe";
   leafCount: number;
   findingTags: SurfaceFindingTag[];
   subtreeFindingTags: SurfaceFindingTag[];
@@ -70,7 +69,7 @@ export type SurfaceTreeRowChrome = {
 /**
  * Decide what a Surface tree row should show.
  * Methods never chip on the tree by default; collapsed parents roll up to finding counts.
- * Operator status: TESTED from case_tested (#413); no SEEN/BOOK; NEW only when flagged (#409).
+ * Operator status: TESTED from coverage work-state (#518); no SEEN/BOOK; NEW only when flagged (#409).
  * NEW/TESTED only on nodes that own surface entries (identity) — not origin/path parents
  * that merely aggregate children (even when expanded).
  */
@@ -104,13 +103,8 @@ export function surfaceTreeRowChrome(
   const tagsSource = hasChildren ? node.findingTags : allPreview;
   const tags = tagsSource.slice(0, 3);
   const extraTagCount = Math.max(0, tagsSource.length - tags.length);
-  // Spec #413: TESTED from case_tested when known; legacy falls back to status=touched.
-  const labelOpts =
-    node.caseTested === true
-      ? { caseTested: true as const }
-      : node.caseTested === false
-        ? { caseTested: false as const }
-        : undefined;
+  // Spec #518: TESTED from coverage work-state.
+  const labelOpts = { coverage: node.coverage, skipReason: node.coverageSkipReason };
   const showStatusChip = isIdentity && surfaceShowsStatusChip(node.status, labelOpts);
   // Own-entry novelty only — never on origin aggregator.
   const showNewBadge = isIdentity && Boolean(node.isNew);
@@ -150,11 +144,13 @@ function absorbEntryStatus(node: SurfaceTreeNode, entry: SurfaceEntry): void {
   const next = preferSurfaceStatus(node.status, entry.status);
   if (next) node.status = next;
   if (entry.isNew) node.isNew = true;
-  // Spec #413: sticky case_tested for operator TESTED chip.
-  if (entry.caseTested === true) node.caseTested = true;
-  else if (entry.caseTested === false && node.caseTested !== true) {
-    // Preserve explicit false only when no sibling has tested yet.
-    if (node.caseTested === undefined) node.caseTested = false;
+  if (entry.coverage === "tested") node.coverage = "tested";
+  else if (entry.coverage === "skipped" && node.coverage !== "tested") {
+    node.coverage = "skipped";
+    node.coverageSkipReason = entry.coverageSkipReason;
+  } else if (!node.coverage) {
+    node.coverage = entry.coverage ?? "untested";
+    if (entry.coverageSkipReason) node.coverageSkipReason = entry.coverageSkipReason;
   }
 }
 
@@ -503,7 +499,7 @@ export function SurfaceTreeView({
             viewFilter === "new"
               ? "Inventory NEW this Case"
               : viewFilter === "untested"
-                ? "Not yet TESTED this Case (no purpose=test traffic)"
+                ? "Not yet TESTED this Case (coverage untested)"
                 : viewFilter === "findings"
                   ? "Routes with linked findings"
                   : `${total} surfaces · ${findingsTotal} findings`
@@ -607,8 +603,7 @@ export function surfaceNodeMatchesViewFilter(
 ): boolean {
   if (filter === "all") return true;
   if (filter === "new") return node.isNew === true;
-  // Spec #413: untested = not case_tested this Case.
-  if (filter === "untested") return node.caseTested !== true;
+  if (filter === "untested") return (node.coverage || "untested") === "untested";
   if (filter === "findings") return (node.findingTags?.length || 0) > 0;
   return true;
 }
@@ -639,7 +634,7 @@ export function countSurfaceViewStats(roots: SurfaceTreeNode[]): {
   let findings = 0;
   for (const n of leaves) {
     if (n.isNew === true) neu += 1;
-    if (n.caseTested !== true) untested += 1;
+    if ((n.coverage || "untested") === "untested") untested += 1;
     if ((n.findingTags?.length || 0) > 0) findings += 1;
   }
   return { all: leaves.length, new: neu, untested, findings };
@@ -681,7 +676,8 @@ export function filterSurfaceTree(
           children.reduce((n, c) => n + (c.leafCount || 0), 0) +
           (selfMatches ? Math.max(1, node.entries.length) : 0),
         isNew: selfMatches ? node.isNew : undefined,
-        caseTested: selfMatches ? node.caseTested : undefined,
+        coverage: selfMatches ? node.coverage : undefined,
+        coverageSkipReason: selfMatches ? node.coverageSkipReason : undefined,
         status: selfMatches ? node.status : preferSurfaceStatus(undefined, children[0]?.status),
       };
     }
@@ -865,43 +861,27 @@ function SurfaceTreeNodeRow({
                 NEW
               </span>
             )}
-            {/* Spec #409/#413: TESTED from case_tested; never SEEN/BOOK/PRIOR; terminals muted. */}
+            {/* Spec #518: TESTED from coverage work-state; skipped muted; never SEEN/BOOK/PRIOR. */}
             {chrome.showStatusChip &&
-              surfaceStatusLabel(
-                node.status,
-                node.caseTested === true
-                  ? { caseTested: true }
-                  : node.caseTested === false
-                    ? { caseTested: false }
-                    : undefined,
-              ) && (
+              surfaceStatusLabel(node.status, {
+                coverage: node.coverage,
+                skipReason: node.coverageSkipReason,
+              }) && (
               <span
                 className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(
                   node.status,
-                  node.caseTested === true
-                    ? { caseTested: true }
-                    : node.caseTested === false
-                      ? { caseTested: false }
-                      : undefined,
+                  { coverage: node.coverage, skipReason: node.coverageSkipReason },
                 )}`}
                 data-testid="surface-status"
-                data-status={surfaceStatusLabel(
-                  node.status,
-                  node.caseTested === true
-                    ? { caseTested: true }
-                    : node.caseTested === false
-                      ? { caseTested: false }
-                      : undefined,
-                )}
+                data-status={surfaceStatusLabel(node.status, {
+                  coverage: node.coverage,
+                  skipReason: node.coverageSkipReason,
+                })}
               >
-                {surfaceStatusLabel(
-                  node.status,
-                  node.caseTested === true
-                    ? { caseTested: true }
-                    : node.caseTested === false
-                      ? { caseTested: false }
-                      : undefined,
-                )}
+                {surfaceStatusLabel(node.status, {
+                  coverage: node.coverage,
+                  skipReason: node.coverageSkipReason,
+                })}
               </span>
             )}
           </button>
@@ -926,6 +906,36 @@ function SurfaceTreeNodeRow({
             </span>
           )}
         </div>
+        {node.entries.length > 0 ? (
+          <button
+            type="button"
+            data-testid="surface-copy"
+            aria-label="Copy surface identity"
+            title="Copy identity + coverage + findings"
+            className="ml-auto hidden h-6 shrink-0 items-center rounded-md px-1.5 text-ink-muted hover:bg-canvas hover:text-ink group-hover/origin:inline-flex"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const entry = node.entries[0];
+              const text = formatSurfaceCopyBlock({
+                originKey: entry?.originKey || entry?.origin,
+                pathKey: entry?.path ?? node.path,
+                location: entry?.title || entry?.key,
+                isNew: node.isNew === true,
+                coverage: node.coverage,
+                skipReason: node.coverageSkipReason,
+                findings: (node.findingTags || []).map((t) => ({
+                  id: t.id,
+                  severity: t.severity,
+                  title: t.title,
+                })),
+              });
+              void navigator.clipboard?.writeText(text);
+            }}
+          >
+            <Copy className="h-3 w-3" />
+          </button>
+        ) : null}
         {enrollTarget ? (
           <SurfaceEnrollChip
             enrolled={enrolled}

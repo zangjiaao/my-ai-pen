@@ -37,8 +37,12 @@ export type SurfaceEntry = {
    */
   isNew?: boolean;
   /**
-   * Spec #413 — this Case had ≥1 purpose=test exchange on this identity (operator TESTED).
-   * Prefer over multi-hit-only status=touched. False-safe when absent on legacy rows.
+   * Spec #518 — Agent-maintained coverage work-state (operator TESTED).
+   */
+  coverage?: "untested" | "tested" | "skipped";
+  coverageSkipReason?: "deadend" | "roe";
+  /**
+   * Audit-only Traffic purpose flag. Not operator TESTED (#518).
    */
   caseTested?: boolean;
   /** URL scheme from origin_key (http/https/ssh/…). */
@@ -115,45 +119,26 @@ export function isSurfaceCaseTested(
 }
 
 export type SurfaceStatusLabelOpts = {
-  /**
-   * Spec #413 — when provided, TESTED follows case_tested (not multi-hit-only touched).
-   * - true → TESTED
-   * - false → no TESTED from status (browse multi-hit stays quiet)
-   * - omitted → legacy expand-contract: touched family → TESTED
-   */
-  caseTested?: boolean | null;
+  /** Spec #518 — coverage work-state. TESTED only when coverage === tested. */
+  coverage?: string | null;
+  skipReason?: string | null;
 };
 
 /**
- * Spec #409 / #413 — operator-facing status chip label (not internal v2 write form).
- *
- * | Signal | Operator chip |
- * |--------|---------------|
- * | case_tested true (preferred) | TESTED |
- * | legacy: touched (+ in_probe/probed) when case_tested absent | TESTED |
- * | case_tested false | no TESTED (even if status=touched from browse multi-hit) |
- * | seen / booked | *(none — quiet / finding tags only)* |
- * | deadend / skipped_roe | retained muted terminal |
- *
- * Never returns SEEN, BOOK, BOOKED, or PRIOR.
+ * Spec #518 — operator-facing coverage chip.
+ * TESTED = work-state tested. skipped shows muted reason. Status is never a coverage chip.
  */
 export function surfaceStatusLabel(
   status?: string | null,
   opts?: SurfaceStatusLabelOpts | null,
 ): string {
-  const n = normalizeSurfaceStatus(status);
-  if (n === "deadend") return "deadend";
-  if (n === "skipped_roe") return "skipped_roe";
-
-  const ct = opts?.caseTested;
-  if (ct === true) return "TESTED";
-  if (ct === false) {
-    // Explicit not-tested this Case — do not show TESTED from multi-hit status alone.
-    return "";
+  const cov = String(opts?.coverage || "").trim().toLowerCase();
+  if (cov === "tested") return "TESTED";
+  if (cov === "skipped") {
+    const reason = String(opts?.skipReason || "").trim().toLowerCase();
+    if (reason === "roe") return "skip:roe";
+    return "skip:deadend";
   }
-  // Legacy: no case_tested field → fall back to touched family.
-  if (n === "touched") return "TESTED";
-  // seen, booked, missing: no operator status chip
   return "";
 }
 
@@ -172,6 +157,69 @@ export function surfaceShowsStatusChip(
  * Spec #409 — NEW badge only when novelty flag is explicitly true.
  * Absent / null / unknown ⇒ false (safe until inventory #410).
  */
+export function coerceSurfaceCoverage(row: { coverage?: unknown } | null | undefined): "untested" | "tested" | "skipped" {
+  const s = String(row?.coverage ?? "").trim().toLowerCase();
+  if (s === "tested" || s === "skipped") return s;
+  return "untested";
+}
+
+export function coerceSurfaceSkipReason(
+  row: { coverage_skip_reason?: unknown; coverageSkipReason?: unknown; skip_reason?: unknown } | null | undefined,
+): "deadend" | "roe" | undefined {
+  if (!row || typeof row !== "object") return undefined;
+  const raw =
+    (row as { coverage_skip_reason?: unknown }).coverage_skip_reason ??
+    (row as { coverageSkipReason?: unknown }).coverageSkipReason ??
+    (row as { skip_reason?: unknown }).skip_reason;
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (s === "roe" || s === "skipped_roe") return "roe";
+  if (s === "deadend") return "deadend";
+  return undefined;
+}
+
+/**
+ * Spec #518 hover Copy block (this node only). No composer insert.
+ */
+export function formatSurfaceCopyBlock(input: {
+  originKey?: string | null;
+  pathKey?: string | null;
+  location?: string | null;
+  isNew?: boolean;
+  coverage?: string | null;
+  skipReason?: string | null;
+  findings?: Array<{ id?: string; severity?: string; title?: string }>;
+}): string {
+  const origin = String(input.originKey || "").trim();
+  const path = String(input.pathKey ?? "").trim();
+  let identity = String(input.location || "").trim();
+  if (origin) {
+    identity = path && path !== "/" ? `${origin}${path.startsWith("/") ? path : `/${path}`}` : origin + (path === "/" ? "/" : "");
+    if (path === "/") identity = `${origin}/`;
+    if (!path) identity = origin;
+  }
+  const cov = String(input.coverage || "untested").trim().toLowerCase();
+  const lines = [
+    identity || "(unknown identity)",
+    `is_new: ${input.isNew === true ? "true" : "false"}`,
+    `is_tested: ${cov === "tested" ? "true" : "false"}`,
+  ];
+  if (cov === "skipped") {
+    const reason = String(input.skipReason || "deadend").trim().toLowerCase();
+    lines.push(`skip: ${reason === "roe" ? "roe" : "deadend"}`);
+  }
+  const findings = (input.findings || []).slice(0, 8).filter((f) => f && (f.id || f.title));
+  if (findings.length) {
+    lines.push("findings:");
+    for (const f of findings) {
+      const id = String(f.id || "").trim() || "-";
+      const sev = String(f.severity || "").trim() || "info";
+      const title = String(f.title || "").trim() || id;
+      lines.push(`- ${id}  ${sev}  ${title}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export function isSurfaceNew(row: { is_new?: unknown; isNew?: unknown } | null | undefined): boolean {
   if (!row || typeof row !== "object") return false;
   const flag = (row as { is_new?: unknown; isNew?: unknown }).is_new ?? (row as { isNew?: unknown }).isNew;
@@ -186,9 +234,7 @@ export function surfaceStatusBadgeClass(
 ): string {
   const label = surfaceStatusLabel(status, opts);
   if (label === "TESTED") return "bg-status-running/12 text-status-running";
-  const n = normalizeSurfaceStatus(status);
-  if (n === "deadend" || n === "skipped_roe") return "bg-canvas-inset text-ink-muted";
-  // Fallback when a label is still rendered (should not be seen/booked after #409)
+  if (label.startsWith("skip:")) return "bg-canvas-inset text-ink-muted";
   return "bg-canvas-inset text-ink-secondary";
 }
 
@@ -212,7 +258,13 @@ export type SurfaceLedgerRow = {
   updated_at?: string;
   created_at?: string;
   conversation_id?: string;
-  /** Spec #413 — sticky TESTED for this Case (snake or camel on wire). */
+  /** Spec #518 — coverage work-state (snake or camel on wire). */
+  coverage?: string | null;
+  coverage_skip_reason?: string | null;
+  coverageSkipReason?: string | null;
+  coverage_marked_by?: string | null;
+  coverage_marked_at?: string | null;
+  /** Audit-only; not operator TESTED (#518). */
   case_tested?: boolean | null;
   caseTested?: boolean | null;
   /** Spec #409 — first inventory admit (false-safe when absent). */
@@ -302,10 +354,14 @@ export function upsertSurfaceLedger(
       ) ??
       (raw.status != null ? String(raw.status) : undefined) ??
       (prev.status != null ? String(prev.status) : undefined);
-    // Spec #413: case_tested sticky true on live merge.
-    const prevCt = isSurfaceCaseTested(prev);
-    const rawCt = isSurfaceCaseTested(raw);
-    const case_tested = Boolean(prevCt || rawCt);
+    const coverage =
+      raw.coverage != null
+        ? coerceSurfaceCoverage(raw)
+        : coerceSurfaceCoverage(prev);
+    const skipReason =
+      raw.coverage != null
+        ? coerceSurfaceSkipReason(raw)
+        : coerceSurfaceSkipReason(prev);
     byKey.set(k, {
       ...prev,
       ...raw,
@@ -316,7 +372,8 @@ export function upsertSurfaceLedger(
       id: prev.id || raw.id,
       created_at: prev.created_at || raw.created_at,
       ...(status != null ? { status } : {}),
-      case_tested,
+      coverage,
+      ...(skipReason ? { coverage_skip_reason: skipReason } : {}),
     });
   }
   return {
@@ -354,8 +411,8 @@ export function projectSurfaceEntriesFromLedger(ledger: SurfaceLedger | null | u
       status: preferSurfaceStatus(existing.status, entry.status) || existing.status || entry.status,
       // Novelty is sticky true once any merge source flags it (false-safe default).
       isNew: Boolean(existing.isNew || entry.isNew),
-      // Spec #413: case_tested sticky true for operator TESTED.
-      caseTested: Boolean(existing.caseTested || entry.caseTested),
+      coverage: entry.coverage ?? existing.coverage ?? "untested",
+      coverageSkipReason: entry.coverageSkipReason ?? existing.coverageSkipReason,
       title: existing.title || entry.title,
     });
   }
@@ -437,14 +494,10 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
   if (status) entry.status = status;
   // Spec #409: NEW only when ledger/join explicitly flags first inventory admit (false-safe).
   if (isSurfaceNew(row)) entry.isNew = true;
-  // Spec #413: case_tested drives TESTED chip (sticky; false-safe when absent).
-  if (isSurfaceCaseTested(row)) entry.caseTested = true;
-  else if (
-    (row as SurfaceLedgerRow).case_tested === false ||
-    (row as SurfaceLedgerRow).caseTested === false
-  ) {
-    entry.caseTested = false;
-  }
+  const coverage = coerceSurfaceCoverage(row);
+  entry.coverage = coverage;
+  const skip = coerceSurfaceSkipReason(row);
+  if (skip) entry.coverageSkipReason = skip;
   return entry;
 }
 

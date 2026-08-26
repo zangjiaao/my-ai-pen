@@ -16,7 +16,7 @@
 | 2026-08-10 | v1 implementation tickets #369–#378 (tool, SQLite, dual-write, FE, finding→booked, import, traffic_list) |
 | 2026-08-10 | Field failure: Case finished with Findings + Traffic, Surface empty; Agent recon = prior path lists + curl, not scientific crawl; finding→booked failed on non-URL `location` |
 | 2026-08-10 | **v2 grill (this amendment):** Surface is **Agent working memory**, **Runtime-passive from Traffic**, completion via **finding confirm**; no complete-tag without test traffic |
-| 2026-08-10 | **v3 operator model (amend):** [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) — UI **NEW** (inventory novelty) + **TESTED** (this-Case traffic) + finding tags; no BOOK/SEEN/PRIOR chips; method chips off tree; priors ≠ coverage. Internal settle may keep seen/touched/booked expand–contract. |
+| 2026-08-10 | **v3 operator model (amend):** [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) — UI **NEW** (inventory novelty) + **TESTED** + finding tags; no BOOK/SEEN/PRIOR chips; method chips off tree; priors ≠ coverage. **v4 (#518):** TESTED is Agent coverage work-state, not this-Case traffic. Internal settle may keep seen/touched/booked expand–contract. |
 
 ---
 
@@ -225,7 +225,7 @@ seen  →  touched  →  booked
 - **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
 - **Scope gate (product amend):** do **not** settle Surface for origins outside TARGET / `scope.allow` (Traffic audit may still keep the exchange). See [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md).
 - **Garbage path:** unexpanded `${…}` / `{{…}}` in path → do not settle.
-- **TESTED / purpose:** operator TESTED is **not** “second hit”; it is ≥1 **test-purpose** exchange — same companion Spec.
+- **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
 
 **Status vocabulary (locked):** keep **`seen` / `touched` / `booked`** (not collapsed). First observation → `seen`; later real request on same identity → `touched`; finding confirm → `booked`.
 
@@ -380,7 +380,7 @@ Traffic is L0 capture. Surface is L1 **settled management ledger derived from Tr
 
 Unchanged layer split: Case Surface vs owner ledger vs Traffic. v2 changes **how Surface fills**, not the layer boundaries.
 
-**Durable surface identity inventory (Spec [#410](https://github.com/zangjiaao/my-ai-pen/issues/410)):** platform `surface_inventory` precipitates origin_key+path_key for **NEW** only (user-scoped; optional `asset_id` when Host exists). Case `surface_ledger` remains live SoT for TESTED/traffic/booked. Owner ledger (Group × Host × Service) is Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) — #410 is a thin novelty baseline, not a competing inventory object model. #322 Cluster/分身 is retired.
+**Durable surface identity inventory (Spec [#410](https://github.com/zangjiaao/my-ai-pen/issues/410)):** platform `surface_inventory` precipitates origin_key+path_key for **NEW** only (user-scoped; optional `asset_id` when Host exists). Case `surface_ledger` remains live SoT for coverage work-state / traffic / booked. Owner ledger (Group × Host × Service) is Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) — #410 is a thin novelty baseline, not a competing inventory object model. #322 Cluster/分身 is retired.
 
 ### Field lesson (Case 77fc1ff9 / similar)
 
@@ -431,7 +431,7 @@ These are **not** locked; resolve before/during v2 implementation tickets:
 | Noise | Default settle + static suffix denylist |
 | JS/SPA mining | Capture enrichment later (D6.2); feed Agent; optional Surface bridge later |
 | Status (v2 internal) | seen → touched → booked |
-| Status (v3 operator UI) | **NEW** (inventory) + **TESTED** (this Case traffic) + finding tags — see [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) |
+| Status (v3/v4 operator UI) | **NEW** (inventory) + **TESTED** (coverage work-state) + finding tags — see [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) |
 | Complete | finding confirm only; create-on-book with **strong** identity; no fake complete |
 | Settle timing | Per exchange complete, immediate |
 | Agent read | surface list/summary/get tool-first |

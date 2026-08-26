@@ -1,6 +1,6 @@
 # Spec: Surface coverage v3 — NEW · TESTED · Finding tags (no BOOK chip)
 
-**Status:** Living Spec — **v3 shipped**; **v4 amend (normative, not implemented)** — map [#504](https://github.com/zangjiaao/my-ai-pen/issues/504), tracker Spec [#518](https://github.com/zangjiaao/my-ai-pen/issues/518). Coverage work-state is Agent-maintained `untested` | `tested` | `skipped`; identities still Traffic-born.  
+**Status:** Living Spec — **v4 shipped** ([#518](https://github.com/zangjiaao/my-ai-pen/issues/518)) — map [#504](https://github.com/zangjiaao/my-ai-pen/issues/504). Coverage work-state is Agent-maintained `untested` | `tested` | `skipped`; identities still Traffic-born.  
 **Amends:** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368) (v2 settle + seen/touched/booked internal)  
 **Related:** Owner ledger [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) (supersedes #322); product state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free coverage honesty [#406](https://github.com/zangjiaao/my-ai-pen/issues/406) / soft SEEN harness [#407](https://github.com/zangjiaao/my-ai-pen/issues/407)  
 **Field drivers:** Cases `c02e3c20-…`, `5a9cf1f6-…` — operators read Case Surface as “still untested”; Agents treated platform vuln priors as coverage and left Runtime-objective first-touch rows unadvanced; tree chip density (methods + status + severity + rollup) obscured signal.

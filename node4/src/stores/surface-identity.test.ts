@@ -249,8 +249,8 @@ import {
     "touched",
     "already TESTED preserved (no downgrade via capped request)",
   );
-  assert.equal(resolveUpsertStatus("seen", "deadend"), "deadend", "deadend still allowed");
-  assert.equal(resolveUpsertStatus("seen", "skipped_roe"), "skipped_roe");
+  assert.equal(resolveUpsertStatus("seen", "deadend"), "seen", "deadend not applied via upsert");
+  assert.equal(resolveUpsertStatus("seen", "skipped_roe"), "seen");
 }
 
 {
@@ -296,8 +296,8 @@ import {
   // skip intermediate ranks allowed (seen → booked with allow; open → deadend)
   assert.equal(canTransitionStatus("open", "probed"), true); // open→seen, probed→touched
   assert.equal(canTransitionStatus("seen", "touched"), true);
-  assert.equal(resolveUpsertStatus("open", "deadend"), "deadend");
-  assert.equal(resolveUpsertStatus("seen", "deadend"), "deadend");
+  assert.equal(resolveUpsertStatus("open", "deadend"), "seen");
+  assert.equal(resolveUpsertStatus("seen", "deadend"), "seen");
 }
 
 // Exhaustive rank monotonicity for write-status pairs (non-booked without allowBooked)

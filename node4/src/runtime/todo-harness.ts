@@ -148,7 +148,7 @@ export const TODO_TOOL_DESCRIPTION = [
   "- done / drop / rm: task or phase or neither (all)",
   "- append: phase + items (creates phase if missing) — only when a new category appears",
   "- view: read-only",
-  "- optional note on done (Graph): deadend:<path> | skipped_roe:<path> | probed | booked | n/a (meta only)",
+  "- optional note on done (Graph): n/a (meta/report only). Coverage is surface(op=mark|skip), not todo notes.",
   "- optional allow_replace on Free init: only after explicit user permission to replace the whole map",
   "",
   "Anatomy: phase = short noun phrase (no \"1.\" / \"Phase 1:\" prefixes); task = 5–10 words, category-level, unique.",
@@ -160,7 +160,7 @@ export const TODO_TOOL_DESCRIPTION = [
   "- Open todos never block product booking or harness settlement.",
   "- Free Tasks map is user progress SoT: once a map exists, silent todo.init full replace is forbidden. Maintain with append/start/done/drop/rm. Full replace only with allow_replace after explicit user permission.",
   "- When offering next steps or a pause narrative with open todos, disclose remaining open progress (honest pause) — do not claim full completion while the map is dirty.",
-  "- Graph: surface ledger is coverage truth — bare done is rejected while open/in_probe paths remain; act via subagent or note=deadend|skipped_roe.",
+  "- Graph: surface ledger is coverage truth — bare done is rejected while seen/touched untested paths remain; act then surface(op=mark) or surface(op=skip, reason=deadend|roe). note=deadend|skipped_roe is retired.",
   "- Expert Graph: todo(init) is current-stage checklist only (single phase / stage-local items). Whole-engagement multi-phase maps (recon/auth/vuln/…) are Free mode. Graph stage-local merge is unchanged.",
   "- Follow role/mission for which categories to include; do not invent target answer keys.",
 ].join("\n");

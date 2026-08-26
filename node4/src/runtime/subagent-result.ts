@@ -405,7 +405,7 @@ export function evaluateCandidatesForAcceptance(
     "Acceptance loop: (1) finding(confirm) each ready_to_book with proof= VERBATIM proof_excerpt (location or candidate_index match).",
     "(2) For needs_more_evidence: re-dispatch with redispatch_hint; max 2 gap retries then deadend/bookable_unbooked — do not thrash identical finding(confirm).",
     "(3) Never write synthetic *proof*.txt files; never paraphrase proof.",
-    "(4) Open surfaces in the ledger are the work queue — todo(done) cannot green without act/deadend/skip.",
+    "(4) Open surfaces in the ledger are the work queue — todo(done) cannot green without surface(op=mark) or surface(op=skip, reason=deadend|roe).",
   ];
   if (surfaces_accepted) {
     hintParts.push(`This package contributed ${surfaces_accepted} surface(s).`);

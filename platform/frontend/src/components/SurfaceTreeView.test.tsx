@@ -80,7 +80,7 @@ function testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus() {
   ]);
   const entries = [
     entry({ key: "https://lab.example:443|/a", path: "/a", method: "GET", status: "seen" }),
-    entry({ key: "https://lab.example:443|/b", path: "/b", method: "POST", status: "touched" }),
+    entry({ key: "https://lab.example:443|/b", path: "/b", method: "POST", status: "touched", coverage: "tested" }),
     entry({ key: "https://lab.example:443|/c", path: "/c", method: "GET", status: "booked" }),
   ];
   const tree = buildSurfaceTree(entries, findingsByPath);
@@ -111,7 +111,7 @@ function testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus() {
 
   const leafB = origin.children.find((c) => c.path === "/b")!;
   assert.equal(surfaceTreeRowChrome(leafB, { open: true }).showStatusChip, true);
-  assert.equal(surfaceStatusLabel(leafB.status), "TESTED");
+  assert.equal(surfaceStatusLabel(leafB.status, { coverage: leafB.coverage }), "TESTED");
 
   const leafC = origin.children.find((c) => c.path === "/c")!;
   // Booked: finding tags without BOOK status chip.
@@ -176,7 +176,7 @@ function testOperatorChipsNewTestedNoSeenBook() {
   ]);
   const entries = [
     entry({ key: "https://lab.example:443|/quiet", path: "/quiet", status: "seen" }),
-    entry({ key: "https://lab.example:443|/tested", path: "/tested", status: "touched" }),
+    entry({ key: "https://lab.example:443|/tested", path: "/tested", status: "touched", coverage: "tested" }),
     entry({ key: "https://lab.example:443|/booked", path: "/booked", status: "booked" }),
     entry({ key: "https://lab.example:443|/novel", path: "/novel", status: "seen", isNew: true }),
   ];
@@ -199,7 +199,7 @@ function testOperatorChipsNewTestedNoSeenBook() {
   assert.ok(!/>\s*PRIOR\s*</.test(html));
   assert.ok(!/>\s*SEEN\s*</.test(html));
 
-  // TESTED for touched family.
+  // TESTED from coverage work-state.
   assert.ok(html.includes('data-status="TESTED"') || html.includes(">TESTED<") || html.includes("TESTED"));
   // NEW only when flagged.
   assert.ok(html.includes('data-testid="surface-new"') || html.includes(">NEW<"));
@@ -209,7 +209,10 @@ function testOperatorChipsNewTestedNoSeenBook() {
   const byPath = new Map(roots[0]!.children.map((c) => [c.path, c]));
   assert.equal(surfaceTreeRowChrome(byPath.get("/quiet")!, { open: true }).showStatusChip, false);
   assert.equal(surfaceTreeRowChrome(byPath.get("/tested")!, { open: true }).showStatusChip, true);
-  assert.equal(surfaceStatusLabel(byPath.get("/tested")!.status), "TESTED");
+  assert.equal(
+    surfaceStatusLabel(byPath.get("/tested")!.status, { coverage: byPath.get("/tested")!.coverage }),
+    "TESTED",
+  );
   assert.equal(surfaceTreeRowChrome(byPath.get("/booked")!, { open: true }).showStatusChip, false);
   assert.equal(surfaceTreeRowChrome(byPath.get("/booked")!, { open: true }).tags.length, 1);
   assert.equal(surfaceTreeRowChrome(byPath.get("/novel")!, { open: true }).showNewBadge, true);
@@ -224,14 +227,14 @@ function testOriginRootDoesNotShowNewOrTestedFromChildren() {
       path: "/a",
       status: "touched",
       isNew: true,
-      caseTested: true,
+      coverage: "tested",
     }),
     entry({
       key: "https://lab.example:443|/b",
       path: "/b",
       status: "touched",
       isNew: true,
-      caseTested: true,
+      coverage: "tested",
     }),
   ];
   const roots = buildSurfaceTree(entries);
@@ -243,7 +246,7 @@ function testOriginRootDoesNotShowNewOrTestedFromChildren() {
   assert.equal(originChrome.showNewBadge, false, "origin no NEW from children");
   assert.equal(originChrome.showStatusChip, false, "origin no TESTED from children");
   assert.equal(origin.isNew, undefined, "origin isNew not absorbed from child attach");
-  assert.equal(origin.caseTested, undefined, "origin caseTested not absorbed from child attach");
+  assert.equal(origin.coverage, undefined, "origin coverage not absorbed from child attach");
 
   const leafA = origin.children.find((c) => c.path === "/a")!;
   assert.equal(surfaceTreeRowChrome(leafA, { open: true }).showNewBadge, true);
@@ -256,13 +259,13 @@ function testOriginRootDoesNotShowNewOrTestedFromChildren() {
       path: "/",
       status: "touched",
       isNew: true,
-      caseTested: true,
+      coverage: "tested",
     }),
     entry({
       key: "https://lab.example:443|/x",
       path: "/x",
       status: "seen",
-      caseTested: false,
+      coverage: "untested",
     }),
   ]);
   const rootOrigin = withRoot[0]!;
@@ -285,21 +288,21 @@ function testToolbarMatchesTrafficPatternAndViewFilters() {
       path: "/novel",
       status: "seen",
       isNew: true,
-      caseTested: false,
+      coverage: "untested",
     }),
     entry({
       key: "https://lab.example:443|/tested",
       path: "/tested",
       status: "touched",
       isNew: false,
-      caseTested: true,
+      coverage: "tested",
     }),
     entry({
       key: "https://lab.example:443|/vuln",
       path: "/vuln",
       status: "booked",
       isNew: true,
-      caseTested: true,
+      coverage: "tested",
     }),
   ];
   const roots = buildSurfaceTree(entries, findingsByPath);

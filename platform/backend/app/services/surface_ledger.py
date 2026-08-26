@@ -540,7 +540,7 @@ def resolve_upsert_status(
     want = "seen"
     if requested is not None:
         req_n = normalize_surface_status(requested)
-        if req_n is not None and req_n != "booked":
+        if req_n is not None and req_n != "booked" and req_n not in ("deadend", "skipped_roe"):
             want = req_n
     if existing is None or existing == "":
         return want
@@ -570,6 +570,10 @@ def ensure_ledger(raw: Any) -> dict[str, Any]:
     elif isinstance(surfaces_raw, dict):
         # Tolerate map-by-id storage shape.
         surfaces = [dict(v) for v in surfaces_raw.values() if isinstance(v, dict)]
+    surfaces = [_apply_legacy_terminal_coverage(s) for s in surfaces]
+    for s in surfaces:
+        if "coverage" not in s or not s.get("coverage"):
+            s["coverage"] = "untested"
     try:
         version = int(raw.get("version") or LEDGER_VERSION)
     except (TypeError, ValueError):
@@ -668,11 +672,8 @@ def normalize_surface_row(
     created_at = _str_or_none(msg.get("created_at")) or now
     updated_at = _str_or_none(msg.get("updated_at")) or now
 
-    # Spec #413: preserve case_tested from Node dual-write (purpose=test settle).
-    # False-safe: missing/invalid → False; sticky merge happens in merge_surface_row.
     case_tested = _coerce_case_tested(msg.get("case_tested"), default=False)
-
-    return {
+    row = {
         "id": row_id[:180],
         "conversation_id": conv,
         "origin_key": origin_key,
@@ -693,6 +694,13 @@ def normalize_surface_row(
         "created_at": created_at,
         "case_tested": case_tested,
     }
+    if "coverage" in msg and msg.get("coverage") is not None:
+        row["coverage"] = _coerce_coverage(msg.get("coverage"), default="untested")
+        row["coverage_skip_reason"] = _coerce_skip_reason(msg.get("coverage_skip_reason"))
+        row["coverage_marked_by"] = _str_or_none(msg.get("coverage_marked_by"), max_len=120)
+        row["coverage_marked_at"] = _str_or_none(msg.get("coverage_marked_at"), max_len=64)
+    # Map historical terminal status even after resolve_upsert_status ignored it.
+    return _apply_legacy_terminal_coverage(row, raw_status=requested_status)
 
 
 def _coerce_is_new(value: Any, *, default: bool = False) -> bool:
@@ -712,8 +720,45 @@ def _coerce_is_new(value: Any, *, default: bool = False) -> bool:
 
 
 def _coerce_case_tested(value: Any, *, default: bool = False) -> bool:
-    """False-safe case_tested for Case ledger rows (Spec #413 purpose=test traffic)."""
+    """Audit-only Traffic flag. Not operator TESTED (Spec #518)."""
     return _coerce_is_new(value, default=default)
+
+
+def _coerce_coverage(value: Any, *, default: str = "untested") -> str:
+    if value is None or value == "":
+        return default
+    s = str(value).strip().lower()
+    if s in ("untested", "tested", "skipped"):
+        return s
+    return default
+
+
+def _coerce_skip_reason(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    s = str(value).strip().lower()
+    if s == "skipped_roe":
+        return "roe"
+    if s in ("deadend", "roe"):
+        return s
+    return None
+
+
+def _apply_legacy_terminal_coverage(row: dict, raw_status: str | None = None) -> dict:
+    """One-time: status=deadend|skipped_roe → coverage skipped + status touched.
+
+    Does not invent coverage=untested when the key is absent — dual-write omit
+    must not overwrite an existing tested/skipped work-state on merge.
+    """
+    st = str(raw_status or row.get("status") or "").strip().lower()
+    if st not in ("deadend", "skipped_roe"):
+        return row
+    if row.get("coverage") not in ("tested", "skipped"):
+        row["coverage"] = "skipped"
+        row["coverage_skip_reason"] = "roe" if st == "skipped_roe" else "deadend"
+    if (normalize_surface_status(row.get("status")) or "") != "booked":
+        row["status"] = "touched"
+    return row
 
 
 def merge_surface_row(
@@ -744,7 +789,9 @@ def merge_surface_row(
         # First Case row for this identity this engagement.
         row["is_new"] = _coerce_is_new(row.get("is_new"), default=False)
         row["case_tested"] = _coerce_case_tested(row.get("case_tested"), default=False)
-        return row
+        if "coverage" not in row or not row.get("coverage"):
+            row["coverage"] = "untested"
+        return _apply_legacy_terminal_coverage(row)
 
     out = dict(existing)
     # Identity locked
@@ -799,7 +846,20 @@ def merge_surface_row(
     )
     inc_ct = _coerce_case_tested(incoming.get("case_tested"), default=False)
     out["case_tested"] = bool(prev_ct or inc_ct)
-    return out
+
+    # Spec #518: coverage work-state. Node mark/skip is SoT when the field is present.
+    if "coverage" in incoming and incoming.get("coverage") is not None:
+        out["coverage"] = _coerce_coverage(incoming.get("coverage"), default="untested")
+        out["coverage_skip_reason"] = _coerce_skip_reason(incoming.get("coverage_skip_reason"))
+        if incoming.get("coverage_marked_by"):
+            out["coverage_marked_by"] = incoming.get("coverage_marked_by")
+        if incoming.get("coverage_marked_at"):
+            out["coverage_marked_at"] = incoming.get("coverage_marked_at")
+    else:
+        out["coverage"] = _coerce_coverage(existing.get("coverage"), default="untested")
+        if "coverage_skip_reason" in existing:
+            out["coverage_skip_reason"] = _coerce_skip_reason(existing.get("coverage_skip_reason"))
+    return _apply_legacy_terminal_coverage(out)
 
 
 def _ledger_index(surfaces: list[dict]) -> dict[str, dict]:
@@ -1015,7 +1075,11 @@ def extract_surfaces_from_upsert_message(
                     "updated_at",
                     "created_at",
                     "conversation_id",
-                    "case_tested",  # Spec #413 TESTED dual-write
+                    "case_tested",
+                    "coverage",
+                    "coverage_skip_reason",
+                    "coverage_marked_by",
+                    "coverage_marked_at",
                 )
             }
             candidates.append(top)

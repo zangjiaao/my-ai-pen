@@ -344,9 +344,8 @@ export function planTrafficSurfaceSettle(
     scope: scope ?? null,
   });
   const marksTested = purposeMarksCaseTested(purpose);
-  // Operator TESTED: single purpose=test is enough → elevate to touched immediately.
-  // Non-test: first→seen / later multi-hit→touched for Graph bookkeeping only
-  // (operator chip uses case_tested, not multi-hit alone).
+  // Spec #518: purpose=test still elevates Graph status to touched (probe machine).
+  // Non-test: first→seen / later multi-hit→touched. Coverage work-state is unchanged.
   const statusFinal: "seen" | "touched" = marksTested
     ? "touched"
     : existing
@@ -427,7 +426,7 @@ export async function settleTrafficToSurface(
     const platformOnline = isSurfacePlatformOnline(runtime);
     // Omit item.source so existing provenance (e.g. target_seed) is preserved;
     // new rows get meta.source = traffic.
-    // Spec #413: purpose=test → case_tested sticky + allowTested (touched).
+    // Spec #518: traffic may elevate touched; does not write coverage work-state.
     const result = await store.upsert(
       [
         {
@@ -436,17 +435,13 @@ export async function settleTrafficToSurface(
           params: plan.params.length ? plan.params : undefined,
           status: plan.status,
           kind: plan.kind,
-          // Only set true; never clear via settle (sticky in store).
-          ...(plan.case_tested ? { case_tested: true } : {}),
         },
       ],
       {
         source_agent_id: resolveSourceAgentId(runtime),
         source: "traffic",
         platformOnline,
-        // Traffic settle may elevate touched; case_tested only when purpose=test.
         allowTested: true,
-        allowCaseTested: plan.case_tested,
       },
     );
 

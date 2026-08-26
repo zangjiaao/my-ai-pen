@@ -28,6 +28,17 @@ import {
   type ResolveBookingLocationInput,
   type SurfaceStatus,
 } from "./surface-identity.js";
+import {
+  coerceSurfaceCoverage,
+  coerceSurfaceSkipReason,
+  coverageFromLegacyStatus,
+  isSurfaceActionable,
+  UPSERT_TERMINAL_STATUS_ERROR,
+  SKIP_REASON_REQUIRED_ERROR,
+  MISSING_IDENTITY_COVERAGE_ERROR,
+  type SurfaceCoverage,
+  type SurfaceSkipReason,
+} from "./surface-coverage.js";
 
 /** Write hard-cap per Case/task ledger (Spec D4). */
 export const SURFACE_WRITE_HARD_CAP = 2000;
@@ -71,10 +82,15 @@ export type SurfaceRow = {
   created_at: string;
   updated_at: string;
   /**
-   * Spec #413 — sticky true when this Case had ≥1 purpose=test exchange on identity.
-   * Operator TESTED chip; not inventable by Agent upsert without traffic.
+   * Audit-only Traffic purpose flag. Not operator TESTED (#518).
+   * Product paths read `coverage` instead.
    */
   case_tested: boolean;
+  /** Spec #518 — Agent-maintained coverage work-state. */
+  coverage: SurfaceCoverage;
+  coverage_skip_reason?: SurfaceSkipReason;
+  coverage_marked_by?: string;
+  coverage_marked_at?: string;
 };
 
 export type SurfaceUpsertItem = {
@@ -143,11 +159,23 @@ export type SurfaceUpsertError = {
 };
 
 export type SurfaceListOpts = {
-  /** Status filter; default open+in_probe (actionable queue). Pass "all" for every status. */
+  /** Status filter; default seen+touched. Pass "all" for every status. */
   status?: string | string[] | null;
+  /** Coverage filter; default list is untested (actionable). Pass "all" with status=all for every row. */
+  coverage?: string | string[] | null;
   origin_key?: string | null;
   limit?: number | null;
   offset?: number | null;
+};
+
+export type SurfaceCoverageWriteOpts = {
+  id?: string | null;
+  location?: string | null;
+  origin_key?: string | null;
+  path_key?: string | null;
+  coverage: SurfaceCoverage;
+  skip_reason?: SurfaceSkipReason | null;
+  marked_by?: string | null;
 };
 
 export type SurfaceListResult = {
@@ -169,8 +197,9 @@ export type SurfaceGetOpts = {
 /**
  * Gate / settlement summary.
  * Field names keep v1 gate consumers working:
- *   open ≈ seen, in_probe ≈ touched (active work), probed unused under v2 (stays 0),
- *   actionable = seen + touched (not booked / optional terminals).
+ *   open ≈ seen, in_probe ≈ touched (status machine),
+ *   skipped / tested / untested = coverage work-state (#518),
+ *   actionable = seen|touched AND coverage not tested|skipped.
  */
 export type SurfaceCoverageSummary = {
   total: number;
@@ -180,7 +209,9 @@ export type SurfaceCoverageSummary = {
   booked: number;
   deadend: number;
   skipped: number;
-  /** Paths still needing act (seen + touched). */
+  tested: number;
+  untested: number;
+  /** Paths still needing act (seen/touched and not tested/skipped). */
   actionable: number;
   open_preview: string[];
 };
@@ -202,6 +233,10 @@ type DbRow = {
   created_at: string;
   updated_at: string;
   case_tested?: number | null;
+  coverage?: string | null;
+  coverage_skip_reason?: string | null;
+  coverage_marked_by?: string | null;
+  coverage_marked_at?: string | null;
 };
 
 const SCHEMA = `
@@ -221,7 +256,11 @@ CREATE TABLE IF NOT EXISTS surfaces (
   platform_sync TEXT NOT NULL DEFAULT 'offline',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  case_tested INTEGER NOT NULL DEFAULT 0
+  case_tested INTEGER NOT NULL DEFAULT 0,
+  coverage TEXT NOT NULL DEFAULT 'untested',
+  coverage_skip_reason TEXT,
+  coverage_marked_by TEXT,
+  coverage_marked_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_surfaces_origin_path
   ON surfaces(origin_key, path_key);
@@ -291,6 +330,10 @@ function rowFromDb(r: DbRow): SurfaceRow {
     created_at: r.created_at,
     updated_at: r.updated_at,
     case_tested: coerceCaseTested(r.case_tested, false),
+    coverage: coerceSurfaceCoverage(r.coverage),
+    coverage_skip_reason: coerceSurfaceSkipReason(r.coverage_skip_reason),
+    coverage_marked_by: r.coverage_marked_by || undefined,
+    coverage_marked_at: r.coverage_marked_at || undefined,
   };
 }
 
@@ -370,7 +413,7 @@ export class SurfaceSqliteStore {
 
   /**
    * Expand-contract: add columns for older ledger.sqlite files that predate
-   * case_tested (#413). CREATE TABLE IF NOT EXISTS does not alter existing tables.
+   * case_tested (#413) and coverage work-state (#518).
    */
   private ensureSchemaColumnsUnlocked(): void {
     const db = this.requireDb();
@@ -381,6 +424,36 @@ export class SurfaceSqliteStore {
     if (!names.has("case_tested")) {
       db.exec("ALTER TABLE surfaces ADD COLUMN case_tested INTEGER NOT NULL DEFAULT 0");
     }
+    if (!names.has("coverage")) {
+      db.exec("ALTER TABLE surfaces ADD COLUMN coverage TEXT NOT NULL DEFAULT 'untested'");
+    }
+    if (!names.has("coverage_skip_reason")) {
+      db.exec("ALTER TABLE surfaces ADD COLUMN coverage_skip_reason TEXT");
+    }
+    if (!names.has("coverage_marked_by")) {
+      db.exec("ALTER TABLE surfaces ADD COLUMN coverage_marked_by TEXT");
+    }
+    if (!names.has("coverage_marked_at")) {
+      db.exec("ALTER TABLE surfaces ADD COLUMN coverage_marked_at TEXT");
+    }
+    this.migrateTerminalStatusToCoverageUnlocked();
+  }
+
+  /**
+   * One-time: status=deadend|skipped_roe → coverage skipped + reason, status → touched.
+   * After this, runtime coverage is only the work-state column.
+   */
+  private migrateTerminalStatusToCoverageUnlocked(): void {
+    const db = this.requireDb();
+    const ts = nowIso();
+    db.prepare(
+      `UPDATE surfaces
+       SET coverage = 'skipped',
+           coverage_skip_reason = CASE WHEN status = 'skipped_roe' THEN 'roe' ELSE 'deadend' END,
+           status = CASE WHEN status = 'booked' THEN 'booked' ELSE 'touched' END,
+           updated_at = ?
+       WHERE status IN ('deadend', 'skipped_roe')`,
+    ).run(ts);
   }
 
   close(): void {
@@ -466,7 +539,11 @@ export class SurfaceSqliteStore {
       }
       const id = surfaceRowKey(origin_key, path_key);
       const statusRaw = String(rec.status || "seen").trim();
-      const status: SurfaceStatus = normalizeSurfaceStatus(statusRaw) ?? "seen";
+      const statusNorm: SurfaceStatus = normalizeSurfaceStatus(statusRaw) ?? "seen";
+      const mapped = coverageFromLegacyStatus(statusNorm);
+      const status: SurfaceStatus = mapped ? "touched" : statusNorm;
+      const coverage = mapped?.coverage ?? "untested";
+      const skipReason = mapped?.skip_reason;
       const methods = asStringList(rec.methods) ?? [];
       const params = asStringList(rec.params) ?? [];
       const note = rec.note != null ? clip(String(rec.note), 500) : undefined;
@@ -485,8 +562,8 @@ export class SurfaceSqliteStore {
             `INSERT OR IGNORE INTO surfaces (
               id, origin_key, path_key, location, kind, methods_json, params_json,
               auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at,
-              case_tested
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              case_tested, coverage, coverage_skip_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             id,
@@ -504,8 +581,9 @@ export class SurfaceSqliteStore {
             "offline",
             created_at,
             updated_at,
-            // Legacy migrate: do not invent case_tested (false-safe).
             0,
+            coverage,
+            skipReason ?? null,
           );
       } catch {
         /* skip bad row */
@@ -571,9 +649,12 @@ export class SurfaceSqliteStore {
         const id = surfaceRowKey(origin_key, path_key);
         const existing = this.getByIdentityUnlocked(origin_key, path_key);
 
-        let status: SurfaceStatus;
         const rawStatusNorm =
           raw.status != null ? normalizeSurfaceStatus(String(raw.status).trim()) : null;
+        if (rawStatusNorm === "deadend" || rawStatusNorm === "skipped_roe") {
+          return { ok: false as const, error: UPSERT_TERMINAL_STATUS_ERROR };
+        }
+        let status: SurfaceStatus;
         if (meta?.allowBooked && rawStatusNorm === "booked") {
           // Booking path: advance with allowBooked semantics; force booked when allowed.
           status = "booked";
@@ -642,8 +723,8 @@ export class SurfaceSqliteStore {
               `INSERT INTO surfaces (
                 id, origin_key, path_key, location, kind, methods_json, params_json,
                 auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at,
-                case_tested
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                case_tested, coverage
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               id,
@@ -662,6 +743,7 @@ export class SurfaceSqliteStore {
               ts,
               ts,
               case_tested ? 1 : 0,
+              "untested",
             );
           created += 1;
         } else {
@@ -710,6 +792,63 @@ export class SurfaceSqliteStore {
     });
   }
 
+  /**
+   * Spec #518 — Agent coverage write. Does not change status. Fails if identity missing.
+   */
+  async setCoverage(
+    opts: SurfaceCoverageWriteOpts,
+  ): Promise<{ ok: true; surface: SurfaceRow } | { ok: false; error: string }> {
+    return this.withLock(async () => {
+      this.requireDb();
+      const coverage = coerceSurfaceCoverage(opts.coverage);
+      if (coverage === "skipped") {
+        const reason = coerceSurfaceSkipReason(opts.skip_reason);
+        if (!reason) {
+          return { ok: false as const, error: SKIP_REASON_REQUIRED_ERROR };
+        }
+      }
+      let row: SurfaceRow | null = null;
+      const id = opts.id != null ? String(opts.id).trim() : "";
+      if (id) row = this.getByIdUnlocked(id);
+      if (!row && opts.location != null && String(opts.location).trim()) {
+        const parsed = parseLocation(String(opts.location).trim());
+        if (parsed.ok) {
+          row = this.getByIdentityUnlocked(parsed.origin_key, parsed.path_key);
+        }
+      }
+      if (!row && opts.origin_key != null && String(opts.origin_key).trim()) {
+        row = this.getByIdentityUnlocked(
+          String(opts.origin_key).trim(),
+          opts.path_key != null ? String(opts.path_key) : "",
+        );
+      }
+      if (!row) {
+        return {
+          ok: false as const,
+          error: MISSING_IDENTITY_COVERAGE_ERROR,
+        };
+      }
+      const ts = nowIso();
+      const skipReason = coverage === "skipped" ? coerceSurfaceSkipReason(opts.skip_reason) ?? null : null;
+      const markedBy = opts.marked_by != null && String(opts.marked_by).trim()
+        ? clip(String(opts.marked_by).trim(), 120)
+        : null;
+      this.requireDb()
+        .prepare(
+          `UPDATE surfaces SET
+             coverage = ?, coverage_skip_reason = ?, coverage_marked_by = ?,
+             coverage_marked_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(coverage, skipReason, markedBy, ts, ts, row.id);
+      const next = this.getByIdUnlocked(row.id);
+      if (!next) {
+        return { ok: false as const, error: "surface coverage write failed" };
+      }
+      return { ok: true as const, surface: next };
+    });
+  }
+
   async list(opts: SurfaceListOpts = {}): Promise<SurfaceListResult> {
     return this.withLock(async () => {
       const db = this.requireDb();
@@ -725,6 +864,7 @@ export class SurfaceSqliteStore {
       const offset = Math.max(0, Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0);
 
       const statuses = defaultListStatuses(opts.status);
+      const isDefaultQueue = opts.status == null || opts.status === "";
       const origin =
         opts.origin_key != null && String(opts.origin_key).trim()
           ? String(opts.origin_key).trim()
@@ -750,6 +890,21 @@ export class SurfaceSqliteStore {
       if (origin) {
         where.push("origin_key = ?");
         params.push(origin);
+      }
+      const coverageFilter = opts.coverage != null && String(opts.coverage).trim()
+        ? String(opts.coverage).trim().toLowerCase()
+        : isDefaultQueue
+          ? "untested"
+          : "";
+      if (coverageFilter && coverageFilter !== "all") {
+        const covs = coverageFilter.includes(",")
+          ? coverageFilter.split(",").map((x) => x.trim()).filter(Boolean)
+          : [coverageFilter];
+        const valid = covs.filter((c) => c === "untested" || c === "tested" || c === "skipped");
+        if (valid.length) {
+          where.push(`coverage IN (${valid.map(() => "?").join(",")})`);
+          params.push(...valid);
+        }
       }
       const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -835,11 +990,9 @@ export class SurfaceSqliteStore {
     return this.withLock(async () => this.allUnlocked());
   }
 
-  /** seen + touched queue (actionable; Hard Workset emit / settlement). */
+  /** seen + touched and not tested/skipped (Graph / captain queue). */
   async listOpen(): Promise<SurfaceRow[]> {
-    return this.withLock(async () =>
-      this.allUnlocked().filter((s) => s.status === "seen" || s.status === "touched"),
-    );
+    return this.withLock(async () => this.allUnlocked().filter((s) => isSurfaceActionable(s)));
   }
 
   /** Summary counts + open path preview for Graph gates / acceptance hints. */
@@ -854,20 +1007,22 @@ export class SurfaceSqliteStore {
         booked: 0,
         deadend: 0,
         skipped: 0,
+        tested: 0,
+        untested: 0,
         actionable: 0,
         open_preview: [],
       };
       for (const s of surfaces) {
-        // Map v2 write statuses onto legacy summary field names for gate parity.
         if (s.status === "seen") counts.open += 1;
         else if (s.status === "touched") counts.in_probe += 1;
         else if (s.status === "booked") counts.booked += 1;
-        else if (s.status === "deadend") counts.deadend += 1;
-        else if (s.status === "skipped_roe") counts.skipped += 1;
+        if (s.coverage === "tested") counts.tested += 1;
+        else if (s.coverage === "skipped") counts.skipped += 1;
+        else counts.untested += 1;
+        if (isSurfaceActionable(s)) counts.actionable += 1;
       }
-      counts.actionable = counts.open + counts.in_probe;
       counts.open_preview = surfaces
-        .filter((s) => s.status === "seen" || s.status === "touched")
+        .filter((s) => isSurfaceActionable(s))
         .slice(0, OPEN_PREVIEW)
         .map((s) => s.path_key || s.location);
       return counts;
@@ -921,6 +1076,9 @@ export class SurfaceSqliteStore {
     note?: string,
     opts?: { allowBooked?: boolean },
   ): Promise<number> {
+    if (status === "deadend" || status === "skipped_roe") {
+      return 0;
+    }
     return this.withLock(async () => {
       this.requireDb();
       const ts = nowIso();

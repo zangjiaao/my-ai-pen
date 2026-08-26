@@ -98,9 +98,9 @@ Main DISPATCH (goal + success_criteria)
 - **Working store (SoT):** `workspace/case-{caseId}/surfaces/ledger.sqlite` (`SurfaceSqliteStore`) — Agent `surface` tool + Graph coverage gates (#370–#371).
 - **Legacy:** `ledger.json` one-shot migrates into SQLite on open; not gate SoT.
 - **surface** packages fill the ledger via the `surface` tool (live recon). Host does **not** require return-blob `surfaces[]` / `candidates[]` (Spec #493 oral report). Empty arrays on the subagent tool result must **not** become `package_gaps` that steer Main to re-dispatch.
-- Status: `open` → `in_probe` → `probed` | `booked` | `deadend` | `skipped_roe`.
-- Candidate locations mark **probed**; `finding(confirm)` marks **booked**.
-- **Graph `todo(done)`** blocked while open/in_probe remain unless `note=deadend|skipped_roe` or path already acted. No bare batch-flip.
+- Status: `seen` → `touched` → `booked` (Traffic + confirm). Coverage work-state is separate: `untested` | `tested` | `skipped`.
+- Candidate locations mark **touched** via Traffic; `finding(confirm)` marks **booked**. Coverage: `surface(op=mark|unmark|skip)`.
+- **Graph `todo(done)`** blocked while seen/touched identities remain with coverage untested. `note=deadend|skipped_roe` is retired (explicit error → `surface(op=skip)`). No bare batch-flip. No fail-closed “all tested” stage gate.
 - Settlement still does not require empty ledger; honesty is about todo green ≠ coverage.
 
 ## Parallel subagent batch (OMP-style, Spec #302)

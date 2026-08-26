@@ -243,7 +243,7 @@ export async function collectCheckpointRehydrate(runtime: ToolRuntime | undefine
   try {
     const cov = await runtime.surfaceSqlite?.summary?.();
     if (cov) {
-      out.surfaceText = `total=${cov.total} seen=${cov.open} touched=${cov.in_probe} booked=${cov.booked} deadend=${cov.deadend}`;
+      out.surfaceText = `total=${cov.total} seen=${cov.open} touched=${cov.in_probe} booked=${cov.booked} tested=${cov.tested} untested=${cov.untested} skipped=${cov.skipped}`;
     }
   } catch {
     /* ignore */
