@@ -154,7 +154,11 @@ _Avoid_: dumping every scanned/SYN path onto the Host; calling Case Surface the 
 
 **Case Surface**:
 This-Case attack-surface identities, born from Traffic settle and TARGET seed — the objective sitemap for the engagement.
-_Avoid_: Agent-invented path menus as the sitemap; treating Owner 攻击面 as this-run inventory
+_Avoid_: Agent-invented path menus as the sitemap; treating Owner 攻击面 as this-run inventory; parking unauthorized CT/DNS names here
+
+**Workset**:
+Case-scoped **pending admission** inventory. Discovered subdomains and sibling hosts wait here (`t_host` = new host; `t_surface` = in-scope deepen) until the user adopts. Not Case Surface coverage. Not Owner Host / 攻击面. Not Intel. Adopt is the only path into Owner Host / this-Case Scope; then traffic-born paths settle onto Case Surface and clues may hang on that Host.
+_Avoid_: a Candidate Asset product; treating Workset as a choice UI (#312 Choice Card binds ids); hanging Intel on a name that is not yet a Host; listing `next_scope_candidates` as a second SoT
 
 **TESTED** (Case Surface):
 Agent-maintained, Case-shared **coverage work-state** on an existing Case Surface identity. Three values: `untested` | `tested` | `skipped` (`skipped` reason `deadend` or `roe`). The captain reviews tested / untested / skipped / newly appeared, then plans and acts again. Not inferred from Traffic or MITM. Origin/root may be marked without HTTP; child paths must already sit on the tree. Persists across park/Reset with the Case row.

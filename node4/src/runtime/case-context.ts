@@ -445,9 +445,12 @@ export function formatCaseContextInjection(
       typeof nextWork.workset_open_count === "number"
         ? nextWork.workset_open_count
         : open.length;
-    lines.push("", "### Case Next / Workset (open)");
+    lines.push("", "### Case Workset (pending admission)");
     lines.push(
       `Open Workset items: ${count} (refs only — inventory SoT, not a user choice UI).`,
+    );
+    lines.push(
+      "Parked hosts are not Case Surface coverage and are not Owner Hosts. No Host means no Intel hang. Do not probe until the user adopts.",
     );
     lines.push(
       "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body; optional workset_item_ids). Do not only say 等待指示 or free-text A/B/C/D.",

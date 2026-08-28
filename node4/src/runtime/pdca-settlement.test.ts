@@ -108,6 +108,24 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(settled.verdict, "completed");
 }
 
+{
+  const snap = projectLiveStateOverlay({
+    worksetOpen: [
+      { id: "ws-h", family: "t_host", title: "cdn.example.com", status: "proposed" },
+      { id: "ws-s", family: "t_surface", title: "/admin", status: "proposed" },
+      { id: "ws-done", family: "t_host", title: "old", status: "rejected" },
+    ],
+  });
+  assert.equal(snap.admission.length, 1);
+  assert.equal(snap.admission[0]!.id, "ws-h");
+  const settled = settleParticipantTurn({ overlay: snap });
+  assert.equal(settled.verdict, "replan");
+  assert.ok(settled.unresolved.some((u) => u.kind === "workset" && u.id === "ws-h"));
+  const live = formatLiveStateHarness(snap);
+  assert.match(live, /Pending admission/);
+  assert.match(live, /workset\(list\|get\)/);
+}
+
 // --- Running Package / pending Worker / feedback_ok / active Hypothesis block completed ---
 {
   assert.equal(

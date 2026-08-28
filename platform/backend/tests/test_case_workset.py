@@ -273,6 +273,60 @@ def test_passive_exposure_keeps_source_fields_and_never_auto_adopts():
     assert get_workset(ctx).get("goal") is None
 
 
+def test_settle_legacy_arrays_collapse_into_workset_and_are_dropped():
+    from app.services.case_workset import list_workset_for_agent
+
+    ctx = {
+        "task": _task(),
+        "next_scope_candidates": [{"host": "side.lab", "in_scope": False}],
+        "attack_surface_candidates": [{"host": "side.lab", "in_scope": False}],
+        "next_scope_suggested": True,
+    }
+    ctx2 = apply_settle_to_context(
+        ctx,
+        candidates=[
+            {
+                "host": "side.lab",
+                "in_scope": False,
+                "intel_source": "ct",
+                "attribution": "crt.sh SAN",
+                "passive": True,
+            }
+        ],
+        next_scope_candidates=[{"host": "side.lab", "in_scope": False}],
+        attack_surface_candidates=[{"host": "side.lab", "in_scope": False}],
+        source="free_settle",
+        goal_on=False,
+    )
+    items = [i for i in get_workset(ctx2)["items"] if i["family"] == "t_host"]
+    assert len(items) == 1
+    assert items[0]["payload"]["host"] == "side.lab"
+    assert items[0]["payload"]["intel_source"] == "ct"
+    assert "next_scope_candidates" not in ctx2
+    assert "attack_surface_candidates" not in ctx2
+    listed = list_workset_for_agent(get_workset(ctx2), needle="side")
+    assert listed["total"] == 1
+    assert listed["items"][0]["intel_source"] == "ct"
+    rejected = {
+        "version": 1,
+        "items": items
+        + [
+            {
+                "id": "old",
+                "family": "t_host",
+                "status": "rejected",
+                "title": "gone.lab",
+                "payload": {"host": "gone.lab"},
+            }
+        ],
+        "goal": None,
+    }
+    open_only = list_workset_for_agent(rejected)
+    assert all(i["id"] != "old" for i in open_only["items"])
+    by_id = list_workset_for_agent(rejected, item_id="old")
+    assert by_id["items"][0]["id"] == "old"
+
+
 def test_goal_terminals_complete_with_awaiting_scope_confirm():
     ws = merge_proposed_items(
         {"version": 1, "items": [], "goal": {"status": "running", "outer_budget": 8, "outer_rounds": 1}},

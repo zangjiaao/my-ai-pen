@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { ALL_NODE4_TOOL_FACTORIES } from "./index.js";
 import { SUBAGENT_CHILD_TOOL_NAMES } from "../runtime/subagent-session.js";
-import { buildPassiveWorksetCandidate, createWorksetTool } from "./workset.js";
+import { buildPassiveWorksetCandidate, createWorksetTool, filterWorksetForAgent, mergeStashIntoCaseList } from "./workset.js";
 import type { ToolRuntime } from "../types.js";
 
 assert.equal(typeof ALL_NODE4_TOOL_FACTORIES.workset, "function");
@@ -103,6 +103,56 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   const listed = await tool.execute!("3", { op: "list" });
   const listText = (listed as any).content?.[0]?.text || JSON.stringify(listed);
   assert.match(listText, /cdn\.example\.com/);
+  assert.match(listText, /pending admission/);
+}
+
+{
+  const caseItems = [
+    {
+      id: "ws1",
+      family: "t_host" as const,
+      status: "proposed",
+      title: "cdn.example.com",
+      host: "cdn.example.com",
+      intel_source: "ct",
+      attribution: "crt.sh",
+    },
+  ];
+  const stashRow = buildPassiveWorksetCandidate({
+    host: "cdn.example.com",
+    intel_source: "ct",
+    attribution: "crt.sh SAN",
+  });
+  assert.ok(!("error" in stashRow));
+  if ("error" in stashRow) throw new Error(stashRow.error);
+  const merged = mergeStashIntoCaseList(caseItems, [stashRow]);
+  assert.equal(merged.length, 1, "same host does not double-park");
+  const extra = buildPassiveWorksetCandidate({
+    host: "mail.example.com",
+    intel_source: "dns",
+    attribution: "A record",
+  });
+  assert.ok(!("error" in extra));
+  if ("error" in extra) throw new Error(extra.error);
+  const both = mergeStashIntoCaseList(caseItems, [extra]);
+  assert.equal(both.length, 2);
+  const filtered = filterWorksetForAgent(both, { family: "t_host", needle: "mail" });
+  assert.equal(filtered.total, 1);
+  assert.equal(filtered.items[0]!.host, "mail.example.com");
+}
+
+{
+  const { runtime } = makeRuntime();
+  runtime.task.caseContext = {
+    next_work: {
+      workset_open_count: 1,
+      workset_open: [{ id: "from-case", family: "t_host", title: "parked.lab", status: "proposed" }],
+    },
+  };
+  const tool = createWorksetTool(runtime);
+  const listed = await tool.execute!("1", { op: "list" });
+  const listText = (listed as any).content?.[0]?.text || JSON.stringify(listed);
+  assert.match(listText, /from-case|parked\.lab/);
 }
 
 console.log("workset.test.ts: ok");

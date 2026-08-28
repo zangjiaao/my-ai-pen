@@ -26,6 +26,9 @@ CONFIDENCES = frozenset({"low", "medium", "high"})
 SCOPE_DECISIONS = frozenset({"pending", "in_scope", "out_of_scope", "needs_authorization"})
 # Goal outer-loop budget (rounds of auto-continue). Separate from stage retries.
 DEFAULT_GOAL_OUTER_BUDGET = 8
+# Spec #540 — Agent list is an index, not a dump.
+AGENT_WORKSET_LIST_CAP = 24
+AGENT_WORKSET_LIST_CAP_MAX = 40
 
 
 def _now_iso() -> str:
@@ -1072,6 +1075,91 @@ def project_workset_for_api(
     return out
 
 
+def list_workset_for_agent(
+    workset: dict[str, Any],
+    *,
+    family: str | None = None,
+    status: str | None = None,
+    needle: str | None = None,
+    cap: int = AGENT_WORKSET_LIST_CAP,
+    item_id: str | None = None,
+) -> dict[str, Any]:
+    """Filtered, capped Case Workset index for Agent tools (Spec #540)."""
+    try:
+        cap_n = int(cap or AGENT_WORKSET_LIST_CAP)
+    except (TypeError, ValueError):
+        cap_n = AGENT_WORKSET_LIST_CAP
+    cap_n = max(1, min(cap_n, AGENT_WORKSET_LIST_CAP_MAX))
+    items = [dict(i) for i in (workset.get("items") or []) if isinstance(i, dict)]
+    want_id = str(item_id or "").strip()
+    fam = str(family or "").strip().lower()
+    st = str(status or "").strip().lower()
+    q = str(needle or "").strip().lower()
+    matched: list[dict[str, Any]] = []
+    for item in items:
+        if want_id:
+            if str(item.get("id") or "") != want_id:
+                continue
+        else:
+            cur_st = str(item.get("status") or "").strip().lower()
+            if st:
+                if cur_st != st:
+                    continue
+            elif cur_st not in OPEN_STATUSES:
+                continue
+            if fam and str(item.get("family") or "").strip().lower() != fam:
+                continue
+            if q:
+                payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                blob = " ".join(
+                    [
+                        str(item.get("id") or ""),
+                        str(item.get("title") or ""),
+                        str(item.get("summary") or ""),
+                        str(payload.get("host") or ""),
+                        str(payload.get("location") or ""),
+                        str(payload.get("attribution") or ""),
+                    ]
+                ).lower()
+                if q not in blob:
+                    continue
+        matched.append(item)
+        if want_id:
+            break
+    total = len(matched)
+    shown = matched[:cap_n]
+    agent_items: list[dict[str, Any]] = []
+    for i in shown:
+        payload = i.get("payload") if isinstance(i.get("payload"), dict) else {}
+        agent_items.append({
+            "id": i.get("id"),
+            "family": i.get("family"),
+            "status": i.get("status"),
+            "title": i.get("title"),
+            "summary": i.get("summary"),
+            "host": payload.get("host"),
+            "location": payload.get("location"),
+            "intel_source": payload.get("intel_source"),
+            "attribution": payload.get("attribution"),
+            "confidence": payload.get("confidence"),
+            "scope_decision": payload.get("scope_decision"),
+            "passive": payload.get("passive"),
+            "source": i.get("source"),
+        })
+    return {
+        "ok": True,
+        "items": agent_items,
+        "count": len(agent_items),
+        "total": total,
+        "omitted": max(0, total - len(agent_items)),
+        "cap": cap_n,
+        "note": (
+            "Case Workset is pending admission — not Host, not Surface coverage, not Intel. "
+            "Adopt is a user action. Parked hosts must not be probed or hung as Intel until adopt."
+        ),
+    }
+
+
 def merge_proposed_into_context(
     context: dict | None,
     candidates: list[dict[str, Any]],
@@ -1232,4 +1320,9 @@ def apply_settle_to_context(
             if str(item.get("status") or "") == "proposed":
                 item["auto_eligible"] = auto_check_safe(item, scope_hosts)
 
-    return put_workset(ctx, ws)
+    ctx = put_workset(ctx, ws)
+    # Spec #540: legacy arrays are merge inputs only. Snapshot/API truth is Workset.
+    ctx.pop("next_scope_candidates", None)
+    ctx.pop("attack_surface_candidates", None)
+    ctx.pop("next_scope_suggested", None)
+    return ctx

@@ -35,7 +35,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 4. User confirm → **structured `user_decision`** (`selected_option_ids` + full `text` including option title/body + optional supplement) + visible “已选择…” summary; demand is **FIFO Session queue** same as user text (#277 / #313).  
 5. Card **stays in history**; after user continues the conversation without using the card (or after answering), **controls become read-only**.  
 6. **Retire** right-panel Next and mechanical `WorksetChoiceBar` / `WorksetNextList` as user-facing choice UIs.  
-7. Case **Workset remains SoT** for deepen/OOS inventory, Goal outer, and option binding—not a second choice chrome.  
+7. Case **Workset remains SoT** for pending admission (deepen / OOS / passive exposure), Goal outer, and option binding—not a second choice chrome. Legacy `next_scope_candidates` arrays are merge inputs only ([#540](https://github.com/zangjiaao/my-ai-pen/issues/540)).  
 8. **Soft gate** when settle/continue should have offered next_steps but did not (prompt retry once; no platform-fake option card).
 
 ---

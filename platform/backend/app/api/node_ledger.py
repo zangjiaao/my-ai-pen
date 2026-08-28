@@ -381,6 +381,40 @@ async def conversation_snapshot(
     return {"ok": True, "snapshot": snap}
 
 
+@router.get("/conversations/{conversation_id}/workset")
+async def conversation_workset_node(
+    conversation_id: str,
+    family: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    id: str | None = Query(default=None),
+    limit: int = Query(default=24, ge=1, le=40),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Spec #540 — Case Workset SoT for Agent workset(list|get). Capped index."""
+    _ = node
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    result = await db.execute(select(Conversation).where(Conversation.id == cid))
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    from app.services.case_workset import get_workset, list_workset_for_agent
+
+    ctx = conv.context if isinstance(conv.context, dict) else {}
+    return list_workset_for_agent(
+        get_workset(ctx),
+        family=family,
+        status=status,
+        needle=q,
+        cap=limit,
+        item_id=id,
+    )
+
+
 @router.get("/conversations/{conversation_id}/reports")
 async def list_conversation_reports_node(
     conversation_id: str,

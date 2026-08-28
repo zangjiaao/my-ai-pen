@@ -87,7 +87,7 @@ assert.match(block, /Main\.java/);
 assert.match(block, /class Main/);
 assert.match(block, /source_dump/);
 // Spec #312 S5: next_work retained + formatted
-assert.match(block, /Case Next \/ Workset \(open\)/);
+assert.match(block, /Case Workset \(pending admission\)/);
 assert.match(block, /id=w1/);
 assert.match(block, /\/admin/);
 assert.match(block, /next_steps/);

@@ -28,7 +28,8 @@ export type PdcaIdentityKind =
   | "finding"
   | "package"
   | "worker"
-  | "decision";
+  | "decision"
+  | "workset";
 
 export type PdcaIdentity = {
   kind: PdcaIdentityKind;
@@ -62,6 +63,9 @@ export type LiveStateOverlay = {
     omitted: number;
   };
   pendingUserDecision: boolean;
+  /** Spec #540 — proposed t_host rows waiting for user adopt. */
+  admission: PdcaIdentity[];
+  admissionOmitted: number;
 };
 
 export type TurnDeltaEntry = {
@@ -90,6 +94,8 @@ export type OverlayProjectionInput = {
   pendingWorkers?: Array<{ id: string; summary?: string }>;
   findings?: Array<{ id: string; status: string; title?: string; location?: string }>;
   pendingUserDecision?: boolean;
+  /** Spec #540 — Case Workset open refs (pending admission). */
+  worksetOpen?: Array<{ id?: string; family?: string; title?: string; status?: string }>;
 };
 
 export type TerminalConsistencyResult = {
@@ -120,6 +126,8 @@ export function emptyOverlay(): LiveStateOverlay {
     pendingWorkerOmitted: 0,
     findings: { booked: 0, feedbackOkUnbooked: [], omitted: 0 },
     pendingUserDecision: false,
+    admission: [],
+    admissionOmitted: 0,
   };
 }
 
@@ -217,6 +225,21 @@ export function projectLiveStateOverlay(input: OverlayProjectionInput = {}): Liv
   }
   const feedbackOk = capIdentities(feedbackOkRaw);
 
+  const admissionRaw: PdcaIdentity[] = [];
+  for (const w of input.worksetOpen || []) {
+    const st = String(w.status || "").trim().toLowerCase();
+    const fam = String(w.family || "").trim().toLowerCase();
+    if (st !== "proposed" || fam !== "t_host") continue;
+    const id = String(w.id || "").trim();
+    if (!id) continue;
+    admissionRaw.push({
+      kind: "workset",
+      id,
+      summary: String(w.title || id),
+    });
+  }
+  const admission = capIdentities(admissionRaw);
+
   return {
     surfaces: {
       untested,
@@ -240,6 +263,8 @@ export function projectLiveStateOverlay(input: OverlayProjectionInput = {}): Liv
       omitted: feedbackOk.omitted,
     },
     pendingUserDecision: Boolean(input.pendingUserDecision),
+    admission: admission.kept,
+    admissionOmitted: admission.omitted,
   };
 }
 
@@ -303,6 +328,7 @@ export function computeTurnDelta(
       after.findings.feedbackOkUnbooked,
       "finding",
     ),
+    ...diffLists(before.admission || [], after.admission || [], "workset"),
   ];
   if (before.findings.booked !== after.findings.booked) {
     raw.push({
@@ -339,6 +365,7 @@ export function collectUnresolved(overlay: LiveStateOverlay): PdcaIdentity[] {
     ...overlay.findings.feedbackOkUnbooked,
     ...overlay.surfaces.actionable,
     ...overlay.hypotheses.active,
+    ...(overlay.admission || []),
   ];
 }
 
@@ -417,8 +444,15 @@ export function formatLiveStateHarness(overlay: LiveStateOverlay, delta?: TurnDe
     lines.push(`  (workers omitted=${overlay.pendingWorkerOmitted})`);
   }
   if (overlay.pendingUserDecision) lines.push("Pending user decision: yes");
+  if ((overlay.admission || []).length) {
+    lines.push("Pending admission (Workset t_host proposed):");
+    for (const a of overlay.admission) lines.push(`  - ${ident(a)}`);
+  }
+  if (overlay.admissionOmitted) {
+    lines.push(`  (admission omitted=${overlay.admissionOmitted})`);
+  }
   lines.push(
-    "Full records stay on-demand: surface(list|get), finding(list|get), platform_list_intel / platform_get_intel.",
+    "Full records stay on-demand: surface(list|get), finding(list|get), workset(list|get), platform_list_intel / platform_get_intel.",
   );
   if (delta && (delta.entries.length > 0 || delta.omitted > 0)) {
     lines.push("Turn changes:");
@@ -603,5 +637,6 @@ export async function projectOverlayFromRuntime(runtime: ToolRuntime): Promise<L
     pendingUserDecision:
       Boolean(runtime.lifecycle.pendingUserDecision) ||
       hasOpenApproval(runtime.task?.conversationId),
+    worksetOpen: runtime.task?.caseContext?.next_work?.workset_open,
   });
 }

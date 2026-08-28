@@ -106,7 +106,7 @@ Case is **never** the hang. Group hang is **not v1**.
 |----------------------|------|
 | Whole machine (OS, default creds, WAF, cert) | **Host** |
 | One port / site | **Service** (existing Host+port) |
-| No Host yet | Inventory / scope first (`create_asset` only when the user asked, or authorize / next-scope). **Do not invent a Host to hang intel.** |
+| No Host yet | Park the name on Case **Workset** (`workset(propose)`). Inventory / scope first (`create_asset` only when the user asked, or authorize / Workset adopt). **Do not invent a Host to hang intel.** |
 | Unsure | **Host** (coarse beats wrong port) |
 
 ---
@@ -189,9 +189,7 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## Changelog
 
-| Date | Change |
-|------|--------|
-| 2026-08-15 | First publish — map #459 / ticket #472. |
+| 2026-08-29 | Spec #540: no Host yet → park on Case Workset; do not invent a Host to hang a Shodan/CT row. |
 | 2026-08-15 | Notebook model: harness stamps id/audit/New; Agent record + forget only. |
 | 2026-08-15 | Two-step forget: 1st = soft (update still allowed); 2nd = 遗忘区, user-only, never to Agent. |
 | 2026-08-15 | Shipped: `asset_intel` + node/user APIs + citizen tools + Findings 线索 + Host/Service 情报. |

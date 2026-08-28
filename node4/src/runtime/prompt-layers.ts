@@ -375,7 +375,7 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("workset")) {
     runtimeParts.push(
-      "Workset (workset tool): park passive exposure (CT/DNS/Shodan-class) with source/attribution/confidence; not Host or active test until the user adopts. A missing optional intel source is not a failure.",
+      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped). Not Host or Surface until the user adopts. No Host means no Intel hang. A missing optional intel source is not a failure.",
     );
   }
   if (pack.recipeDir) {
