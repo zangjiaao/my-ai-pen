@@ -168,6 +168,8 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
 
 {
   const dir = await mkdtemp(join(tmpdir(), "fb-live-"));
+  const panel = new PanelAgentTracker("Main", "Expert");
+  const sent: Array<{ type?: string; checkpoint?: { panel_agents?: Array<{ id?: string; status?: string; current_detail?: string }> } }> = [];
   const parsed = await runHardGraphFeedbackAgent({
     config: {
       workspaceDir: dir,
@@ -176,12 +178,17 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
       modelProvider: "openai",
     } as any,
     parentRuntime: {
-      task: { taskId: "t", conversationId: "c", instruction: "go" },
+      task: { taskId: "t", conversationId: "c", instruction: "go", expertId: "e1" },
       workspaceDir: dir,
       piDir: dir,
-      platform: { send: async () => {} },
+      platform: { send: async (m: { type?: string }) => { sent.push(m); } },
       findingsDir: join(dir, "findings"),
-      lifecycle: { toolsInLastSegment: 0, subagentDepth: 0, recentObservations: [] },
+      lifecycle: {
+        toolsInLastSegment: 0,
+        subagentDepth: 0,
+        recentObservations: [],
+        panelAgents: panel,
+      },
     } as unknown as ToolRuntime,
     pack: {
       id: "pentest",
@@ -194,6 +201,7 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
     } as any,
     stage: initStage,
     l1Input: { stageId: "init" },
+    nextStageId: "surface",
     boundSessionFactory: async ({ runtime }) => {
       await runtime.processFacts?.upsert?.({
         fact_key: "l1_decision",
@@ -222,6 +230,12 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
   });
   assert.equal(parsed.decision, "pass");
   assert.equal(parsed.stageAdvance, "continue");
+  const ckpts = sent.filter((m) => m.type === "checkpoint_update");
+  assert.ok(ckpts.length >= 2, "Feedback start and end must flush panel");
+  const fbAt = (i: number) => ckpts[i]?.checkpoint?.panel_agents?.find((a) => a.id === "feedback");
+  assert.equal(fbAt(0)?.status, "running", "Feedback light is running while the hop is in flight");
+  assert.match(String(fbAt(0)?.current_detail || ""), /init → surface/);
+  assert.equal(fbAt(ckpts.length - 1)?.status, "completed");
 }
 
 {

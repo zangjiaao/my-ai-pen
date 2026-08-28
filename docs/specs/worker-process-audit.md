@@ -51,7 +51,7 @@ Operators can see **Worker rows** on Agent collaboration (`panel_agents`) and Ta
    - **Header:** display name + status + **Rename** + Close  
    - **Left:** Package turn list (ordinal · status · `this_turn_goal`)  
    - **Right:** selected turn = **Package card** → **process** (thinking / tool_call / text) → **Delivery**
-3. **V1 interaction:** read-only audit **plus rename**. No user→Worker messages, no **in-dialog** abort/steer. Operator **End Worker** lives on the collaboration **AgentRow** (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) L12 / [#491](https://github.com/zangjiaao/my-ai-pen/issues/491)) — not inside this dialog. End **removes** the Worker from the live collab tree (row is gone; audit of past turns remains in Case Worker transcript if already persisted).
+3. **V1 interaction:** read-only audit **plus rename**. No user→Worker messages, no **in-dialog** abort/steer. Operator **End Worker** lives on the collaboration **AgentRow** (Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) L12 / [#491](https://github.com/zangjiaao/my-ai-pen/issues/491)) — not inside this dialog. End **disposes** the child session and stamps the collab row `released` (grey light; row stays so Tasks chips still match). Audit of past turns remains in Case Worker transcript if already persisted.
 4. **Main chat** stays Main narrative; Worker process detail is **dialog-only**.
 
 ---

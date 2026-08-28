@@ -115,7 +115,9 @@ export function describeMainActivity(input: {
   if (phase === "continue") return "继续推进任务";
   if (phase === "goal_budget_limit") return "目标预算受限，收尾中";
   if (phase === "finished" || phase === "completed") return "本轮工作已结束";
+  if (phase === "paused") return "等待下一阶段";
   if (phase === "aborted" || phase === "stopped") return "任务已中止";
+  if (phase === "failed") return "模型调用失败，本轮已停";
 
   if (tool) return `正在${humanizeToolName(tool)}`;
   return phase.replace(/_/g, " ");
@@ -179,7 +181,7 @@ export class PanelAgentTracker {
   /** 1-based Worker index for a subagent id (assigns on first see). */
   workerIndexFor(id: string): number {
     const key = String(id || "").trim();
-    if (!key) return ++this.workerSeq;
+    if (!countsTowardWorkerSeq(key)) return this.workerIndexById.get(key) || 0;
     const existing = this.workerIndexById.get(key);
     if (existing) return existing;
     const n = ++this.workerSeq;
@@ -218,10 +220,18 @@ export class PanelAgentTracker {
           });
   }
 
-  setMainTerminal(status: "completed" | "failed" | "aborted"): void {
-    this.mainStatus = status === "aborted" ? "stopped" : status;
+  setMainTerminal(status: "completed" | "failed" | "aborted" | "paused"): void {
+    if (status === "paused") {
+      this.mainStatus = "paused";
+      this.phase = "paused";
+    } else if (status === "aborted") {
+      this.mainStatus = "stopped";
+      this.phase = "aborted";
+    } else {
+      this.mainStatus = status;
+      this.phase = status === "completed" ? "finished" : status;
+    }
     this.activeTool = "";
-    this.phase = status === "completed" ? "finished" : status;
     this.detail = describeMainActivity({
       phase: this.phase,
       lastTool: this.lastTool,
@@ -260,7 +270,10 @@ export class PanelAgentTracker {
     const goal = resolveSubagentGoal(input.label, input.assignment);
     const workerN = this.workerIndexFor(input.id);
     const prev = this.children.get(input.id);
-    const name = String(input.name || "").trim() || prev?.name || formatWorkerName(workerN);
+    const name =
+      String(input.name || "").trim() ||
+      prev?.name ||
+      (workerN > 0 ? formatWorkerName(workerN) : "Worker");
     this.children.set(input.id, {
       id: input.id,
       name,
@@ -295,6 +308,25 @@ export class PanelAgentTracker {
       }
     }
     return false;
+  }
+
+  /** Operator End / Agent op=release: keep the collab row, grey status. */
+  noteSubagentReleased(id: string): boolean {
+    const key = String(id || "").trim();
+    if (!key) return false;
+    const hit =
+      this.children.get(key) ||
+      [...this.children.values()].find(
+        (c) => c.id === key || c.id.endsWith(`-${key}`) || key.endsWith(`-${c.id}`),
+      );
+    if (!hit) return false;
+    this.children.set(hit.id, {
+      ...hit,
+      status: "released",
+      current_action: "released",
+      current_detail: "已释放",
+    });
+    return true;
   }
 
   noteSubagentEnd(input: { id: string; ok: boolean; summary?: string }): void {
@@ -337,7 +369,10 @@ export class PanelAgentTracker {
         ? "本轮工作已结束"
         : this.detail || describeMainActivity({ phase, tool: this.activeTool, lastTool: this.lastTool });
     // Any running Worker under Main → fan-out subtitle (structured child count, not detail regex).
-    const runningWorkers = [...this.children.values()].filter((c) => c.status === "running").length;
+    // Package Workers only — Feedback (id=feedback) must not steal "并行 N 个 Worker".
+    const runningWorkers = [...this.children.values()].filter(
+      (c) => c.status === "running" && countsTowardWorkerSeq(c.id),
+    ).length;
     if (!options?.terminal && mainStatus === "running" && runningWorkers > 0) {
       detail = runningWorkers === 1 ? "并行 1 个 Worker" : `并行 ${runningWorkers} 个 Worker`;
     }
@@ -362,6 +397,11 @@ export class PanelAgentTracker {
     };
     return [main, ...this.children.values()];
   }
+}
+
+/** Worker N sequencer is for package subagents only — Feedback must not eat Worker 1. */
+function countsTowardWorkerSeq(id: string): boolean {
+  return /^sub_/i.test(id);
 }
 
 /** Short AgentRow badge label from Session actual mode (Spec #278 S4 pure helper). */

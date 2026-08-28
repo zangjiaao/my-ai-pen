@@ -370,9 +370,9 @@ export class SubagentIdlePool {
    * Works for idle park *or* in-flight live handles.
    * Returns true if the worker was present.
    *
-   * `dropFromPanel` is only for operator End / Agent `op=release`. Abort, TTL,
-   * LRU, and task disposeAll keep the collab row so child usage (#487) and
-   * completed Workers stay on the live tree.
+   * `dropFromPanel` is for operator End / Agent `op=release`: keep the collab
+   * row and stamp status `released` (grey light). Abort, TTL, LRU, and task
+   * disposeAll leave completed/failed status as-is.
    */
   async release(agentId: string, opts?: { dropFromPanel?: boolean }): Promise<boolean> {
     const id = String(agentId || "").trim();
@@ -383,7 +383,7 @@ export class SubagentIdlePool {
       this.byId.delete(id);
       this.live.delete(id);
       await safeDispose(idle);
-      if (opts?.dropFromPanel) this.panel?.dropChild(id);
+      if (opts?.dropFromPanel) this.panel?.noteSubagentReleased(id);
       return true;
     }
     const live = this.live.get(id);
@@ -391,11 +391,11 @@ export class SubagentIdlePool {
       live.hardReleased = true;
       this.live.delete(id);
       await safeDispose(live);
-      if (opts?.dropFromPanel) this.panel?.dropChild(id);
+      if (opts?.dropFromPanel) this.panel?.noteSubagentReleased(id);
       return true;
     }
     if (opts?.dropFromPanel) {
-      const dropped = this.panel?.dropChild(id) ?? false;
+      const dropped = this.panel?.noteSubagentReleased(id) ?? false;
       if (dropped) {
         this.pendingEnds.add(id);
         return true;
@@ -487,7 +487,7 @@ export function getOrCreateIdlePool(
 }
 
 /**
- * Spec #491: operator End — dispose idle or live Worker and drop collab chrome.
+ * Spec #491: operator End — dispose idle or live Worker; collab row stays released.
  * Requires `conversationId` so one Case cannot abort another tenant's Worker
  * on a shared Node process.
  */

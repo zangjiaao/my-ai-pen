@@ -28,3 +28,14 @@ assert.equal(live.status, "running", "status stays running during tools");
 assert.equal(live.current_action, "tool_running");
 
 console.log("ok: panel resetMainForContinue clears STOP for park attach");
+
+{
+  const wait = new PanelAgentTracker("graph", "渗透大师");
+  wait.setMainTerminal("paused");
+  const row = wait.list({ terminal: true })[0]!;
+  assert.equal(row.status, "paused");
+  assert.equal(row.current_action, "paused");
+  assert.match(String(row.current_detail || ""), /下一阶段/);
+  assert.ok(!/已中止/.test(String(row.current_detail || "")));
+  console.log("ok: Graph pause chrome is wait, not abort");
+}

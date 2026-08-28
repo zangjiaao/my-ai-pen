@@ -303,7 +303,9 @@ function AgentRow({
   const showSessionActions =
     primary &&
     Boolean(sessionLifecycle?.onRequestReset || sessionLifecycle?.onRequestDelete);
-  const showWorkerEnd = Boolean(!primary && sessionLifecycle?.onRequestEndWorker);
+  const showWorkerEnd =
+    Boolean(!primary && sessionLifecycle?.onRequestEndWorker) &&
+    String(agent.status || "").toLowerCase() !== "released";
   const sessionBusy = Boolean(sessionLifecycle?.busy);
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
   const fullSessionId = sessionIdFull(agent);

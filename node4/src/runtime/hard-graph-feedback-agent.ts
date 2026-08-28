@@ -224,6 +224,32 @@ function failClosed(message: string): FeedbackAgentDecision {
   return { decision: "refine", gaps: [`Feedback Agent error (fail-closed): ${message}`] };
 }
 
+/** Live collab tree: flush Feedback running/settled so the row is not stuck green. */
+async function emitFeedbackPanelSnapshot(
+  runtime: ToolRuntime,
+  panel: { list: () => unknown[] } | undefined,
+): Promise<void> {
+  if (!panel) return;
+  const task = runtime.task;
+  if (!task?.conversationId || !task.taskId) return;
+  await runtime.platform
+    .send({
+      type: "checkpoint_update",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      expert_id: task.expertId,
+      expert_name: task.expertName,
+      checkpoint: {
+        runtime: "node4-pi",
+        panel_agents: panel.list(),
+        agent_phase: "feedback",
+        task_id: task.taskId,
+        expert_id: task.expertId,
+      },
+    })
+    .catch(() => {});
+}
+
 /** Graph terminal / error: drop the run-wide Feedback Agent. */
 export async function disposeGraphFeedbackHandle(runtime: ToolRuntime): Promise<void> {
   const run = runtime.lifecycle.hardGraphRun;
@@ -321,13 +347,21 @@ export async function runHardGraphFeedbackAgent(
       };
 
   const panel = graphRun?.panel || parentRuntime.lifecycle.panelAgents;
+  const hop = String(options.nextStageId || "").trim()
+    ? `${stage.id} → ${options.nextStageId}`
+    : stage.id;
   panel?.noteSubagentStart({
     id: agentId,
     assignment: `Feedback after ${stage.id}`,
-    label: "Feedback",
+    label: `评审 ${hop}`,
     nodeType: "feedback",
     name: "Feedback",
   });
+  panel?.setMainActivity({
+    phase: "llm_waiting",
+    detail: `Feedback 评审 ${hop}`,
+  });
+  await emitFeedbackPanelSnapshot(parentRuntime, panel);
 
   let workerProcess: { dispose: () => void } | undefined;
   let usage: { dispose: () => void } | undefined;
@@ -407,10 +441,12 @@ export async function runHardGraphFeedbackAgent(
       ok: parsed.decision === "pass",
       summary: parsed.decision,
     });
+    await emitFeedbackPanelSnapshot(parentRuntime, panel);
     return parsed;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     panel?.noteSubagentEnd({ id: agentId, ok: false, summary: msg.slice(0, 160) });
+    await emitFeedbackPanelSnapshot(parentRuntime, panel);
     return failClosed(msg);
   } finally {
     try {

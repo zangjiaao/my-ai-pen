@@ -16,7 +16,7 @@ export function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
-/** Spec #491: End Worker — drop the collab-tree row (do not keep a zombie). Suffix match must not hit sub_10 for sub_1. */
+/** Spec #491: End Worker — keep the collab-tree row, stamp released (grey light). */
 export function isReleasedWorkerId(agentId: string, releasedIds: readonly string[]): boolean {
   const aid = String(agentId || "").trim();
   if (!aid) return false;
@@ -28,21 +28,60 @@ export function isReleasedWorkerId(agentId: string, releasedIds: readonly string
   return false;
 }
 
-export function omitReleasedWorkers(
+function stampReleasedRow(agent: StrixAgentStatus): StrixAgentStatus {
+  if (agent.status === "released") return agent;
+  return { ...agent, status: "released", current_action: "released" };
+}
+
+/** Keep released Workers on the tree; do not resurrect them as running. */
+export function applyReleasedWorkerStatus(
   agents: StrixAgentStatus[],
   releasedIds: readonly string[],
 ): StrixAgentStatus[] {
   if (!releasedIds.length) return agents;
-  return agents.filter((agent) => {
-    if (!agent.parent_id) return true;
-    return !isReleasedWorkerId(agent.id, releasedIds);
+  return agents.map((agent) => {
+    if (!agent.parent_id) return agent;
+    return isReleasedWorkerId(agent.id, releasedIds) ? stampReleasedRow(agent) : agent;
   });
+}
+
+/** @deprecated use applyReleasedWorkerStatus — End greys the row instead of dropping it. */
+export function omitReleasedWorkers(
+  agents: StrixAgentStatus[],
+  releasedIds: readonly string[],
+): StrixAgentStatus[] {
+  return applyReleasedWorkerStatus(agents, releasedIds);
+}
+
+/**
+ * Snapshot replace must not resurrect a released Worker as running, and must not
+ * drop a released row just because a thin snapshot omitted it.
+ * Empty `next` remains authoritative (Session Delete).
+ */
+export function mergeAgentsKeepingReleased(
+  prev: StrixAgentStatus[],
+  next: StrixAgentStatus[],
+  releasedIds: readonly string[],
+): StrixAgentStatus[] {
+  if (!next.length) return next;
+  const stamped = applyReleasedWorkerStatus(next, releasedIds);
+  if (!releasedIds.length) return stamped;
+  const extras: StrixAgentStatus[] = [];
+  for (const row of prev) {
+    if (!row.parent_id) continue;
+    if (!isReleasedWorkerId(row.id, releasedIds)) continue;
+    const already = stamped.some(
+      (a) => a.id === row.id || isReleasedWorkerId(a.id, [row.id]) || isReleasedWorkerId(row.id, [a.id]),
+    );
+    if (!already) extras.push(stampReleasedRow(row));
+  }
+  return extras.length ? [...stamped, ...extras] : stamped;
 }
 
 export function markPanelWorkerReleased(agents: StrixAgentStatus[], agentId: string): StrixAgentStatus[] {
   const id = String(agentId || "").trim();
   if (!id) return agents;
-  return omitReleasedWorkers(agents, [id]);
+  return applyReleasedWorkerStatus(agents, [id]);
 }
 
 /**
@@ -242,8 +281,8 @@ export function mergeLivePanelAgents(
   meta?: { expert_id?: string; expert_name?: string; released_ids?: readonly string[] },
 ): StrixAgentStatus[] {
   const released = Array.isArray(meta?.released_ids) ? [...meta.released_ids] : [];
-  prev = omitReleasedWorkers(prev, released);
-  panel = omitReleasedWorkers(panel, released);
+  prev = applyReleasedWorkerStatus(prev, released);
+  panel = applyReleasedWorkerStatus(panel, released);
   if (!panel.length) return prev;
   if (!prev.length) return panel;
 
@@ -322,7 +361,7 @@ export function mergeLivePanelAgents(
     rootId,
     eid || nextRoot.expert_id,
   );
-  return [nextRoot, ...others, ...nextKids];
+  return applyReleasedWorkerStatus([nextRoot, ...others, ...nextKids], released);
 }
 
 /**

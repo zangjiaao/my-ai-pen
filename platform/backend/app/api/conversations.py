@@ -619,8 +619,8 @@ async def release_worker(
     ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
     acked = bool(ack.get("released"))
     ctx_in = c.context if isinstance(c.context, dict) else {}
-    # Persist + WS drop together. Broadcasting without released_worker_ids lets
-    # a later snapshot wipe the local End ref and resurrect the row.
+    # Persist + WS together. Remember released_worker_ids so later snapshots
+    # cannot resurrect the row as running (collab row stays grey).
     persist_chrome = acked or case_has_child_worker(ctx_in, agent_id=aid)
     if persist_chrome:
         ctx = mark_panel_worker_released(ctx_in, agent_id=aid)

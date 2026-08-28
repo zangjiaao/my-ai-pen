@@ -78,7 +78,7 @@ import {
   preferRicherPlanTree,
   mergePlanTreeByOwner,
   upsertWorkerAgent,
-  omitReleasedWorkers,
+  mergeAgentsKeepingReleased,
 } from "../lib/panelAgentsState";
 import {
   isLegacyTaskPipelinePhase,
@@ -901,7 +901,11 @@ export default function ConversationPage() {
       ? snapshot.strix_agents
       : fallback?.strix_agents || [];
     setStrixAgents((prev) =>
-      omitReleasedWorkers(mergeSnapshotAgentsPreserveHarness(prev, nextAgents), released),
+      mergeAgentsKeepingReleased(
+        prev,
+        mergeSnapshotAgentsPreserveHarness(prev, nextAgents),
+        released,
+      ),
     );
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).

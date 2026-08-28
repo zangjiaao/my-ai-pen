@@ -366,6 +366,11 @@ export async function runHardGraphExpertTask(options: {
       if (parentRuntime.lifecycle.hardGraphRun) {
         parentRuntime.lifecycle.hardGraphRun.stageId = undefined;
       }
+      try {
+        panel.setMainTerminal("failed");
+      } catch {
+        /* ignore */
+      }
       const failObs: ObservabilityContext = {
         platform,
         task,
@@ -471,9 +476,11 @@ export async function runHardGraphExpertTask(options: {
   panel.setMainTerminal(
     result.terminal === "completed"
       ? "completed"
-      : result.terminal === "aborted" || result.terminal === "paused"
-        ? "aborted"
-        : "failed",
+      : result.terminal === "paused"
+        ? "paused"
+        : result.terminal === "aborted"
+          ? "aborted"
+          : "failed",
   );
   const llmUsage = runUsage.snapshot({
     agent_count: panel.list().length,

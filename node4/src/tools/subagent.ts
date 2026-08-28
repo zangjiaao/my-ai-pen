@@ -218,7 +218,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           });
         }
         const released = await pool.release(aid, { dropFromPanel: true });
-        runtime.lifecycle.panelAgents?.dropChild(aid);
+        runtime.lifecycle.panelAgents?.noteSubagentReleased(aid);
         const convId = String(runtime.task?.conversationId || "").trim();
         if (convId) {
           void runtime.platform

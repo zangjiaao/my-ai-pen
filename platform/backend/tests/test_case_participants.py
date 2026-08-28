@@ -541,12 +541,12 @@ def test_mark_panel_worker_released_suffix_id():
     out = mark_panel_worker_released(ctx, agent_id="sub_1")
     panel = out["participants"]["expert:e1"]["panel_agents"]
     by_id = {row["id"]: row for row in panel}
-    assert "role-e1-sub_1" not in by_id
+    assert by_id["role-e1-sub_1"]["status"] == "released"
     assert by_id["role-e1-sub_10"]["status"] == "idle"
     assert by_id["role-e1"]["status"] == "idle"
     assert "sub_1" in out["released_worker_ids"]
 
-    # Later burst listing the same child must not resurrect it.
+    # Later burst listing the same child must not resurrect it as running/failed.
     from app.services.case_participants import merge_panel_agents
 
     merged = merge_panel_agents(
@@ -557,7 +557,8 @@ def test_mark_panel_worker_released_suffix_id():
         ],
         released_ids=out["released_worker_ids"],
     )
-    assert not any(str(r.get("id")) == "role-e1-sub_1" for r in merged)
+    kid = next(r for r in merged if str(r.get("id")) == "role-e1-sub_1")
+    assert kid["status"] == "released"
 
 
 def test_case_has_child_worker_not_foreign_id():

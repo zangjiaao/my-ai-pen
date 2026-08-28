@@ -371,6 +371,12 @@ assert.ok(
   assert.equal(cards.length, 1);
   assert.match(String(cards[0]?.question || ""), /surface/);
   assert.ok(!pauseMsgs.some((m) => m.type === "task_complete" && (m as any).status === "completed"));
+  const pauseCk = [...pauseMsgs].reverse().find((m) => m.type === "checkpoint_update") as
+    | { checkpoint?: { panel_agents?: Array<{ parent_id?: string | null; status?: string; current_detail?: string }> } }
+    | undefined;
+  const pauseMain = pauseCk?.checkpoint?.panel_agents?.find((a) => !a.parent_id);
+  assert.equal(pauseMain?.status, "paused", "Feedback pause is wait, not abort");
+  assert.ok(!/已中止/.test(String(pauseMain?.current_detail || "")));
 }
 
 console.log("hard-graph-task.test.ts: ok");
