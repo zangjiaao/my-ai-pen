@@ -16,6 +16,9 @@ from app.services.case_context import (
     extract_scope_ports_from_task,
     path_or_url_from_properties,
     prior_index_module_key,
+    surface_origin_host_keys,
+    task_scope_asset_ids,
+    unique_identity_asset_ids,
 )
 from app.services.owner_intel import intel_matches_case_scope
 
@@ -352,6 +355,52 @@ def test_extract_hosts_from_task_target_and_scope():
     assert "10.0.0.1" in hosts
     # Port is not part of address key
     assert not any("3000" in h for h in hosts)
+
+
+def test_task_scope_asset_ids_keeps_valid_uuids_only():
+    aid = "948484b0-aaaa-4b03-81d3-916b7cbd6cd0"
+    assert task_scope_asset_ids({"scope": {"asset_ids": [aid, "not-a-uuid", aid]}}) == [aid]
+    assert task_scope_asset_ids({"scope": {"allow": ["localhost"]}}) == []
+
+
+def test_unique_identity_skips_ambiguous_key():
+    a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    catalog = [
+        (a, {"host.docker.internal", "localhost"}),
+        (b, {"other.local", "localhost"}),
+    ]
+    assert unique_identity_asset_ids(["localhost"], catalog) == []
+    assert unique_identity_asset_ids(["host.docker.internal"], catalog) == [a]
+    assert unique_identity_asset_ids(["localhost", "host.docker.internal"], catalog) == [a]
+
+
+def test_surface_origin_host_keys_from_ledger():
+    hosts = surface_origin_host_keys(
+        {
+            "surface_ledger": {
+                "surfaces": [
+                    {"origin_key": "http://localhost:3000", "path_key": "/"},
+                    {"origin_key": "http://localhost:3000", "path_key": "/login"},
+                    {"location": "http://10.0.0.1:8080/x"},
+                ]
+            }
+        }
+    )
+    assert hosts == ["localhost", "10.0.0.1"]
+
+
+def test_case_intel_alias_allow_maps_ports_onto_owner_host():
+    task = {"scope": {"allow": ["http://localhost:3000"]}}
+    identities = {"a1": {"host.docker.internal", "localhost"}}
+    scope = case_intel_port_scope(
+        [("a1", "host.docker.internal")],
+        task,
+        identities=identities,
+    )
+    assert scope["a1"] == {"3000"}
+    assert intel_matches_case_scope(asset_id="a1", port="3000", port_scope=scope) is True
+    assert intel_matches_case_scope(asset_id="a1", port="8080", port_scope=scope) is False
 
 
 def test_extract_scope_ports_named_service_not_sibling():

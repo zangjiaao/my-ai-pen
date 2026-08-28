@@ -18,7 +18,11 @@ from app.models.vulnerability import Vulnerability
 from app.services.asset_ledger import (
     MAX_AGENT_HOST_CREATE,
     expand_host_specs,
+    extract_aliases,
     extract_services,
+    identity_match_kind,
+    identity_query_key,
+    identity_values,
     infer_asset_type,
     merge_discover_properties,
     merge_tags,
@@ -339,10 +343,14 @@ async def list_groups_for_user(
         assets_map = {a.id: a for a in ares.scalars().all()}
     for row in rows:
         host = assets_map.get(row.asset_id)
+        aliases: list[str] = []
+        if host:
+            aliases = extract_aliases(host.properties or {}, host.address)
         members_by.setdefault(row.group_id, []).append(
             {
                 "asset_id": str(row.asset_id),
                 "address": host.address if host else None,
+                "aliases": aliases,
                 "ports": list(row.ports or []),
             }
         )
@@ -463,29 +471,29 @@ async def put_hosts_in_group(
             hosts = expand_host_specs(addresses)
         except ValueError as e:
             raise NodeLedgerError(str(e), status_code=400) from e
+        owned = list(
+            (await db.execute(select(Asset).where(Asset.user_id == user_id))).scalars().all()
+        )
+        in_group_ids = set(
+            (
+                await db.execute(
+                    select(AssetAssembly.asset_id).where(AssetAssembly.group_id == group.id)
+                )
+            ).scalars().all()
+        )
         for host in hosts:
-            ares = await db.execute(
-                select(Asset).where(Asset.user_id == user_id, Asset.address == host)
-            )
-            matches = list(ares.scalars().all())
+            key = identity_query_key(host)
+            if not key:
+                continue
+            matches = [
+                a for a in owned if key in identity_values(a.address, a.properties or {})
+            ]
             if not matches:
                 continue
             if len(matches) == 1:
                 _add_id(matches[0].id)
                 continue
-            # Multiple Hosts share this address (cross-unit collision): prefer
-            # the one already in this Group; else require asset_ids.
-            in_group = (
-                await db.execute(
-                    select(Asset)
-                    .join(AssetAssembly, AssetAssembly.asset_id == Asset.id)
-                    .where(
-                        AssetAssembly.group_id == group.id,
-                        Asset.user_id == user_id,
-                        Asset.address == host,
-                    )
-                )
-            ).scalars().all()
+            in_group = [a for a in matches if a.id in in_group_ids]
             if len(in_group) == 1:
                 _add_id(in_group[0].id)
             elif len(in_group) > 1:
@@ -498,7 +506,7 @@ async def put_hosts_in_group(
         msg = "no asset_ids or known addresses to put in group"
         if ambiguous_addresses:
             msg += (
-                f"; ambiguous addresses need asset_ids (same IP in multiple Hosts): "
+                f"; ambiguous identity needs asset_ids (primary or alias on multiple Hosts): "
                 f"{', '.join(ambiguous_addresses[:8])}"
             )
         raise NodeLedgerError(msg, status_code=400)
@@ -626,6 +634,7 @@ def asset_to_dict(a: Asset, *, official_services: list[dict[str, Any]] | None = 
         "address": a.address,
         "type": a.type,
         "tags": list(a.tags or []),
+        "aliases": extract_aliases(props, a.address),
         "note": note or None,
         "properties": props,
         "services": services,
@@ -722,6 +731,81 @@ async def list_assets(
             official = {}
     items = [asset_to_dict(a, official_services=official.get(a.id)) for a in assets]
     return items, total
+
+
+async def _groups_by_asset_ids(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    asset_ids: list[uuid.UUID],
+) -> dict[str, list[dict[str, str]]]:
+    if not asset_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(AssetAssembly.asset_id, AssetGroup.id, AssetGroup.name)
+            .join(AssetGroup, AssetGroup.id == AssetAssembly.group_id)
+            .where(
+                AssetAssembly.asset_id.in_(asset_ids),
+                AssetGroup.user_id == user_id,
+            )
+            .order_by(AssetGroup.name.asc())
+        )
+    ).all()
+    out: dict[str, list[dict[str, str]]] = {}
+    for aid, gid, name in rows:
+        out.setdefault(str(aid), []).append({"id": str(gid), "name": str(name)})
+    return out
+
+
+async def list_assets_with_identity(
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID | None,
+    conversation_id: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    """Agent list: exact identity (primary∪aliases) before fuzzy note search.
+
+    When q is a ledger address: unique / ambiguous / none.
+    Ambiguous returns only those Hosts — Agent must request_user_decision, never first-match.
+    None falls through to existing ilike (notes/tags) so Q&A still works.
+    """
+    meta: dict[str, Any] = {}
+    key = identity_query_key(q)
+    if user_id and key:
+        from app.services.owner_services import list_assets_by_identity, load_official_services
+
+        hits = await list_assets_by_identity(db, user_id, key)
+        kind = identity_match_kind(len(hits))
+        meta = {"identity": kind, "identity_query": key}
+        if kind != "none":
+            if kind == "ambiguous":
+                meta["next"] = "request_user_decision"
+            limit_n = max(1, min(int(limit or 50), 2000))
+            offset_n = max(0, int(offset or 0))
+            total = len(hits)
+            page = hits[offset_n : offset_n + limit_n]
+            official: dict[uuid.UUID, list[dict[str, Any]]] = {}
+            if page:
+                official = await load_official_services(db, [a.id for a in page])
+            groups = await _groups_by_asset_ids(db, user_id, [a.id for a in page])
+            items = []
+            for a in page:
+                row = asset_to_dict(a, official_services=official.get(a.id))
+                row["groups"] = groups.get(str(a.id), [])
+                items.append(row)
+            return items, total, meta
+    items, total = await list_assets(
+        db,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return items, total, meta
 
 
 async def get_asset(db: AsyncSession, asset_id: str, *, user_id: uuid.UUID | None) -> dict[str, Any]:

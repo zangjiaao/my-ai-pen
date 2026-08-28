@@ -133,7 +133,7 @@ Phase **S3**: Node4 can report whether the L2 shell path is ready **without bloc
 |---------|-----|
 | CLI | `cd node4 && npm run doctor:pen-tools` (or `npx tsx src/tooling-health-cli.ts`) |
 | Flags | `--json` machine-readable; `--fast` skip container binary probe (image/shim/host only) |
-| Task start | Non-chat execution packs with `shell`: write `pi-{sessionId}/tooling-health.json` + one `status_update` summary |
+| Task start | Non-chat execution packs with `shell`: write `pi-{sessionId}/tooling-health.json` (disk only; not a live WS event) |
 | Code | `node4/src/runtime/tooling-health.ts` |
 
 **Report fields (factual env state only):** resolved sandbox image + present?, shell mode (`container` \| `host`), host pen-tools bin/PATH shim, key tools (`nuclei`, `nmap`, `sqlmap`, `ffuf`, `redis-cli`). `gating` is always `false`. Missing `nuclei` marks `degraded: true` but **exit code stays 0** and the harness still runs.

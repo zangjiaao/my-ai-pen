@@ -30,8 +30,8 @@ Incident class: Case `6eb54137-…` (task `3917753b-…`): last progressive acti
 ## Solution
 
 1. Treat the **in-flight LLM provider stream** as a first-class **product process** during `llm_waiting` / model turn—not only thinking tokens and tool execution.  
-2. **Runtime is source of truth** for stream health signals (chunk cadence, last activity, high-level chunk kind). Platform FE **projects** them; FE must not invent stall by free-text heuristics or fixed “maybe stuck” copy without Runtime frames.  
-3. Emit **durable / Status-visible liveness** while a stream is open and no progressive thinking/text/tool frame has landed for a configured idle window (**stall**).  
+2. **Runtime is source of truth** for stream health signals (chunk cadence, last activity, high-level chunk kind). **FE projects** them via checkpoint `panel_agents` / `agent_phase`; FE must not invent stall by free-text heuristics or fixed “maybe stuck” copy without Runtime frames.  
+3. Emit **Agent-tree liveness** (`checkpoint_update.panel_agents` / `agent_phase`) while a stream is open and no progressive thinking/text/tool frame has landed for a configured idle window (**stall**).  
 4. **Fail-closed** incomplete streams: when the stream ends without a valid completion (`finish_reason` / equivalent success stop), surface the error **immediately on terminalization**—and optionally **abort earlier** on sustained zero-progress idle so operators are not left in a 10–20 minute black box.  
 5. On every LLM-turn terminal failure, persist a **diagnosis package** (idle_ms, last_chunk_at, whether tool name was ever seen, finish_reason presence, provider message)—enough for next-incident triage without guessing.  
 6. Keep **#350** as the path for tool-name-known chrome; do not use this Spec to dump tool argument bodies into the Main timeline.
@@ -103,8 +103,8 @@ Incident class: Case `6eb54137-…` (task `3917753b-…`): last progressive acti
 
 1. **Primary seam (S1) — LLM stream lifecycle:** Session/task-scoped stream health for the Main model turn: open → activity → stall → terminal (success | incomplete | aborted). Prefer extending the existing observability / agent-event bridge (`tool_execution_end` → `llm_waiting` path) rather than a second parallel kernel. **#497:** `tool_execution_end` opens health / emits `llm_waiting` only when in-flight tool count hits zero. Overlapping tools (e.g. fast `http` + long `subagent`) keep health **closed** (`tool_running`); stall and idle abort must not arm until the last sibling finishes. Sequential single-tool turns unchanged.  
 2. **Secondary seam (S2) — Diagnosis package on terminal LLM failure:** On `LlmTurnError` / incomplete-stream class failures, attach structured fields (see sketch) to the same user-visible failure path and to task/events diagnostics.  
-3. **Tertiary seam (S3) — UI projection:** Status/timeline project Runtime stall + failed states only; no FE-only “N seconds then guess stuck.”  
-4. **Stall threshold:** Default **45s** idle after last stream activity (`NODE4_LLM_STALL_MS`). Stall emits Runtime `agent_phase=llm_stalled` + `stream_health` snapshot + panel detail; it does not invent thinking prose or reseed #276 pending.  
+3. **Tertiary seam (S3) — UI projection:** Agent tree projects Runtime stall + failed states from `checkpoint_update`; no FE-only “N seconds then guess stuck.”  
+4. **Stall threshold:** Default **45s** idle after last stream activity (`NODE4_LLM_STALL_MS`). Stall immediately emits `checkpoint_update` with Main `panel_agents` (`llm_stalled`) + `stream_health` (Agent tree). It does not invent thinking prose, reseed #276 pending, or emit `status_update`.  
 5. **Early abort (recommended v1):** Default **180s** idle (`NODE4_LLM_IDLE_ABORT_MS`; set `0` to disable). Runtime aborts the provider stream and fails the turn with `stream idle timeout` / diagnosis `idle_timeout`—same `LlmTurnError` → `task_error` channel as incomplete finish_reason.  
 6. **Incomplete stream:** When the provider iterator ends without success stop / finish_reason, map to existing user-facing LLM error formatting immediately; do not wait for unrelated retries to “accumulate.”  
 7. **Coarse chunk kinds only:** thinking / text / toolcall / empty_or_other for diagnostics—not full SSE replay in Case chat.  

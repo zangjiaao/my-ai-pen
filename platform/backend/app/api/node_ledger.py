@@ -55,10 +55,10 @@ async def list_assets(
     _ = node
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
-    items, total = await ledger.list_assets(
+    items, total, meta = await ledger.list_assets_with_identity(
         db, user_id=user_id, conversation_id=cid, q=q, limit=limit, offset=offset
     )
-    return {
+    out = {
         "ok": True,
         "assets": items,
         "count": len(items),
@@ -67,6 +67,9 @@ async def list_assets(
         "offset": offset,
         "has_more": offset + len(items) < total,
     }
+    if meta:
+        out.update(meta)
+    return out
 
 
 @router.get("/assets/{asset_id}")

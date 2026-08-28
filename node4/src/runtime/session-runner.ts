@@ -36,7 +36,6 @@ import {
 } from "./pdca-settlement.js";
 import { joinHarnessPrefixes } from "./harness-channel.js";
 import { selectNewUntestedSurfaces } from "./surface-harness.js";
-import { hasNamedEngagement } from "./attack-surface.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { SubagentHost } from "./subagent.js";
@@ -136,8 +135,8 @@ export async function runNode4Task(
   /** Work-burst wall clock: right-panel Elapsed uses started_at → end_time (task lifecycle hooks). */
   const startedAt = new Date().toISOString();
   /**
-   * Chat-only turn: built-in default seat, or expert without authorized target/scope.
-   * Execution work bursts must NOT auto-start — respond conversationally (and use ledger tools for default).
+   * Chat-only turn: built-in ledger-assist seats. Expert pentest with an empty
+   * envelope Target is still a work turn (Surface / Scope own what to hit).
    */
   const chatOnly = isChatOnlyTask(task, pack.id);
   /** default/consult/workspace: chat + ledger/report tools (not recon). Multi-tool work is in-loop, not outer continue. */
@@ -213,7 +212,7 @@ export async function runNode4Task(
   const eventsPath = join(piDir, "events.jsonl");
   const hostWriteRoot = caseDir || piDir;
   /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
-  const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking", "status_update"]);
+  const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking"]);
   const loggingPlatform: PlatformSink = {
     async send(message) {
       const line = `${JSON.stringify({ ts: new Date().toISOString(), ...message })}\n`;
@@ -415,14 +414,6 @@ export async function runNode4Task(
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
     const onCancel = () => {
-      void loggingPlatform
-        .send({
-          type: "status_update",
-          conversation_id: task.conversationId,
-          task_id: task.taskId,
-          message: "harness abort: cancelled",
-        })
-        .catch(() => {});
       try {
         sessionRef?.abort();
       } catch {
@@ -564,37 +555,15 @@ export async function runNode4Task(
     }
   }
 
-  const who = panelLabel;
-  await loggingPlatform.send({
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: chatOnly
-      ? `${who} chat mode (no target yet) pack=${pack.id}`
-      : `${who} starting pack=${pack.id} work_mode=${
-          graphResolved.mode === "graph"
-            ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
-            : "free"
-        } tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
-    agent_phase: chatOnly ? "chat" : "starting",
-    status: "running",
-    work_mode:
-      graphResolved.mode === "graph"
-        ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
-        : "free",
-    llm_usage: usage.snapshot(),
-  });
-
-  // Initial checkpoint so right panel has structure even before first model turn.
+  // Initial checkpoint so Agent tree has structure even before first model turn.
   await emitCheckpointUpdate(obsCtx);
   checkpointThrottle.markEmitted();
 
-  // L2 tooling health: observability only (piDir + status_update). Never gates the loop.
+  // L2 tooling health: observability only (piDir JSON). Never gates the loop.
   if (shouldEmitToolingHealth({ chatOnly, toolNames })) {
     try {
       await recordToolingHealthAtTaskStart({
         piDir,
-        platform: loggingPlatform,
         task,
       });
     } catch {
@@ -727,15 +696,6 @@ export async function runNode4Task(
       // OMP: one-shot budget-limit steer when token_budget just flipped status.
       const budgetSteerGoal = goals.takePendingBudgetLimitSteer();
       if (budgetSteerGoal && !cancelled()) {
-        await loggingPlatform.send({
-          type: "status_update",
-          conversation_id: task.conversationId,
-          task_id: task.taskId,
-          message: `goal budget-limited tokens=${budgetSteerGoal.tokensUsed}/${budgetSteerGoal.tokenBudget ?? "?"} — steer wrap-up (not complete)`,
-          agent_phase: "goal_budget_limit",
-          status: "running",
-          llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-        });
         segmentCounter.tools = 0;
         runtime.lifecycle.toolsInLastSegment = 0;
         try {
@@ -804,15 +764,6 @@ export async function runNode4Task(
               segmentCounter.tools = 0;
               runtime.lifecycle.toolsInLastSegment = 0;
               if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
-              await loggingPlatform.send({
-                type: "status_update",
-                conversation_id: task.conversationId,
-                task_id: task.taskId,
-                message: `pdca replan unresolved=${pdca.unresolved.length} reason=${pdca.reason}`,
-                agent_phase: "continue",
-                status: "running",
-                llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-              });
               await promptAndAssert(
                 `${formatLiveStateHarness(overlayNow)}\n\n${pdca.replanPrompt}`,
                 "harness",
@@ -870,15 +821,6 @@ export async function runNode4Task(
           ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
           : undefined;
 
-      await loggingPlatform.send({
-        type: "status_update",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalLabel} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
-        agent_phase: "continue",
-        status: "running",
-        llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-      });
       // Mid-run checkpoint on outer continues so tokens/tasks refresh even if throttle was idle.
       await emitCheckpointUpdate(obsCtx);
       checkpointThrottle.markEmitted();
@@ -1149,13 +1091,13 @@ function abortReasonIsHandoff(signal?: AbortSignal): boolean {
 
 /**
  * True when this turn must not open an execution work-burst UX:
- * - built-in default seat (always chat/ledger assist), or
- * - expert dispatch with no authorized target/scope yet.
+ * built-in ledger-assist seats only. Expert pentest with an empty envelope
+ * target is still a work turn — Surface / Scope own “what to hit”, not a
+ * regex-invented Task Target.
  */
 export function isChatOnlyTask(task: TaskEnvelope, packId?: string): boolean {
   const pack = String(packId || task.engagement || task.role || "").toLowerCase().trim();
-  if (pack === "default" || pack === "consult" || pack === "workspace") return true;
-  return !hasNamedEngagement(task);
+  return pack === "default" || pack === "consult" || pack === "workspace";
 }
 
 /** Built-in workspace seats: conversation + ledger/report tools, not recon execution. */

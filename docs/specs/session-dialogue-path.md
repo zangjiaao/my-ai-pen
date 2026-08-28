@@ -63,7 +63,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 | **Package / Task id** | Dispatch and accounting identity for lights, cancel, work-burst — not Session dialogue author. |
 | **Park-hit** | Node attaches existing captain pi for `(conversation_id, expert_id)`. |
 | **Park-miss** | No live park (dispose, process death, Reset reseed) → honest cold reseed path. |
-| **Cold envelope** | First-open or park-miss path: system layers + case_context + structured target/scope + user utterance. |
+| **Cold envelope** | First-open or park-miss path: system layers + case_context + authorized Scope (legacy envelope target if present) + user utterance. |
 
 ---
 

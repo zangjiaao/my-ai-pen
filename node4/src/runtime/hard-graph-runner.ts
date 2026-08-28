@@ -33,6 +33,11 @@ import {
 } from "./hard-graph-feedback.js";
 import { l1MaxStageRefine } from "./l1-critic.js";
 import {
+  evaluateStageAdvance,
+  parseStageAdvance,
+  type StageAdvance,
+} from "./stage-advance-feedback.js";
+import {
   formatL0RepairBrief,
   isBookingOnlyStage,
   isHonestyCannotAdvanceErrors,
@@ -116,6 +121,8 @@ export type StageExecutorInput = {
    * (machine signals only — not L1 prose).
    */
   l0RepairBrief?: string;
+  /** Immediate next ordered stage id — Feedback votes this hop only. */
+  nextStageId?: string;
 } & StagePromptExtras;
 
 export type StageExecutorOutput = {
@@ -143,6 +150,11 @@ export type StageExecutorOutput = {
    * When decision=refine, runner treats stage attempt as failed_attempt (bounded).
    */
   l1?: { decision: "pass" | "refine"; gaps: string[] };
+  /**
+   * Typed stage-advance from Graph Feedback Agent after L0/L1 (continue|pause|stop).
+   * Not scraped from the user instruction; not the stage captain self-report.
+   */
+  stageAdvance?: StageAdvance;
   /**
    * Spec #285 Gate: Main whitelist choice_key after settle (host validates membership).
    * Never free goto — only declared path_map keys on the node.
@@ -230,7 +242,14 @@ export type HardGraphStageEvent =
     };
 
 /** Single terminal vocabulary for Hard Graph runs. */
-export type HardGraphTerminal = "completed" | "blocked" | "aborted";
+export type HardGraphTerminal = "completed" | "blocked" | "aborted" | "paused";
+
+export type HardGraphAdvanceHalt = {
+  decision: "pause" | "stop";
+  stageId: string;
+  nextStageId?: string;
+  summary?: string;
+};
 
 export type HardGraphRunResult = {
   graphId: string;
@@ -239,6 +258,8 @@ export type HardGraphRunResult = {
   handoff: HardGraphHandoff;
   /** Process Feedback metrics (structure / yield / coverage attempts) — no answer keys. */
   processMetrics?: HardProcessMetrics;
+  /** Set when Feedback halted before opening the next stage. */
+  advance?: HardGraphAdvanceHalt;
 };
 
 export type StageGateResult = { ok: true } | { ok: false; errors: string[] };
@@ -339,8 +360,9 @@ function runEndResult(
   stages: HardGraphStageRecord[],
   handoff: HardGraphHandoff,
   processMetrics?: HardProcessMetrics,
+  advance?: HardGraphAdvanceHalt,
 ): HardGraphRunResult {
-  return { graphId, terminal, stages, handoff, processMetrics };
+  return { graphId, terminal, stages, handoff, processMetrics, ...(advance ? { advance } : {}) };
 }
 
 /**
@@ -406,6 +428,7 @@ async function runHonestyBlockedTail(input: {
         tools: tailTools,
         toolProfile: tail.tools ?? {},
         stageAttempt: 1,
+        ...(graph.stages[j + 1]?.id ? { nextStageId: graph.stages[j + 1].id } : {}),
         l0RepairBrief: formatL0RepairBrief({
           stageId: tail.id,
           failedAttempt: 0,
@@ -490,6 +513,15 @@ export async function runHardGraph(options: {
   abortSignal?: AbortSignal;
   /** Spec #139: L1 refine budget (default l1MaxStageRefine when omitted uses in-memory counter). */
   l1Budget?: L1BudgetHooks;
+  /**
+   * User task instruction (verbatim). Passed into stage work; host does not NLP it
+   * for stage-advance. Pause/stop only from Feedback Agent / executor typed vote.
+   */
+  instruction?: string;
+  /**
+   * Spec #282 resume after Feedback pause: start at this stage id (graph definition).
+   */
+  startStageId?: string;
 }): Promise<HardGraphRunResult> {
   const graph = options.graph;
   if (graph.discipline !== "hard" || !graph.stages.length) {
@@ -532,6 +564,17 @@ export async function runHardGraph(options: {
   // Ordered mode: 0..n-1. Edge mode: start at stages[0], then route.
   let stageIndex = 0;
   let edgeCurrentId = graph.stages[0]!.id;
+  const startId = String(options.startStageId || "").trim();
+  if (startId) {
+    const idx = stageIndexById.get(startId);
+    if (idx == null) {
+      const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+      await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
+      return result;
+    }
+    stageIndex = idx;
+    edgeCurrentId = startId;
+  }
   /** Safety: never exceed hop budget + stage count as hard stop. */
   const maxLoopIters = edgeMode
     ? routeBudgets.global_hop + graph.stages.length + 2
@@ -572,6 +615,7 @@ export async function runHardGraph(options: {
     let lastSummary: string | undefined;
     let attempts = 0;
     let lastStructured: SubagentStructuredResult | undefined;
+    let pendingStageAdvance: StageAdvance | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       attempts = attempt;
@@ -593,6 +637,7 @@ export async function runHardGraph(options: {
       let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
       let outRouteChoiceKey: string | undefined;
       let outRouteProjection: StageExecutorOutput["routeProjection"] | undefined;
+      let outStageAdvance: StageAdvance | undefined;
       try {
         // Honesty repair brief only when prior attempt failed L0 honesty cannot-advance.
         // Structure-only / L1 refine retries must not inject M1 honesty duties (review finding #1).
@@ -627,6 +672,9 @@ export async function runHardGraph(options: {
           // Spec #116 I0.6: stage attempt number for independent package-budget reset
           stageAttempt: attempt,
           ...(l0RepairBrief ? { l0RepairBrief } : {}),
+          ...(graph.stages[stageIndex + 1]?.id
+            ? { nextStageId: graph.stages[stageIndex + 1].id }
+            : {}),
         });
         structured = normalizeSubagentResult(
           out.structured ?? { summary: out.summary, ok: true },
@@ -644,6 +692,10 @@ export async function runHardGraph(options: {
             ? String(out.routeChoiceKey).trim() || undefined
             : undefined;
         outRouteProjection = out.routeProjection;
+        outStageAdvance =
+          out.stageAdvance ??
+          parseStageAdvance(structured) ??
+          parseStageAdvance(out.structured);
       } catch (err) {
         // Model/provider soft-failure: close stage (not leave running) + run_end, then rethrow.
         // Main maps LlmTurnError → task_error (never silent task_complete).
@@ -747,6 +799,7 @@ export async function runHardGraph(options: {
           handoffSurfacesN: handoff.surfaces.length,
         });
         passed = true;
+        pendingStageAdvance = outStageAdvance;
         // Spec #285: each settle is Product-state SOT snapshot (replace, not sticky merge).
         // One-shot flags (need_more_signal / exploit_failed) must not thrash across stages.
         if (outRouteProjection && typeof outRouteProjection === "object") {
@@ -861,8 +914,38 @@ export async function runHardGraph(options: {
       summary: lastSummary,
     });
 
+    const haltAdvance = async (
+      nextStageId: string | undefined,
+      hasNext: boolean,
+    ): Promise<HardGraphRunResult | null> => {
+      const decision = evaluateStageAdvance({
+        vote: pendingStageAdvance,
+        hasNextStage: hasNext,
+      });
+      if (decision !== "pause" && decision !== "stop") return null;
+      const halt: HardGraphAdvanceHalt = {
+        decision,
+        stageId: stage.id,
+        ...(nextStageId ? { nextStageId } : {}),
+        ...(lastSummary ? { summary: lastSummary } : {}),
+      };
+      const result = runEndResult(
+        graph.id,
+        "paused",
+        records,
+        handoff,
+        processMetrics,
+        halt,
+      );
+      await emit({ type: "run_end", graphId: graph.id, terminal: "paused" });
+      return result;
+    };
+
     // --- Ordered stage harness (no edges): advance by index ---
     if (!edgeMode) {
+      const next = graph.stages[stageIndex + 1];
+      const halted = await haltAdvance(next?.id, Boolean(next));
+      if (halted) return halted;
       stageIndex += 1;
       continue;
     }
@@ -934,6 +1017,11 @@ export async function runHardGraph(options: {
       return result;
     }
 
+    const edgeNext =
+      route.next && route.next !== stage.id ? String(route.next) : undefined;
+    const haltedEdge = await haltAdvance(edgeNext, Boolean(edgeNext));
+    if (haltedEdge) return haltedEdge;
+
     routeCounters = applyRouteCounters(routeCounters, route);
     if (route.next === stage.id) {
       // Self-loop without progress would spin; hop budget will soft-land
@@ -967,6 +1055,6 @@ export function hardGraphToHarnessStatus(
   terminal: HardGraphTerminal,
 ): "completed" | "incomplete" | "blocked" {
   if (terminal === "completed") return "completed";
-  if (terminal === "aborted") return "incomplete";
+  if (terminal === "aborted" || terminal === "paused") return "incomplete";
   return "blocked";
 }

@@ -66,6 +66,29 @@ def test_message_archaeology_does_not_invent_intake_or_complete():
     assert agent_state_from_messages([], [], "completed")["phase"] is None
 
 
+def test_status_heartbeat_is_not_agent_phase_ledger():
+    """Persisted status rows (settlement leftovers / old Graph ticks) must not
+    become snapshot phase — Graph stages live on plan_tree."""
+    from types import SimpleNamespace
+
+    msgs = [
+        SimpleNamespace(
+            msg_type="status",
+            content={
+                "phase": "class_probe",
+                "text": "hard_graph stage_start graph=app_assessment stage=class_probe",
+                "active_tool": "shell",
+                "status": "running",
+            },
+        ),
+        SimpleNamespace(msg_type="tool_call", content={"tool_name": "http"}),
+    ]
+    st = agent_state_from_messages(msgs, [], "running")
+    assert st["phase"] is None
+    assert st["intakeStatus"] is None
+    assert st["activeTool"] == "http"
+
+
 def test_kanban_does_not_map_intake_report_to_stages():
     assert current_kanban_stage("running", "executing") == "executing"
     assert current_kanban_stage("running", None) == "executing"

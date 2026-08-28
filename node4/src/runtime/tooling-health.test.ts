@@ -13,7 +13,7 @@ import {
   type ToolingHealthDeps,
   type ToolingHealthReport,
 } from "./tooling-health.js";
-import type { PlatformSink, TaskEnvelope } from "../types.js";
+import type { TaskEnvelope } from "../types.js";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -142,17 +142,9 @@ try {
   assert(safe!.gating === false, "still non-gating after deps fail");
   assert(safe!.degraded === true, "degraded after deps fail");
 
-  // --- recordToolingHealthAtTaskStart: writes artifact + status; platform throw OK ---
+  // --- recordToolingHealthAtTaskStart: writes artifact only (no live WS) ---
   const taskDir = mkdtempSync(join(tmpdir(), "tooling-health-task-"));
   mkdirSync(taskDir, { recursive: true });
-  const sent: unknown[] = [];
-  const platform: PlatformSink = {
-    async send(msg) {
-      sent.push(msg);
-      // simulate flaky platform after first fields recorded
-      if (sent.length > 1) throw new Error("platform down");
-    },
-  };
   const task: TaskEnvelope = {
     taskId: "t-health-1",
     conversationId: "c-health-1",
@@ -163,7 +155,6 @@ try {
 
   const recorded = await recordToolingHealthAtTaskStart({
     piDir: taskDir,
-    platform,
     task,
     probe: () =>
       probeToolingHealth({
@@ -179,22 +170,10 @@ try {
   assert(artifact.gating === false, "artifact gating false");
   assert(artifact.degraded === true, "artifact degraded");
   assert(Array.isArray(artifact.tools), "artifact tools array");
-  assert(sent.length >= 1, "status_update sent");
-  const st = sent[0] as { type?: string; message?: string; tooling_health?: { gating?: boolean } };
-  assert(st.type === "status_update", "status_update type");
-  assert(/tooling-health/i.test(String(st.message || "")), "status message");
-  assert(st.tooling_health?.gating === false, "status payload non-gating");
 
-  // Platform that always throws on send — still writes file, returns report
   const taskDir2 = mkdtempSync(join(tmpdir(), "tooling-health-task2-"));
-  const boomPlatform: PlatformSink = {
-    async send() {
-      throw new Error("always fail");
-    },
-  };
   const r2 = await recordToolingHealthAtTaskStart({
     piDir: taskDir2,
-    platform: boomPlatform,
     task,
     probe: () =>
       probeToolingHealth({
@@ -206,7 +185,7 @@ try {
         }),
       }),
   });
-  assert(r2 !== null && r2.degraded === false, "healthy path despite platform throw");
+  assert(r2 !== null && r2.degraded === false, "healthy path writes artifact");
   assert(
     JSON.parse(readFileSync(join(taskDir2, "tooling-health.json"), "utf8")).degraded === false,
     "healthy artifact",
@@ -218,7 +197,6 @@ try {
   try {
     r3 = await recordToolingHealthAtTaskStart({
       piDir: taskDir2,
-      platform,
       task,
       probe: () => {
         throw new Error("probe explode");

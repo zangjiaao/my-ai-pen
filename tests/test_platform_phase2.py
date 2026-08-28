@@ -185,7 +185,7 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertFalse(_message_has_task_target({"text": "你好", "expert_name": "渗透大师"}))
         self.assertFalse(_message_has_task_target({"text": "hello", "expert_id": "x"}))
         self.assertFalse(_message_has_task_target({"text": "准备好了吗", "target": {}}))
-        self.assertTrue(_message_has_task_target({"text": "测一下 http://example.com"}))
+        self.assertFalse(_message_has_task_target({"text": "测一下 http://example.com"}))
         self.assertTrue(
             _message_has_task_target(
                 {"text": "你好", "target": {"type": "url", "value": "http://example.com"}}
@@ -194,11 +194,11 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertTrue(_message_has_task_target({"text": "继续", "scope": {"allow": ["http://example.com"]}}))
 
     def test_message_has_task_target_rejects_greeting(self):
-        """你好 is not an execution target."""
+        """Utterance URL is not an execution target; only structured fields count."""
         from app.ws.router import _message_has_task_target
 
         self.assertFalse(_message_has_task_target({"text": "你好", "expert_name": "渗透大师"}))
-        self.assertTrue(_message_has_task_target({"text": "测一下 http://example.com"}))
+        self.assertFalse(_message_has_task_target({"text": "测一下 http://example.com"}))
     def test_force_dispatch_when_llm_claims_no_pentest_but_node_online(self):
         """Regression: planner must not platform-chat when pentest.web is online and target is present."""
 
@@ -408,31 +408,18 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(decision.capability, "pentest.web")
         self.assertEqual(decision.agent, "pentest")
 
-    def test_ensure_target_from_text_for_node_relay(self):
-        """Relay path copies URL/IP from text into structured target (no platform chat)."""
-        from app.ws.router import _ensure_target_from_text
-
-        msg = _ensure_target_from_text(
-            {"text": "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"}
-        )
-        self.assertEqual(msg.get("target", {}).get("value"), "http://host.docker.internal:3000/")
-        self.assertTrue((msg.get("scope") or {}).get("allow"))
-
-    def test_platform_agent_sanitizes_chinese_suffix_in_plan_target(self):
-        from app.ws.router import _ensure_target_from_text
-
-        msg = _ensure_target_from_text(
-            {"text": "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"}
-        )
-        self.assertEqual(msg["target"]["value"], "http://host.docker.internal:3000/")
-
-    def test_platform_agent_plan_single_chinese_target_dispatches(self):
-        from app.ws.router import _ensure_target_from_text, _message_has_task_target
+    def test_does_not_invent_target_from_utterance(self):
+        """Relay path does not regex-copy URL/IP from text into structured target."""
+        from app.ws.router import _message_has_task_target, _task_assign_from_user_message
 
         text = "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"
-        msg = _ensure_target_from_text({"text": text, "engagement": "pentest", "expert_id": "e1"})
-        self.assertTrue(_message_has_task_target(msg))
-        self.assertEqual(msg["target"]["value"], "http://host.docker.internal:3000/")
+        self.assertFalse(_message_has_task_target({"text": text, "engagement": "pentest", "expert_id": "e1"}))
+        assigned = _task_assign_from_user_message(
+            "c", {"text": "目标：JuiceShop", "engagement": "pentest"}, "t1"
+        )
+        self.assertNotIn("target", assigned)
+        self.assertNotIn("scope", assigned)
+
     def test_platform_agent_plan_multiple_targets_is_policy_clarification(self):
         async def fake_chat(messages):
             return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":["http://one.local","http://two.local"],"reason":"two targets"}'

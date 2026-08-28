@@ -51,7 +51,7 @@ export function isInfraStatusNotice(
   if (mt === "engagement_closeout") return false;
   if (String(content.type || "").trim().toLowerCase() === "engagement_closeout") return false;
 
-  // Nested structured health payload (live Node status_update may carry this).
+  // Nested structured health payload (legacy persisted status rows may carry this).
   if (content.tooling_health != null && typeof content.tooling_health === "object") {
     return true;
   }

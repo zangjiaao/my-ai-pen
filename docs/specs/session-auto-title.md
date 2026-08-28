@@ -85,7 +85,7 @@ Constraints:
 2. **Tool:** `platform_set_conversation_title` on Node platform tools; citizen + default tool lists; on success send WS `conversation_title_updated`.  
 3. **Envelope:** Platform attaches `conversation_title` when building `task_assign` (from Conversation row).  
 4. **Task hint:** `node4/src/runtime/session-title.ts` `formatSessionTitleHint` — assembled into Free/Default Main Task by `buildPromptLayers`. One home; not restated in citizen / Default work lines.  
-5. **Prompts:** Task layer assigns auto-title when placeholder + structured target; otherwise user-asked rename only. Graph stage / worker Task builders omit the hint.  
+5. **Prompts:** Task layer assigns auto-title when placeholder + user-authorized `scope.allow` (legacy envelope `target` still counts if present); otherwise user-asked rename only. Platform does not regex-extract a URL from the utterance. Graph stage / worker Task builders omit the hint.  
 6. **Frontend:** Handle `conversation_title_updated` (bypass case gate so sidebar updates); existing Sidebar manual PATCH unchanged.  
 7. **Placeholders:** Shared server frozenset + Node helper for default detection.  
 8. **Ship separately from #454:** own Spec, issue, and PR.

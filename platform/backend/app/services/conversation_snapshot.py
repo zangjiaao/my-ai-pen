@@ -18,7 +18,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import uuid
 
 from sqlalchemy import select
@@ -1429,34 +1428,26 @@ def agent_state_from_checkpoint(checkpoint: dict, status: str = "running") -> di
 
 
 def agent_state_from_messages(messages: list[Message], evidence: list[Evidence], _status: str) -> dict:
-    phase = None
-    iteration = None
+    """Fallback when no checkpoint exists.
+
+    Do not scrape msg_type=status for phase/tool — those rows are package
+    settlement (task_complete), not a live harness ledger. Tool cards remain
+    a last-known-tool hint only.
+    """
     active_tool = None
-    intake_result = None
-    intake_status = None
     for m in reversed(messages):
-        if m.msg_type == "status" and isinstance(m.content, dict):
-            phase = _display_agent_phase(
-                m.content.get("phase") or parse_phase(str(m.content.get("text", "")))
-            )
-            iteration = m.content.get("iteration")
-            active_tool = m.content.get("active_tool")
-            intake_result = m.content.get("intake_result")
-            intake_status = m.content.get("status")
+        if m.msg_type == "tool_call" and isinstance(m.content, dict) and m.content.get("tool_name"):
+            active_tool = m.content.get("tool_name")
             break
-    if not active_tool:
-        for m in reversed(messages):
-            if m.msg_type == "tool_call" and isinstance(m.content, dict) and m.content.get("tool_name"):
-                active_tool = m.content.get("tool_name")
-                break
     if not active_tool and evidence:
         active_tool = evidence[0].source_tool or evidence[0].type
-    return {"phase": phase, "iteration": iteration, "activeTool": active_tool, "intakeResult": intake_result, "intakeStatus": intake_status}
-
-
-def parse_phase(text: str) -> str | None:
-    match = re.search(r"Phase:\s*([^\s(]+)", text)
-    return match.group(1) if match else None
+    return {
+        "phase": None,
+        "iteration": None,
+        "activeTool": active_tool,
+        "intakeResult": None,
+        "intakeStatus": None,
+    }
 
 
 def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], _phase: str | None, status: str, elapsed_seconds: int) -> dict:

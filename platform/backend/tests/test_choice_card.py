@@ -8,6 +8,7 @@ from app.services.choice_card import (
     apply_soft_gate_note,
     build_confirm_continue_message,
     build_confirm_options_text,
+    collect_authorized_asset_ids,
     expand_selected_options,
     format_selected_summary,
     is_next_steps_choice,
@@ -122,6 +123,38 @@ def test_s2_expand_selected_options():
     assert exp["workset_item_ids"] == ["w1", "w2"]
     assert exp["summary_titles"] == ["加深", "报告"]
     assert format_selected_summary(exp["summary_titles"]) == "已选择：加深、报告"
+    assert exp["asset_ids"] == []
+
+
+def test_expand_and_collect_host_scope_ids():
+    a = "11111111-1111-4111-8111-111111111111"
+    b = "22222222-2222-4222-8222-222222222222"
+    card = {
+        "kind": "next_steps",
+        "options": [
+            {"id": a, "title": "本机", "body": "b", "asset_id": a},
+            {"id": b, "title": "旁路", "body": "b", "asset_id": b},
+        ],
+    }
+    exp = expand_selected_options(card, [a])
+    assert exp["asset_ids"] == [a]
+    assert collect_authorized_asset_ids(
+        decision="confirm_options", card=card, selected_option_ids=[a]
+    ) == [a]
+    assert collect_authorized_asset_ids(
+        decision="authorize",
+        card={"kind": "confirm", "asset_ids": [a, b], "question": "这 2 台要开测吗"},
+    ) == [a, b]
+    assert collect_authorized_asset_ids(
+        decision="authorize",
+        card={"kind": "handoff", "asset_ids": [a], "question": "移交"},
+    ) == []
+    assert collect_authorized_asset_ids(
+        decision="cancel", card=card, selected_option_ids=[a]
+    ) == []
+    parsed = validate_choice_card_payload(card)
+    assert parsed["ok"] is True
+    assert parsed["value"]["options"][0]["asset_id"] == a
 
 
 def test_s3_confirm_text_custom_is_peer_option():

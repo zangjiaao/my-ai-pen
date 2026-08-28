@@ -14,7 +14,7 @@ import {
   isShellInPenToolsEnabled,
   resolvePenToolsImage,
 } from "./pen-tools-shell.js";
-import type { PlatformSink, TaskEnvelope } from "../types.js";
+import type { TaskEnvelope } from "../types.js";
 
 /** Key scanners expected for pentest shell path (cheap host/container checks). */
 export const TOOLING_HEALTH_KEY_TOOLS = [
@@ -311,12 +311,11 @@ export function shouldEmitToolingHealth(opts: {
 }
 
 /**
- * Best-effort: write piDir/tooling-health.json + status_update.
- * Never throws; never blocks product flow.
+ * Best-effort: write piDir/tooling-health.json.
+ * Never throws; never blocks product flow; not a live WS event.
  */
 export async function recordToolingHealthAtTaskStart(opts: {
   piDir: string;
-  platform: PlatformSink;
   task: TaskEnvelope;
   probe?: () => ToolingHealthReport;
 }): Promise<ToolingHealthReport | null> {
@@ -327,26 +326,6 @@ export async function recordToolingHealthAtTaskStart(opts: {
       await writeFileInsideRoot(path, opts.piDir, JSON.stringify(report, null, 2));
     } catch {
       // disk failure must not abort the task
-    }
-    try {
-      await opts.platform.send({
-        type: "status_update",
-        conversation_id: opts.task.conversationId,
-        task_id: opts.task.taskId,
-        message: report.summary,
-        agent_phase: "tooling_health",
-        status: "running",
-        tooling_health: {
-          gating: false,
-          degraded: report.degraded,
-          image: report.sandbox.image,
-          imagePresent: report.sandbox.imagePresent,
-          shellMode: report.sandbox.shellMode,
-          nuclei: report.tools.find((t) => t.name === "nuclei")?.present ?? false,
-        },
-      } as any);
-    } catch {
-      // platform send failure must not abort
     }
     return report;
   } catch {

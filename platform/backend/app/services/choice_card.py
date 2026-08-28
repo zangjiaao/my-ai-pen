@@ -33,6 +33,38 @@ def _s(v: object) -> str:
     return str(v or "").strip()
 
 
+def _parse_asset_id(raw: object) -> str:
+    """UUID Host id or empty. Never treat free-text titles as ids."""
+    import uuid as uuid_mod
+
+    s = _s(raw)
+    if not s:
+        return ""
+    try:
+        uuid_mod.UUID(s)
+    except ValueError:
+        return ""
+    return s
+
+
+def parse_card_asset_ids(card: dict | None) -> list[str]:
+    """Top-level card asset_ids (confirm-all-these-Hosts)."""
+    if not isinstance(card, dict):
+        return []
+    raw = card.get("asset_ids")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        aid = _parse_asset_id(item)
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(aid)
+    return out
+
+
 def is_next_steps_choice(content: dict | None) -> bool:
     if not isinstance(content, dict):
         return False
@@ -76,6 +108,9 @@ def _parse_option_row(
             opt["workset_item_ids"] = workset_ids
     if _s(row.get("kind")):
         opt["kind"] = _s(row.get("kind"))
+    asset_id = _parse_asset_id(row.get("asset_id")) or _parse_asset_id(row.get("id"))
+    if asset_id:
+        opt["asset_id"] = asset_id
     return opt
 
 
@@ -303,6 +338,8 @@ def expand_selected_options(
     seen: set[str] = set()
     summary_titles: list[str] = []
     selected_options: list[dict[str, Any]] = []
+    asset_ids: list[str] = []
+    seen_assets: set[str] = set()
     for opt in options:
         if not isinstance(opt, dict):
             continue
@@ -311,6 +348,10 @@ def expand_selected_options(
             continue
         summary_titles.append(_s(opt.get("title")) or oid)
         selected_options.append(opt)
+        aid = _parse_asset_id(opt.get("asset_id")) or _parse_asset_id(opt.get("id"))
+        if aid and aid not in seen_assets:
+            seen_assets.add(aid)
+            asset_ids.append(aid)
         for wid in opt.get("workset_item_ids") or []:
             w = _s(wid)
             if not w or w in seen:
@@ -321,7 +362,46 @@ def expand_selected_options(
         "workset_item_ids": workset_item_ids,
         "summary_titles": summary_titles,
         "selected_options": selected_options,
+        "asset_ids": asset_ids,
     }
+
+
+_SCOPE_SKIP_KINDS = frozenset({
+    "handoff",
+    "enter_graph",
+    "switch_graph",
+    "exit_graph",
+    "full_restart",
+})
+
+
+def collect_authorized_asset_ids(
+    *,
+    decision: str,
+    card: dict | None,
+    selected_option_ids: list | None = None,
+) -> list[str]:
+    """Host ids the user just allowed as Case Scope. Empty on cancel / handoff / Graph."""
+    dec = _s(decision).lower()
+    if dec in {"cancel", "deny", "reject", "no", "answered"}:
+        return []
+    if not isinstance(card, dict):
+        return []
+    kind = _s(card.get("kind")).lower()
+    if kind in _SCOPE_SKIP_KINDS:
+        return []
+    card_ids = parse_card_asset_ids(card)
+    if dec == "confirm_options":
+        expanded = expand_selected_options(card, selected_option_ids)
+        return list(expanded.get("asset_ids") or [])
+    if dec == "authorize":
+        if card_ids:
+            return card_ids
+        options = parse_choice_options(card)
+        all_ids = [_s(o.get("id")) for o in options if isinstance(o, dict) and _s(o.get("id"))]
+        expanded = expand_selected_options(card, all_ids)
+        return list(expanded.get("asset_ids") or [])
+    return []
 
 
 def format_selected_summary(summary_titles: list[str] | None) -> str:
@@ -616,9 +696,9 @@ def build_confirm_continue_message(
     expert_name: str | None = None,
     engagement: str | None = None,
 ) -> dict[str, Any]:
-    """Spec #313 S1 pure — confirm → user_message-shaped demand with sticky target/scope.
+    """Spec #313 S1 pure — confirm → user_message-shaped demand with sticky scope/expert.
 
-    When prior engagement had a target, always rehydrate it (forbid empty-target chat-only).
+    Rehydrate structured Scope when present. Empty envelope Target is not a chat-only gate.
     """
     summary = _s(text)
     if not summary:

@@ -56,7 +56,7 @@ function makeCtx(
   };
 }
 
-// --- S1: silence past threshold → stall status_update (Runtime SoT) ---
+// --- S1: silence past threshold → stall checkpoint (Runtime SoT / Agent tree) ---
 
 {
   let now = 10_000_000;
@@ -72,13 +72,17 @@ function makeCtx(
   const outcome = await applyStreamHealthTick(ctx, health);
   assert.equal(outcome, "stalled");
   assert.equal(ctx.counters.phase, "llm_stalled");
-  const statuses = platform.messages.filter((m) => m.type === "status_update");
-  assert.ok(statuses.length >= 1, "stall emits status_update");
-  const last = statuses[statuses.length - 1]! as Record<string, unknown>;
-  assert.equal(last.agent_phase, "llm_stalled");
-  assert.equal(last.status, "running");
-  assert.ok(last.stream_health, "stream_health snapshot present");
-  assert.match(String(last.message || ""), /无进度|等待/);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "status_update").length,
+    0,
+    "stall must not use status_update",
+  );
+  const cps = platform.messages.filter((m) => m.type === "checkpoint_update");
+  assert.ok(cps.length >= 1, "stall emits checkpoint_update");
+  const last = cps[cps.length - 1]! as Record<string, unknown>;
+  const cp = last.checkpoint as Record<string, unknown>;
+  assert.equal(cp.agent_phase, "llm_stalled");
+  assert.ok(cp.stream_health, "stream_health snapshot on checkpoint");
   assert.equal(ctx.panel.list()[0]?.current_action, "llm_stalled");
 }
 
@@ -216,9 +220,11 @@ function makeCtx(
   });
   assert.match(err.userMessage, /模型调用失败|idle/i);
   assert.equal(err.diagnosis?.stream_terminal_class, "idle_timeout");
-  const statuses = platform.messages.filter((m) => m.type === "status_update");
-  assert.equal(statuses.length, 1, "exactly one failed status from surface helper");
-  assert.ok((statuses[0] as Record<string, unknown>).stream_diagnosis);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "status_update").length,
+    0,
+    "surface helper does not emit status_update",
+  );
 }
 
 // --- mapPromptFailure: structured only (no broad keyword wrap) ---
@@ -280,9 +286,11 @@ assert.match(
   });
   assert.equal(health.state, "closed", "sibling still running — health stays closed");
   assert.equal(ctx.counters.phase, "tool_running");
-  const waitingAfterFirstEnd = platform.messages.filter(
-    (m) => m.type === "status_update" && (m as { agent_phase?: string }).agent_phase === "llm_waiting",
-  );
+  const waitingAfterFirstEnd = platform.messages.filter((m) => {
+    if (m.type !== "checkpoint_update") return false;
+    const cp = (m as { checkpoint?: { agent_phase?: string } }).checkpoint;
+    return cp?.agent_phase === "llm_waiting";
+  });
   assert.equal(waitingAfterFirstEnd.length, 1, "only turn_start opened llm_waiting so far");
 
   now += 6_000;
@@ -309,6 +317,13 @@ assert.match(
     type: "tool_execution_start",
     toolName: "http",
   });
+  const startCp = platform.messages.filter((m) => m.type === "checkpoint_update");
+  assert.ok(startCp.length >= 1, "tool start emits checkpoint immediately (Agent tree)");
+  assert.equal(
+    (startCp[startCp.length - 1] as { checkpoint?: { agent_phase?: string } }).checkpoint
+      ?.agent_phase,
+    "tool_running",
+  );
   await handleNode4SessionEvent(ctx, textStream, throttle, {
     type: "tool_execution_end",
     toolName: "http",

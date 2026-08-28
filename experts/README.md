@@ -29,6 +29,8 @@ The product Node (**Node4 lineage / Graph × Pi**) runs **Expert packs** (one ca
 **Model B — platform citizen base + specialist overlay:**
 
 - At pack load (`node4/src/experts/load-pack.ts`), every expert pack is injected with **read** ledger tools + Scope/asset rules (`roles/platform-citizen.ts`). You do **not** need to list those tools in every `pack.json` (optional for docs; runtime de-dupes).
+- Hard Graph stage tools are the pack file `graphs/hard/*.json` `tools.allow`. Pentest graphs list inventory reads (`platform_list_assets` / `platform_get_asset` / `platform_list_groups`) on every stage; create/enrich/assemble stay off that list. Node only filters pack tools by the JSON.
+- After a stage L0 pass, Node prompts the run’s **one Feedback Agent** (same pi session + panel row; not configured per-stage in the JSON). It judges refine vs pass and whether to open **this hop’s** next stage. Captains do not self-vote stage-advance. Graph **Main** is also one pi session for the run (next stage = next turn, tools rebound); **Workers** may mint a new session per package.
 - **default** = full citizen (R/W ledger, reports, handoff orchestration).
 - **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
 - Host **create** is never a free agent tool — user asset page, open-task Authorize, or next-scope / promote only.

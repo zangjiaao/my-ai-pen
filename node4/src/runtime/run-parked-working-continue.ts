@@ -187,19 +187,6 @@ export async function runParkedWorkingContinue(options: {
     stage_id: parked.stageId,
   } as any);
 
-  // Machine-oriented status only (not agent narration / chat bubble copy).
-  await platform.send({
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: `parked_continue mode=${workMode} stage=${parked.stageId || "-"} graph=${parked.graphId || "-"}`,
-    agent_phase: "parked_continue",
-    status: "running",
-    work_mode: workMode === "graph" ? `hard_graph:${parked.graphId || "graph"}:parked` : "free",
-    parked_continue: true,
-    session_continue: true,
-  } as any);
-
   await reemitParkedTodos(platform, task, parked);
 
   const session = parked.session;

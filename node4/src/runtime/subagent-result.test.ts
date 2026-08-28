@@ -29,6 +29,27 @@ assert.equal(n1.candidates[0]!.title, "SQLi");
 assert.equal(n1.facts[0]!.key, "ports");
 assert.deepEqual(n1.deadends, ["xss blocked"]);
 
+const withAdvance = normalizeSubagentResult({
+  ok: true,
+  summary: "surface done",
+  stage_advance: "pause",
+});
+assert.equal(withAdvance.stage_advance, "pause");
+const advanceFromFact = normalizeSubagentResult({
+  ok: true,
+  summary: "init ok",
+  facts: [{ key: "stage_advance", summary: "continue" }],
+});
+assert.equal(advanceFromFact.stage_advance, "continue");
+assert.equal(
+  normalizeSubagentResult({
+    ok: true,
+    summary: "x",
+    notes: "please pause",
+  }).stage_advance,
+  undefined,
+);
+
 const n2 = normalizeSubagentResult({
   data: {
     summary: "nested",

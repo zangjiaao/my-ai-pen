@@ -2400,13 +2400,13 @@ class CheckpointResumeTests(unittest.TestCase):
         )
         self.assertEqual(
             _user_message_route({"text": "test http://host.docker.internal:8080/login.php"}, "completed")["action"],
-            "completed_followup",
+            "completed",
         )
         self.assertEqual(_user_message_route({"text": "continue"}, "running")["action"], "steer_or_resume")
         self.assertEqual(_user_message_route({"text": "continue"}, "failed")["action"], "resume")
         self.assertEqual(
             _user_message_route({"text": "test http://host.docker.internal:8080/login.php"}, "created")["action"],
-            "assign",
+            "resume",
         )
 
     def test_resume_message_from_context_preserves_task_and_checkpoint(self):
@@ -2452,10 +2452,26 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(resumed["checkpoint"], {})
         self.assertIn("confirm current state", resumed["text"])
 
-    def test_resume_message_requires_durable_target(self):
+    def test_resume_message_requires_prior_task_context(self):
         resumed, is_resume = _resume_message_from_context({"text": "continue"}, {"task": {}, "checkpoint": {"phase": "analysis"}})
         self.assertIsNone(resumed)
         self.assertFalse(is_resume)
+
+    def test_resume_message_without_envelope_target(self):
+        """Same-Session continue does not require a unique Task Target."""
+        resumed, is_resume = _resume_message_from_context(
+            {"text": "继续"},
+            {
+                "task": {
+                    "instruction": "目标：JuiceShop，开始应用评估",
+                    "target": {},
+                    "scope": {},
+                },
+            },
+        )
+        self.assertTrue(is_resume)
+        self.assertEqual(resumed["text"], "继续")
+        self.assertNotIn("target", resumed)
 
     def test_task_assign_from_user_message_carries_snapshot_only(self):
         msg = {

@@ -51,7 +51,10 @@ class NodeLedgerPolicyTests(unittest.TestCase):
             )
         )
         self.assertFalse(_message_has_task_target({"text": "你好"}))
-        self.assertTrue(_message_has_task_target({"text": "http://example.com"}))
+        self.assertFalse(_message_has_task_target({"text": "http://example.com"}))
+        self.assertTrue(
+            _message_has_task_target({"text": "http://example.com", "scope": {"allow": ["http://example.com"]}})
+        )
 
     def test_ledger_shaped_asset_and_vuln_dicts(self):
         """asset_to_dict / vuln_to_dict return real ledger-shaped payloads (shipped serializers)."""

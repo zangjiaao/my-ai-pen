@@ -21,9 +21,11 @@ import { TodoStore } from "../stores/todo.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
 import { createBoundNode4Session } from "./run-node4-agent.js";
 import { registerActiveSession } from "./active-session-registry.js";
+import { createNode4Tools } from "../tools/index.js";
 import {
   applyCaptainEndDisposition,
   decideParkOnEnd,
+  takeParkedSession,
 } from "./working-session-park.js";
 import {
   absorbStageResultIntoParent,
@@ -60,7 +62,6 @@ import type { Node4AgentSession } from "./run-node4-agent.js";
 import { formatPriorSnapshotInjection } from "./prior-seed.js";
 import {
   buildL1InputFromProductState,
-  runL1Critic,
 } from "./l1-critic.js";
 import { ensureGraphRunQuality } from "./graph-run-quality.js";
 import {
@@ -87,6 +88,18 @@ import {
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
 import { extractLlmTurnError, isLlmTurnError } from "./llm-turn-error.js";
+import {
+  runHardGraphFeedbackAgent,
+  type FeedbackAgentFn,
+} from "./hard-graph-feedback-agent.js";
+import { parseStageAdvance } from "./stage-advance-feedback.js";
+import {
+  emptyOverlay,
+  formatLiveStateHarness,
+  lastDeltaFromRuntime,
+  pdcaSettleEnabled,
+  projectOverlayFromRuntime,
+} from "./pdca-settlement.js";
 import {
   idleTimeoutLlmTurnError,
   mapPromptFailureToLlmTurnError,
@@ -359,22 +372,47 @@ export function createHardGraphStageExecutor(options: {
    */
   boundSessionFactory?: HardGraphBoundSessionFactory;
   abortSignal?: AbortSignal;
+  /**
+   * Test inject: Graph Feedback Agent. Production (no session/bound factory)
+   * runs `runHardGraphFeedbackAgent`. Factories skip the live agent unless this is set.
+   */
+  feedbackAgent?: FeedbackAgentFn;
 }): StageExecutor {
-  const { config, parentRuntime, pack, sessionFactory, boundSessionFactory, abortSignal } = options;
+  const {
+    config,
+    parentRuntime,
+    pack,
+    sessionFactory,
+    boundSessionFactory,
+    abortSignal,
+    feedbackAgent,
+  } = options;
   const task = parentRuntime.task;
+  const skipLiveFeedback = Boolean(sessionFactory || boundSessionFactory) && !feedbackAgent;
 
   return async (input: StageExecutorInput): Promise<StageExecutorOutput> => {
     const expertId = String(task.expertId || pack.id || "").trim();
-    const stageSid = mintPiSessionId();
-    const workDir = parentRuntime.workspaceDir
-      ? resolvePiInstanceDir(
-          parentRuntime.workspaceDir,
-          workspaceCaseId(task.conversationId),
-          expertId || "default",
-          stageSid,
-        )
-      : join(dirname(parentRuntime.piDir), `pi-${stageSid}`);
-    await ensurePiInstanceWorkspace(workDir);
+    const graphRunEarly = parentRuntime.lifecycle.hardGraphRun;
+    const reuseCaptain =
+      !sessionFactory && graphRunEarly?.captainHandle?.session
+        ? graphRunEarly.captainHandle
+        : undefined;
+    if (reuseCaptain) {
+      // Consume the prior stage park without disposing — same captain continues.
+      takeParkedSession(task.conversationId, expertId);
+    }
+    const stageSid = reuseCaptain?.sessionId || mintPiSessionId();
+    const workDir = reuseCaptain?.workDir
+      ? reuseCaptain.workDir
+      : parentRuntime.workspaceDir
+        ? resolvePiInstanceDir(
+            parentRuntime.workspaceDir,
+            workspaceCaseId(task.conversationId),
+            expertId || "default",
+            stageSid,
+          )
+        : join(dirname(parentRuntime.piDir), `pi-${stageSid}`);
+    if (!reuseCaptain) await ensurePiInstanceWorkspace(workDir);
 
     // Spec #116 I0.6: new stage attempt resets non-success package attempt budgets
     const stageAttempt = Math.max(1, Math.floor(input.stageAttempt || 1));
@@ -581,12 +619,40 @@ export function createHardGraphStageExecutor(options: {
       // NC-Honesty-Advance / NC-L1: L1 only after stage L0 honesty pass; never polish L0-fail brief.
       // Empty-book fail is structure L0 — still skip L1 when honesty failed; when honesty ok but empty book, skip L1 polish of fail.
       let l1Payload: { decision: "pass" | "refine"; gaps: string[] } | undefined;
+      let feedbackAdvance: import("./stage-advance-feedback.js").StageAdvance | undefined;
       if (l0HonestyOk && emptyBook.ok) {
-        const l1Out = await runL1Critic({ l0Passed: true, input: l1Input });
-        l1Payload = { decision: l1Out.decision, gaps: l1Out.gaps };
+        const fb = feedbackAgent
+          ? await feedbackAgent({
+              l1Input,
+              stage: input.stage,
+              instruction: task.instruction,
+              nextStageId: input.nextStageId,
+            })
+          : skipLiveFeedback
+            ? { decision: "pass" as const, gaps: [] as string[] }
+            : await runHardGraphFeedbackAgent({
+                config,
+                parentRuntime,
+                pack,
+                stage: input.stage,
+                l1Input,
+                instruction: task.instruction,
+                nextStageId: input.nextStageId,
+                overlayPrefix: pdcaSettleEnabled()
+                  ? formatLiveStateHarness(
+                      await projectOverlayFromRuntime(parentRuntime).catch(() => emptyOverlay()),
+                      lastDeltaFromRuntime(parentRuntime),
+                    )
+                  : undefined,
+                abortSignal,
+              });
+        l1Payload = { decision: fb.decision, gaps: fb.gaps };
+        if (fb.decision === "pass") {
+          feedbackAdvance = fb.stageAdvance ?? (skipLiveFeedback ? undefined : "continue");
+        }
         if (gqState) {
           const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
-          prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
+          prev.last = { decision: fb.decision, gaps: fb.gaps };
           gqState.l1ByStage[input.stage.id] = prev;
         }
       } else if (gqState) {
@@ -656,6 +722,10 @@ export function createHardGraphStageExecutor(options: {
         ) {
           routeMerged.need_more_signal = true;
         }
+        const advance = parseStageAdvance(bag) ?? parseStageAdvance(c);
+        if (advance && routeMerged.stage_advance == null) {
+          routeMerged.stage_advance = advance;
+        }
       }
       const routeRaw =
         Object.keys(routeMerged).length > 0 ? routeMerged : structuredFinal.raw;
@@ -686,6 +756,12 @@ export function createHardGraphStageExecutor(options: {
         },
       });
 
+      const stageAdvance = skipLiveFeedback
+        ? (feedbackAdvance ??
+          parseStageAdvance(routeRaw) ??
+          parseStageAdvance(structuredFinal))
+        : feedbackAdvance;
+
       return {
         structured: structuredFinal,
         summary: structuredFinal.summaryProvided ? structuredFinal.summary : undefined,
@@ -707,6 +783,7 @@ export function createHardGraphStageExecutor(options: {
         ...(routeSlices.routeChoiceKey
           ? { routeChoiceKey: routeSlices.routeChoiceKey }
           : {}),
+        ...(stageAdvance ? { stageAdvance } : {}),
       };
     };
 
@@ -819,9 +896,29 @@ export function createHardGraphStageExecutor(options: {
         thinkingLevel: "medium" as const,
         sessionId: stageSid,
       };
-      const { session } = boundSessionFactory
-        ? await boundSessionFactory(boundOpts)
-        : await createBoundNode4Session(boundOpts);
+      let session = reuseCaptain?.session;
+      if (session) {
+        try {
+          session.rebind?.({
+            systemPrompt,
+            tools: createNode4Tools(childRuntime, packForStage),
+          });
+        } catch {
+          /* optional on test fakes */
+        }
+      } else {
+        const bound = boundSessionFactory
+          ? await boundSessionFactory(boundOpts)
+          : await createBoundNode4Session(boundOpts);
+        session = bound.session;
+        if (graphRun) {
+          graphRun.captainHandle = {
+            session,
+            workDir,
+            sessionId: String(session.sessionId || stageSid),
+          };
+        }
+      }
 
       // Collab copy: bind pi Agent.sessionId onto shared panel Main.
       const piSid = String(session.sessionId || "").trim();
@@ -870,16 +967,23 @@ export function createHardGraphStageExecutor(options: {
             workDir,
           });
         }
+        const pdcaPrefix = pdcaSettleEnabled()
+          ? formatLiveStateHarness(
+              await projectOverlayFromRuntime(parentRuntime).catch(() => emptyOverlay()),
+              lastDeltaFromRuntime(parentRuntime),
+            )
+          : undefined;
+        const promptOpts = pdcaPrefix ? { prefixHarness: pdcaPrefix } : undefined;
         if (abortSignal) {
           const onAbort = () => session.abort();
           abortSignal.addEventListener("abort", onAbort, { once: true });
           try {
-            await session.prompt(userPrompt);
+            await session.prompt(userPrompt, promptOpts);
           } finally {
             abortSignal.removeEventListener("abort", onAbort);
           }
         } else {
-          await session.prompt(userPrompt);
+          await session.prompt(userPrompt, promptOpts);
         }
         // Spec #353: idle abort is fail-closed LlmTurnError (not user cancel).
         if (obsCtx.streamHealth?.isIdleAbortRequested) {

@@ -17,6 +17,7 @@ import {
   MAX_OTHER_FINDINGS_PER_EVIDENCE,
   normalizeVulnType,
   pocDemonstratesIssue,
+  resolveAffectedHostPort,
   synthesizePocFromHandoffProof,
   VALID_VULN_TYPES,
 } from "./finding.js";
@@ -184,5 +185,26 @@ const single = assessBookingChainQuality({
   locationSupported: evidenceExcerptSupportsLocation,
 });
 assert.equal(single.nudge, "", "single strong proof: no soft nag");
+
+{
+  const fromLoc = resolveAffectedHostPort("https://app.example:8443/x", {
+    target: { value: "https://ignored.example" },
+    scope: { allow: ["https://scope.example"] },
+  });
+  assert.equal(fromLoc.source, "location");
+  assert.equal(fromLoc.host, "app.example");
+  const fromScope = resolveAffectedHostPort("/path-only", {
+    target: { value: "https://ignored.example" },
+    scope: { allow: ["https://scope.example:443"] },
+  });
+  assert.equal(fromScope.source, "scope_allow");
+  assert.equal(fromScope.host, "scope.example");
+  const none = resolveAffectedHostPort("/path-only", {
+    target: { value: "https://ignored.example" },
+    scope: {},
+  });
+  assert.equal(none.source, "none");
+  assert.equal(none.host, "");
+}
 
 console.log("finding.reuse.test.ts ok");

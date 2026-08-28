@@ -18,6 +18,7 @@ export type SecurityAsset = {
   type: string;
   asset_type?: string;
   tags?: string[];
+  aliases?: string[];
   properties?: Record<string, unknown>;
   open_ports?: Array<number | string>;
   services?: Array<Record<string, unknown>>;

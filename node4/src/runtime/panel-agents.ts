@@ -253,15 +253,17 @@ export class PanelAgentTracker {
     /** Short purpose label (this_turn_goal); preferred over raw package markdown. */
     label?: string;
     skillId?: string;
+    /** Panel display name; default Worker N. */
+    name?: string;
   }): void {
     const node = String(input.nodeType || input.skillId || "").trim();
     const goal = resolveSubagentGoal(input.label, input.assignment);
     const workerN = this.workerIndexFor(input.id);
-    const name = formatWorkerName(workerN);
     const prev = this.children.get(input.id);
+    const name = String(input.name || "").trim() || prev?.name || formatWorkerName(workerN);
     this.children.set(input.id, {
       id: input.id,
-      name: prev?.name || name,
+      name,
       status: "running",
       parent_id: "node4-main",
       task: goal.slice(0, 240),

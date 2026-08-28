@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { authFetch } from "../lib/api";
 import { asString, type SecurityAsset, type SecurityVulnerability } from "../lib/securityTypes";
 import FindingCard, { groupFindingsByKind } from "./cards/FindingCard";
@@ -66,8 +66,9 @@ export default function AssetDetailDialog({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<DetailTab>("edit");
-  const [form, setForm] = useState({ note: "", address: "", tags: [] as string[] });
+  const [form, setForm] = useState({ note: "", address: "", tags: [] as string[], aliases: [] as string[] });
   const [tagDraft, setTagDraft] = useState("");
+  const [aliasDraft, setAliasDraft] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [selectedVuln, setSelectedVuln] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedPorts, setSelectedPorts] = useState<string[]>([]);
@@ -75,9 +76,11 @@ export default function AssetDetailDialog({
   const [removingPorts, setRemovingPorts] = useState(false);
   const id = assetId || initial?.id || initial?.asset_id || null;
   const tagSuggestions = Array.from(new Set([...knownTags, ...systems].filter(Boolean)));
+  const loadGen = useRef(0);
 
   useEffect(() => {
     if (!open) return;
+    const gen = ++loadGen.current;
     setError("");
     setTab("edit");
     setSelectedVuln(null);
@@ -85,6 +88,7 @@ export default function AssetDetailDialog({
     setSelectedPorts([]);
     setConfirmRemovePorts(false);
     setTagDraft("");
+    setAliasDraft("");
     const seed = normalizeInitial(initial);
     setDetail(seed);
     if (seed) applyForm(seed);
@@ -92,14 +96,21 @@ export default function AssetDetailDialog({
     setLoading(true);
     authFetch<AssetDetail>(`/api/assets/${id}`)
       .then((data) => {
+        if (gen !== loadGen.current) return;
         setDetail(data);
         applyForm(data);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "资产加载失败"))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (gen !== loadGen.current) return;
+        setError(err instanceof Error ? err.message : "资产加载失败");
+      })
+      .finally(() => {
+        if (gen === loadGen.current) setLoading(false);
+      });
   }, [open, id]);
 
   const asset = detail || normalizeInitial(initial);
+  const savedAliases = aliasesFromDetail(asset);
   const vulns = (asset?.related_vulnerabilities || []) as RelatedVuln[];
   const host = asString(asset?.address, "");
   const services = useMemo(
@@ -143,8 +154,10 @@ export default function AssetDetailDialog({
       note: hostNoteFromDetail(data),
       address: asString(data.address),
       tags: Array.isArray(data.tags) ? data.tags.map(String).filter(Boolean) : [],
+      aliases: aliasesFromDetail(data),
     });
     setTagDraft("");
+    setAliasDraft("");
   }
 
   const addTag = (raw: string) => {
@@ -175,6 +188,36 @@ export default function AssetDetailDialog({
     }
   };
 
+  const addAlias = (raw: string) => {
+    const alias = raw.trim();
+    if (!alias) return;
+    const primary = form.address.trim().toLowerCase();
+    if (alias.toLowerCase() === primary) return;
+    setForm((prev) => {
+      if (prev.aliases.some((a) => a.toLowerCase() === alias.toLowerCase())) return prev;
+      return { ...prev, aliases: [...prev.aliases, alias] };
+    });
+    setAliasDraft("");
+  };
+
+  const removeAlias = (alias: string) => {
+    setForm((prev) => ({
+      ...prev,
+      aliases: prev.aliases.filter((a) => a.toLowerCase() !== alias.toLowerCase()),
+    }));
+  };
+
+  const onAliasKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      addAlias(aliasDraft);
+      return;
+    }
+    if (e.key === "Backspace" && !aliasDraft && form.aliases.length) {
+      removeAlias(form.aliases[form.aliases.length - 1]);
+    }
+  };
+
   const saveEdit = async () => {
     if (!id) return;
     if (!form.address.trim()) {
@@ -186,8 +229,19 @@ export default function AssetDetailDialog({
     if (draft && !tags.some((t) => t.toLowerCase() === draft.toLowerCase())) {
       tags.push(draft);
     }
+    const aliases = [...form.aliases];
+    const aliasIn = aliasDraft.trim();
+    const primary = form.address.trim().toLowerCase();
+    if (
+      aliasIn &&
+      aliasIn.toLowerCase() !== primary &&
+      !aliases.some((a) => a.toLowerCase() === aliasIn.toLowerCase())
+    ) {
+      aliases.push(aliasIn);
+    }
     setSaving(true);
     setError("");
+    loadGen.current += 1;
     try {
       const updated = await authFetch<AssetDetail>(`/api/assets/${id}`, {
         method: "PATCH",
@@ -195,11 +249,21 @@ export default function AssetDetailDialog({
         body: JSON.stringify({
           address: form.address.trim(),
           tags,
+          aliases,
           note: form.note.trim(),
         }),
       });
-      setDetail(updated);
-      applyForm(updated);
+      const returned = aliasesFromDetail(updated);
+      const kept = {
+        ...updated,
+        aliases: returned.length ? returned : aliases,
+        properties: {
+          ...(updated.properties || {}),
+          aliases: returned.length ? returned : aliases,
+        },
+      };
+      setDetail(kept);
+      applyForm(kept);
       onSaved?.(updated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存失败");
@@ -276,6 +340,13 @@ export default function AssetDetailDialog({
                   <span className="truncate text-xs text-ink-muted">{hostNoteFromDetail(asset)}</span>
                 ) : null}
               </div>
+              {savedAliases.length ? (
+                <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[11px] text-ink-secondary">
+                  {savedAliases.map((alias) => (
+                    <span key={alias}>{alias}</span>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-muted">
                 {(asset?.source_label || asset?.source) && (
                   <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[11px] text-ink-secondary">
@@ -336,6 +407,49 @@ export default function AssetDetailDialog({
                   className="w-full rounded-md border border-hairline bg-surface px-2.5 py-2 font-mono text-sm text-ink outline-none focus:border-ink"
                 />
               </label>
+
+              <div className="space-y-1">
+                <span className="text-[11px] text-ink-muted">别名</span>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 py-2">
+                  {form.aliases.map((alias) => (
+                    <span
+                      key={alias}
+                      className="inline-flex items-center gap-1 rounded-md bg-canvas-inset px-2 py-1 font-mono text-xs text-ink"
+                    >
+                      {alias}
+                      <button
+                        type="button"
+                        onClick={() => removeAlias(alias)}
+                        className="rounded text-ink-muted hover:text-severity-critical"
+                        aria-label={`移除别名 ${alias}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    value={aliasDraft}
+                    onChange={(e) => setAliasDraft(e.target.value)}
+                    onKeyDown={onAliasKeyDown}
+                    onBlur={() => {
+                      if (aliasDraft.trim()) addAlias(aliasDraft);
+                    }}
+                    placeholder={form.aliases.length ? "继续添加…" : "例如 localhost"}
+                    className="min-w-[8rem] flex-1 border-0 bg-transparent px-1 py-1 font-mono text-sm text-ink outline-none placeholder:text-ink-muted"
+                  />
+                  <button
+                    type="button"
+                    disabled={!aliasDraft.trim()}
+                    onClick={() => addAlias(aliasDraft)}
+                    className="shrink-0 rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-40"
+                  >
+                    添加
+                  </button>
+                </div>
+                <p className="text-[11px] leading-relaxed text-ink-muted">
+                  同一主机的其它地址（IP / 域名）。备注不当身份。
+                </p>
+              </div>
 
               <div className="space-y-1">
                 <span className="text-[11px] text-ink-muted">标签</span>
@@ -531,6 +645,7 @@ export default function AssetDetailDialog({
                 type="button"
                 disabled={saving || !id}
                 onClick={() => void saveEdit()}
+                onMouseDown={(e) => e.preventDefault()}
                 className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-50"
               >
                 {saving ? "保存中…" : "保存"}
@@ -635,6 +750,26 @@ function normalizeServices(value: unknown): ServiceRow[] {
     });
   }
   return rows.sort((a, b) => Number(a.port) - Number(b.port));
+}
+
+function aliasesFromDetail(asset?: AssetDetail | null): string[] {
+  if (!asset) return [];
+  const fromList = (raw: unknown): string[] => {
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((item) => {
+        if (typeof item === "string") return item.trim();
+        if (item && typeof item === "object") {
+          const rec = item as Record<string, unknown>;
+          return String(rec.value || rec.address || rec.host || "").trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+  };
+  const top = fromList(asset.aliases);
+  if (top.length) return top;
+  return fromList((asset.properties as { aliases?: unknown } | undefined)?.aliases);
 }
 
 function hostNoteFromDetail(asset?: AssetDetail | null): string {

@@ -49,6 +49,20 @@ assert.equal(
     {
       taskId: "t",
       conversationId: "c",
+      instruction: "目标：JuiceShop，开始应用评估",
+      target: {},
+      scope: {},
+    },
+    "pentest",
+  ),
+  false,
+  "pentest empty envelope is a work turn, not chat-only",
+);
+assert.equal(
+  isChatOnlyTask(
+    {
+      taskId: "t",
+      conversationId: "c",
       instruction: "scan",
       target: { value: "http://x" },
       scope: { allow: ["http://x"] },

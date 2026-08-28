@@ -7,6 +7,7 @@ import {
   parseHypothesisPackageOutcomes,
   type HypothesisPackageOutcome,
 } from "./hypothesis-store.js";
+import { parseStageAdvance, type StageAdvance } from "./stage-advance-feedback.js";
 
 export type SubagentCandidate = {
   title?: string;
@@ -61,6 +62,11 @@ export type SubagentStructuredResult = {
    * Canonical parse: parseHypothesisPackageOutcomes (hypothesis-store).
    */
   hypothesis_outcomes?: HypothesisPackageOutcome[];
+  /**
+   * Typed stage-advance vote (continue|pause|stop) from Graph Feedback Agent.
+   * Stage captain self-report is not the SoT.
+   */
+  stage_advance?: StageAdvance;
   raw?: unknown;
 };
 
@@ -202,6 +208,10 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
     nestedStructured?.hypothesis_outcomes ??
     nestedStructured?.hypothesisOutcomes;
   const hypothesis_outcomes = parseHypothesisPackageOutcomes(hypRaw);
+  const stage_advance =
+    parseStageAdvance(body) ??
+    (nestedStructured ? parseStageAdvance(nestedStructured) : undefined) ??
+    parseStageAdvance({ facts: topFacts.length ? topFacts : nestedFacts });
 
   return {
     ok,
@@ -223,6 +233,7 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
     ),
     notes: asString(body.notes ?? nestedStructured?.notes, 4000) || undefined,
     ...(hypothesis_outcomes.length ? { hypothesis_outcomes } : {}),
+    ...(stage_advance ? { stage_advance } : {}),
     raw: input,
   };
 }

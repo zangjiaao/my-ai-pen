@@ -52,7 +52,7 @@ import {
   assert.equal(tryParseWebSeedLocation("not a host", { coerceBare: true }), null);
 }
 
-// --- pure: collect from target + scope.allow ---
+// --- pure: collect from scope.allow only (envelope target is not a product object) ---
 {
   const locs = collectTargetSeedLocations({
     target: { type: "url", value: "https://app.example.com/login" },
@@ -67,7 +67,7 @@ import {
     },
   });
   const origins = locs.map((l) => l.origin_key).sort();
-  // target + api; same origin as target deduped; bare-host not coerced for scope
+  // api + app from scope; target-only origin is not seeded; bare-host not coerced for scope
   assert.deepEqual(origins, [
     "https://api.example.com:8443",
     "https://app.example.com:443",
@@ -79,12 +79,11 @@ import {
 }
 
 {
-  // Bare target coerced when type=url
+  // Envelope task.target alone does not seed
   const locs = collectTargetSeedLocations({
     target: { type: "url", value: "dvwa.local" },
   });
-  assert.equal(locs.length, 1);
-  assert.equal(locs[0]!.origin_key, "http://dvwa.local:80");
+  assert.equal(locs.length, 0);
 }
 
 {
@@ -158,7 +157,7 @@ function runtimeFor(
       taskId: "t-381",
       conversationId: "conv-381",
       target: { type: "url", value: "https://juice.local:3000/rest" },
-      scope: { allow: ["https://api.juice.local"] },
+      scope: { allow: ["https://juice.local:3000/rest", "https://api.juice.local"] },
     },
     { platformApi: false },
   );
@@ -216,6 +215,7 @@ function runtimeFor(
       taskId: "t-381-on",
       conversationId: "conv-381-on",
       target: { type: "url", value: "http://dvwa:80/" },
+      scope: { allow: ["http://dvwa:80/"] },
     },
     { platformApi: true },
   );

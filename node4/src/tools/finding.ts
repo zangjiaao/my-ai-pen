@@ -741,7 +741,8 @@ export function looksLikePlatformUuid(value: string): boolean {
 
 /**
  * Host/port for platform ledger linking.
- * Prefer full URL in location; else task.target / scope.allow (authorized Scope).
+ * Prefer full URL in location; else user-authorized scope.allow.
+ * Envelope task.target is not a product object — do not fall back to it.
  */
 export function resolveAffectedHostPort(
   location: string,
@@ -749,15 +750,6 @@ export function resolveAffectedHostPort(
 ): { host: string; port?: string; source: string } {
   const fromLoc = parseHostPort(location);
   if (fromLoc.host) return { ...fromLoc, source: "location" };
-  const target = task.target && typeof task.target === "object" ? task.target : {};
-  const tval = String(
-    (target as { value?: unknown }).value
-      ?? (target as { url?: unknown }).url
-      ?? (target as { host?: unknown }).host
-      ?? "",
-  ).trim();
-  const fromTarget = parseHostPort(tval);
-  if (fromTarget.host) return { ...fromTarget, source: "task_target" };
   const allow = task.scope && typeof task.scope === "object"
     ? (task.scope as { allow?: unknown }).allow
     : undefined;

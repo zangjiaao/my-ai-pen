@@ -66,6 +66,11 @@ export type Node4AgentSession = {
    * Agent is constructed (Reset reseed / cold start), not on package settle.
    */
   readonly sessionId?: string;
+  /**
+   * In-place rebind for Graph stage/Feedback reuse (same Agent, next turn).
+   * Assigns pi Agent.state.systemPrompt / state.tools.
+   */
+  rebind?: (input: { systemPrompt?: string; tools?: AgentTool<any>[] }) => void;
 };
 
 export type RunNode4AgentOptions = {
@@ -321,6 +326,14 @@ export function wrapAgentAsSession(
     },
     get sessionId() {
       return agent.sessionId;
+    },
+    rebind: (input) => {
+      if (typeof input.systemPrompt === "string") {
+        agent.state.systemPrompt = input.systemPrompt;
+      }
+      if (input.tools) {
+        agent.state.tools = input.tools;
+      }
     },
   };
 }

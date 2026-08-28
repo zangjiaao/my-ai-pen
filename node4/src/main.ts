@@ -447,35 +447,13 @@ client.on("user_interrupt", async (message) => {
   if (!conversationId) return;
   // I0.7: UI interrupt ≠ package-fail (classifyUserControl); abort ends this Graph run.
   cancelApprovalsForConversation(conversationId);
-  const action = String(message.action || "cancel").toLowerCase();
   const abort = aborts.get(conversationId);
   if (abort) {
     const interruptReason = String(message.reason || "").trim();
     const handedOff = interruptReason === "authorized_handoff";
     abort.abort(handedOff ? "authorized_handoff" : undefined);
-    // work_status(working=false) is emitted in runAssignedTask finally after settle.
-    await client.send({
-      type: "status_update",
-      conversation_id: conversationId,
-      message: handedOff
-        ? "Handoff authorized — starting destination expert."
-        : action === "pause"
-          ? "Paused by user."
-          : "Interrupted by user — stopping this work burst.",
-      status: handedOff ? "handed_off" : action === "pause" ? "paused" : "canceled",
-      agent_phase: handedOff ? "finished" : "aborted",
-      working: true, // still winding down until finally
-    });
     return;
   }
-  await client.send({
-    type: "status_update",
-    conversation_id: conversationId,
-    message: "No active work burst to interrupt on this node.",
-    status: "idle",
-    working: false,
-  });
-  // Explicit idle so platform clears a stale worker entry for this node.
   await emitWorkStatus(conversationId, String(message.task_id || ""), false, {
     reason: "not_busy",
   });
@@ -488,7 +466,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   const target =
     targetRaw && typeof targetRaw === "object" && !Array.isArray(targetRaw)
       ? (targetRaw as Record<string, unknown>)
-      : { type: "url", value: String(message.target || "") };
+      : {};
   const scopeRaw = message.scope;
   const scope =
     scopeRaw && typeof scopeRaw === "object" && !Array.isArray(scopeRaw)

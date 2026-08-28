@@ -86,7 +86,18 @@ assert.match(sysExtras, /skill-l1-catalog/);
 
 const user = stageUserPrompt(inputWithSub, task);
 assert.match(user, /Prefer subagent packages/i);
+assert.doesNotMatch(user, /stage_advance/, "captain prompt does not own stage-advance vote");
 assert.doesNotMatch(user, /write result\.json/i);
+assert.doesNotMatch(
+  sys,
+  /### Case live index/,
+  "#531: overlay is harness, not Graph stage system Runtime",
+);
+assert.doesNotMatch(
+  user,
+  /### Case live index/,
+  "#531: overlay is prefixHarness, not stage user prompt body",
+);
 
 const noSub: StageExecutorInput = {
   ...inputWithSub,
@@ -181,7 +192,7 @@ assert.notEqual(stageTw, stageCn);
     layers.runtime.includes("Hard Graph stage agent"),
     "stage identity is Runtime (not Base)",
   );
-  assert.ok(layers.task.includes("Target:"), "stage Task owns target");
+  assert.ok(layers.task.includes("Scope:"), "stage Task owns authorized Scope");
   assert.ok(
     !layers.profession.includes("Hard Graph stage agent"),
     "Profession does not own Graph stage law",
@@ -193,12 +204,12 @@ assert.notEqual(stageTw, stageCn);
 
   const standingIdx = assembled.indexOf(STANDING_HEADING);
   const stageIdIdx = assembled.indexOf("Hard Graph stage agent");
-  const targetIdx = assembled.indexOf("Target:");
+  const scopeIdx = assembled.indexOf("Scope:");
   // Profession sits between Base and Runtime stage identity
   // (work.md headings are stripped on pack load — use body phrase "Causality")
   assert.ok(standingIdx === 0, "Standing at absolute start");
   assert.ok(stageIdIdx > standingIdx, "Runtime stage identity after Base");
-  assert.ok(targetIdx > stageIdIdx, "Task target after Runtime stage law");
+  assert.ok(scopeIdx > stageIdIdx, "Task Scope after Runtime stage law");
   const causalityIdx = assembled.search(/Causality/i);
   assert.ok(
     causalityIdx > standingIdx && causalityIdx < stageIdIdx,

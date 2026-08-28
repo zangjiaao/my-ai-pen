@@ -107,7 +107,7 @@ const baseTask: TaskEnvelope = {
     "Runtime does not own Task target JSON",
   );
 
-  ok(layers.task.includes("Target:"), "Task has target");
+  ok(layers.task.includes("Scope:"), "Task has authorized Scope");
   ok(
     layers.task.includes("only_if_default=true"),
     "Task assigns auto-title when placeholder + structured target",
@@ -158,14 +158,14 @@ const baseTask: TaskEnvelope = {
   const rolePackIdx = prompt.indexOf("Role pack:");
   const toolsIdx = prompt.indexOf("Tools:");
   const workModeIdx = prompt.indexOf("### Work mode");
-  const targetIdx = prompt.indexOf("Target:");
+  const scopeIdx = prompt.indexOf("Scope:");
   const instructionIdx = prompt.indexOf("Instruction:");
 
   ok(standingIdx === 0, "Standing at absolute start");
   ok(rolePackIdx > standingIdx, "Role pack after Standing (Base)");
   ok(toolsIdx > rolePackIdx, "Tools after Base meta");
   ok(workModeIdx > toolsIdx, "work-mode after capability header (Runtime)");
-  ok(targetIdx > workModeIdx, "Task target after Runtime work-mode");
+  ok(scopeIdx > workModeIdx, "Task Scope after Runtime work-mode");
   ok(prompt.includes("### Rules of engagement"), "RoE is markdown under Runtime");
   ok(
     !prompt.includes("<work-mode>") &&
@@ -174,7 +174,7 @@ const baseTask: TaskEnvelope = {
       !prompt.includes("<goal_context>"),
     "assembled system has no leftover XML prompt shells",
   );
-  ok(instructionIdx > targetIdx, "Instruction after Target in Task");
+  ok(instructionIdx > scopeIdx, "Instruction after Scope in Task");
   const profH = prompt.indexOf("## Profession");
   const runH = prompt.indexOf("## Runtime");
   const taskH = prompt.indexOf("## This turn");
@@ -257,7 +257,7 @@ const baseTask: TaskEnvelope = {
     prompt.indexOf(STANDING_HEADING) < prompt.indexOf("Tools:"),
     "Default Base before Runtime tools",
   );
-  ok(prompt.includes("Target:"), "Default Task includes target");
+  ok(prompt.includes("Scope:"), "Default Task includes authorized Scope");
 }
 
 // --- Expert Free: workModeInjection free + skill ids ---
@@ -282,7 +282,7 @@ const baseTask: TaskEnvelope = {
     "Standing before Free work-mode",
   );
   ok(
-    prompt.indexOf("### Work mode") < prompt.indexOf("Target:"),
+    prompt.indexOf("### Work mode") < prompt.indexOf("Scope:"),
     "Free work-mode before Task envelope",
   );
   // No Soft product mode markers
@@ -325,11 +325,16 @@ const baseTask: TaskEnvelope = {
     allowPostex: false,
     mainAct: "delegate_preferred",
   } satisfies ResolvedPentestGraph);
-  // Free Runtime block stays thin (mode + continuity + enter_graph; no stage dump).
+  // Free Runtime block stays thin (mode + continuity + enter_graph + clarify; no stage dump).
   ok(freeWorkMode.includes("mode: free"), "T2 free injection mode: free");
   ok(
     /Prefer Free continuity|enter_graph|never silent/i.test(freeWorkMode),
     "T2 free injection continuity / enter_graph",
+  );
+  ok(
+    /request_user_decision/.test(freeWorkMode) &&
+      /legal entity|authorization|Scope/i.test(freeWorkMode),
+    "T2 free injection: ask when identity/auth/Scope is insufficient",
   );
   ok(
     !/Stage settlement is host-owned|plan_node_id REQUIRED|Prefer packages over one long serial/i.test(
@@ -550,8 +555,8 @@ const baseTask: TaskEnvelope = {
     { chatOnly: true },
   );
   ok(
-    /no authorized engagement target/i.test(chat),
-    "chat-only Runtime forbids recon without a target",
+    /no execution burst/i.test(chat),
+    "chat-only Runtime forbids recon burst without changing pentest into greeting",
   );
 
   const ledgerHostOnly = buildSystemPrompt(
@@ -564,7 +569,7 @@ const baseTask: TaskEnvelope = {
     { chatOnly: true },
   );
   ok(
-    ledgerHostOnly.includes("Target/Scope in This turn are for handoff"),
+    ledgerHostOnly.includes("Scope in This turn is for handoff"),
     "ledger chat-only with host-only target names Target/Scope for handoff",
   );
   ok(
@@ -582,7 +587,7 @@ const baseTask: TaskEnvelope = {
     { chatOnly: true },
   );
   ok(
-    ledgerDefaultPort.includes("Target/Scope in This turn are for handoff"),
+    ledgerDefaultPort.includes("Scope in This turn is for handoff"),
     "ledger chat-only with :443 still treats the engagement as named",
   );
 

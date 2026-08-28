@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.base import get_db
 from app.middleware.auth import get_current_user
@@ -28,10 +29,13 @@ from app.services.asset_ledger import (
     collect_owner_tags,
     conversation_target_blobs,
     enrich_properties_ports,
+    extract_aliases,
     extract_api_endpoints,
     extract_ports,
     extract_services,
     extract_urls,
+    ensure_properties_aliases,
+    replace_properties_aliases,
     infer_asset_type,
     is_valid_ledger_address,
     merge_discover_properties,
@@ -82,6 +86,8 @@ class AssetUpdate(BaseModel):
     name: str | None = None
     address: str | None = None
     tags: list[str] | None = None
+    # Extra same-machine addresses (IP/domain). Replaces properties.aliases. Note is not identity.
+    aliases: list[str] | None = None
     # Full replace of port/service list when provided.
     services: list[dict] | None = None
 
@@ -136,6 +142,7 @@ class AssetOut(BaseModel):
     type: str
     type_label: str = ""
     tags: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
     properties: dict = Field(default_factory=dict)
     source: str
     source_label: str = ""
@@ -160,6 +167,36 @@ def _split_multi(values: list[str] | None) -> list[str]:
             if part:
                 out.append(part)
     return out
+
+
+def _set_asset_properties(a: Asset, props: dict) -> None:
+    """JSONB is not MutableDict — replace + flag or nested keys never flush."""
+    a.properties = props
+    flag_modified(a, "properties")
+
+
+def _parse_alias_list(raw: object) -> list[str]:
+    """User-edited aliases: IP/domain only. Note/remark is not identity."""
+    if not isinstance(raw, list):
+        raise HTTPException(400, "aliases 须为字符串列表")
+    invalid: list[str] = []
+    incoming: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            val = item.get("value") or item.get("address") or item.get("host")
+        else:
+            val = item
+        text = str(val or "").strip()
+        if not text:
+            continue
+        if not is_valid_ledger_address(text):
+            invalid.append(text)
+        else:
+            incoming.append(text)
+    if invalid:
+        shown = "、".join(invalid[:5])
+        raise HTTPException(400, f"别名无效（须为 IP 或域名）：{shown}")
+    return incoming
 
 
 @router.get("", response_model=list[AssetOut])
@@ -651,7 +688,7 @@ async def update_asset(
             props.pop("note", None)
             props.pop("remark", None)
             props.pop("comment", None)
-        a.properties = props
+        _set_asset_properties(a, props)
 
     if "address" in body and body["address"] is not None:
         if not is_valid_ledger_address(body["address"]):
@@ -673,6 +710,13 @@ async def update_asset(
         a.type = infer_asset_type(host)
         if not a.name or a.name == normalize_address(body.get("address") or ""):
             a.name = host
+        _set_asset_properties(a, ensure_properties_aliases(a.properties or {}, a.address))
+
+    if "aliases" in body:
+        incoming = _parse_alias_list(body.get("aliases"))
+        _set_asset_properties(
+            a, replace_properties_aliases(a.properties, incoming, a.address)
+        )
 
     if "services" in body and isinstance(body["services"], list):
         # Merge into existing so agent rediscover fields + other ports stay.
@@ -1241,6 +1285,7 @@ def _out(
         type=a.type,
         type_label=type_label(a.type),
         tags=list(a.tags or []),
+        aliases=extract_aliases(props, a.address),
         properties=props,
         source=a.source,
         source_label=source_label(a.source),

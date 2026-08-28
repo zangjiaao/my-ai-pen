@@ -32,7 +32,7 @@
 3. **Harness over restriction** — 能力不足时优先改进 prompt / 任务信封 / 工具密度；不把靶场答案表、预期漏洞数、coverage 硬门当作默认「智能」。
 4. **结构化意图** — 角色/engagement 来自 UI 或任务信封显式字段；**禁止**用关键词 NLP 扫描用户自然语言猜 workflow。
 5. **Node 是唯一 Agent Runtime；Expert 是产品路由实体** — 已绑定的 Node 候选 **始终**带内置 **`default`（工作台助手）**；商业/专项能力以 **专家包** 形式 install；平台 **offers** 许可/计费；**专家管理** 创建可 `@` 的专家实例并绑定 Node。见 `docs/specs/expert-offers.md`。  
-   **Model B：** 所有 pack 共享 **platform citizen** 读台账能力 + Scope/资产规则（如 `node4/src/roles/platform-citizen.ts`）；专家再叠加 act 工具与方法论。主机创建仍仅用户授权边界（开测 Authorize / next-scope / 资产页）。
+   **Model B：** 所有 pack 共享 **platform citizen** 读台账能力 + Scope/资产规则（如 `node4/src/roles/platform-citizen.ts`）；专家再叠加 act 工具与方法论。主机创建仍仅用户授权边界（开测 Authorize / next-scope / 资产页）。Hard Graph 阶段工具面是 pack `graphs/hard/*.json` 的 `tools.allow`（渗透图各阶段含库存只读 `platform_list_assets` / `get_asset` / `list_groups`）；Node 只按该清单过滤。
 6. **单路径协作** — 用户消息经平台鉴权/落库后转发到所选 Node 参与者；台账读写由 Node 调**平台数据 Tools**完成，避免后端 Agent 与 Node 双脑来回路由。
 7. **无靶场答案键** — 不以 DVWA/Juice/CTF flag 列表驱动 runtime 或 prompt。
 8. **远程热装 marketplace** — 非本阶段目标。
@@ -60,14 +60,14 @@
 **P0**
 
 - 登录与会话：列表、新建、切换、基本管理；新建默认标题「新会话」。
-- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题 + 任务信封里已有结构化 target / scope 时，**当前 Main**（Default 或 Expert Free）在 Task 层经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；无 target 的寒暄/台账闲聊不改名；用户手动改名后不被自动覆盖。不另开命名 Session。Graph 阶段 / Package worker 不起名。
+- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题 + 任务信封里已有用户授权的结构化 `scope.allow`（或兼容遗留 `target`）时，**当前 Main**（Default 或 Expert Free）在 Task 层经 `platform_set_conversation_title(only_if_default=true)` 起短标题（侧栏/顶栏即时更新）；台账闲聊/无授权 Host 不改名；用户手动改名后不被自动覆盖。不另开命名 Session。Graph 阶段 / Package worker 不起名。平台**不**从用户正文正则抠 URL 当命名条件。
 - 对话页：消息流、工具/状态/漏洞等卡片、working 态；底部统一输入框（多行正文 + **参与者**（工作台助手 `default` / 专家）+ Graph 不指定-or-declared + 发送/中止），支持 `@专家` 与工具栏选专家。**无「平台 Agent」会话人格。**
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情。
-  - **资产所有权（Scope 模型）：** 正式主机行写入仅在 **用户动作** 下发生——资产页人工录入/导入、**开测授权**（主目标不在表时默认登记）、**下一轮 Scope 勾选**、或从右侧 **Surface / 资产** 路径 **promote**。**Agent 不得静默新建资产行**（测中旁路只进 Case 攻击面候选或 Workset，不写正式 Host）。
-  - **Case Surface vs 资产台账：** 右侧 **Surface** tab 的 SoT 是 Case `surface_ledger`（Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)）——**本轮**覆盖。长期资产是 Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) / [`specs/owner-ledger.md`](specs/owner-ledger.md)：**Group × Host × Service 组装**（同一 Host 可进多组、各组口子集不同；别名在 Host 上；vhost 分 Host）。对象冲突以 #368 为准。**#322 Cluster/分身 已退役**，不要再实现。
-  - **Agent 可维护的附属信息：** 对已存在 Host 合并端口、指纹、URL；不得静默建 Host / 建 Group / 写组装。booking 尽量把 finding 挂到 Scope 主 host（path-only location 回退 task target）；未知主机的 finding 允许暂时 `asset_id` 为空，promote 后可回填。
+  - **资产所有权（Scope 模型）：** 正式主机行写入仅在 **用户动作** 下发生——资产页人工录入/导入、**开测授权**（主目标不在表时默认登记）、**下一轮 Scope 勾选**、或从右侧 **Surface / 资产** 路径 **promote**。**Agent 不得静默新建资产行**（测中旁路只进 Case 攻击面候选或 Workset，不写正式 Host）。按地址/别名查找：1 个 Host id 才能认；**2+ 歧义必须 `request_user_decision`（禁止 first-match）**。对上 Group 后 Host 集合不清同样问卡；用户允了的 Host **id** 才是本 Case Scope（装入组不自动扩 Scope）。Harness 按这些 Host 投影线索 / `intel_summary`；Agent **继续用户原任务**（不是硬编码端口扫描），情报只读注入窗口 / `fact`，不抄成 Case 私货。
+  - **Case Surface vs 资产台账：** 右侧 **Surface** tab 的 SoT 是 Case `surface_ledger`（Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)）——**本轮**覆盖。长期资产是 Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) / [`specs/owner-ledger.md`](specs/owner-ledger.md)：**Group × Host × Service 组装**（同一 Host 可进多组、各组口子集不同；别名在 Host 上，详情编辑 `aliases[]`；**备注不是身份**；vhost 分 Host）。对象冲突以 #368 为准。**#322 Cluster/分身 已退役**，不要再实现。
+  - **Agent 可维护的附属信息：** 对已存在 Host 合并端口、指纹、URL；不得静默建 Host / 建 Group / 写组装。booking 尽量把 finding 挂到 Scope 主 host（path-only location 回退 `scope.allow`）；未知主机的 finding 允许暂时 `asset_id` 为空，promote 后可回填。
   - **下一轮 Scope：** 任务结束后若有 out-of-scope 候选 host，UI 多选 → 新任务（新 `scope.allow`），不是同一 work-burst 无限续跑。
 - **会话工作态（Send / 中断）：** 以 Node 侧 work-burst（`busy` / `work_status`）为真相源；平台维护会话 `workers` 并广播 `conversation_working`。当前会话只要有专家在工作，UI 显示中断；中断会扇出到该会话全部在线专家运行时。
 - **Session-first 对话路径（Spec [#455](https://github.com/zangjiaao/my-ai-pen/issues/455)）：** 用户与 Participant Session 对话；失败/暂停后的「继续」turn 正文 = 用户原话（或 ChoiceCard 确认文案），target/scope/RoE 走 sticky 结构化字段，**不**把旧 instruction 拼成 engagement book。Task package 仅调度/计时/灯（可 mint 新 `task_id`）；park-hit 只 `prompt(用户原话)`。见 `docs/specs/session-dialogue-path.md`。
@@ -101,7 +101,7 @@
 - Standalone CLI 便于 lab 调试（`node4` standalone）。
 - **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
 - 工具与循环语义遵循 `docs/specs/harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；Worker 另有 **yield** 回传，Main 登记；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
-- **Pentest Default free / Expert Graph：** 无 Graph 模板时为 free OMP；显式 `app_assessment`（产品 Expert Graph）走 Hard Graph runner（阶段 + fail-closed Feedback）。Soft 场景图产品模式已退役（#68 / #76）。见 `docs/specs/task-graph.md`。Case PDCA 终态（[#519](https://github.com/zangjiaao/my-ai-pen/issues/519)）由 host `settleParticipantTurn` 否决假完成；产品默认关，打开 `NODE4_PDCA_SETTLE=1`。
+- **Pentest Default free / Expert Graph：** 无 Graph 模板时为 free OMP；显式 `app_assessment`（产品 Expert Graph）走 Hard Graph runner（阶段 + fail-closed L0；L1 与是否打开**当前这一跳**的下一阶段由独立 Feedback Agent 判断（整张 Graph 一个实例），禁止扫用户原文关键词，缺票默认继续，后段 pause 不得用在前一边界）。Soft 场景图产品模式已退役（#68 / #76）。见 `docs/specs/task-graph.md`。Case PDCA 终态（[#519](https://github.com/zangjiaao/my-ai-pen/issues/519)）由 host `settleParticipantTurn` 否决假完成；产品默认关，打开 `NODE4_PDCA_SETTLE=1`。身份/授权/Scope 不足时由 Agent 走 `request_user_decision`（非平台关键词路由）；Graph 阶段复用同一 Case live overlay（harness，非 Profession）。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
 - **Case 共享 evidence**：`task_assign.case_context` 含 findings + `evidence_snippets`（path/excerpt），供多专家接力（如 pentest 源码泄露 → code-audit）；实现见绑定候选的 booking / harness。
 

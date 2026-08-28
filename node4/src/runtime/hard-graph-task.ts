@@ -3,8 +3,9 @@
  * Main OMP loop is not the stage scheduler. Outer continues do not apply.
  */
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { writeFileInsideRoot } from "./session-workspace.js";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
@@ -19,6 +20,7 @@ import {
   type StageExecutor,
 } from "./hard-graph-runner.js";
 import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
+import { disposeGraphFeedbackHandle } from "./hard-graph-feedback-agent.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
 import {
   pdcaSettleEnabled,
@@ -49,6 +51,7 @@ import {
   type HypothesisSeedGist,
 } from "./hypothesis-store.js";
 import { isLlmTurnError } from "./llm-turn-error.js";
+import { buildStageAdvanceDecisionPayload } from "./stage-advance-feedback.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -105,37 +108,9 @@ function workModeForEvent(event: HardGraphStageEvent): string {
   return `hard_graph:${event.graphId}:terminal:${event.terminal}`;
 }
 
-function hardGraphPayload(event: HardGraphStageEvent): Record<string, unknown> {
-  if (event.type === "stage_start") {
-    return {
-      graph_id: event.graphId,
-      stage_id: event.stageId,
-      stage_index: event.stageIndex,
-      attempt: event.attempt,
-      event: "stage_start",
-    };
-  }
-  if (event.type === "stage_end") {
-    return {
-      graph_id: event.graphId,
-      stage_id: event.stageId,
-      stage_index: event.stageIndex,
-      attempt: event.attempt,
-      event: "stage_end",
-      outcome: event.outcome,
-      errors: event.errors,
-      summary: event.summary,
-    };
-  }
-  return {
-    graph_id: event.graphId,
-    event: "run_end",
-    terminal: event.terminal,
-  };
-}
-
 /**
- * Emit stage identity on existing status_update / work_mode channels.
+ * Stage boundaries: plan_tree (Tasks) + work_status (busy). Not status_update —
+ * that channel is ephemeral harness, not a Graph ledger.
  */
 export async function emitHardGraphStageStatus(options: {
   platform: PlatformSink;
@@ -147,9 +122,8 @@ export async function emitHardGraphStageStatus(options: {
   /** Spec #321: Task Map history — stage boundaries mutate live only (E5). */
   taskMap?: import("../stores/task-map.js").TaskMapHistory;
 }): Promise<void> {
-  const { platform, task, event, startedAt, plan, taskMap } = options;
+  const { platform, task, event, plan, taskMap } = options;
   const work_mode = workModeForEvent(event);
-  const hard_graph = hardGraphPayload(event);
   const mapOpts = taskMap ? { taskMap } : undefined;
 
   if (event.type === "stage_start") {
@@ -163,18 +137,6 @@ export async function emitHardGraphStageStatus(options: {
         mapOpts,
       );
     }
-    const statusMsg: PlatformMessage = {
-      type: "status_update",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      message: `hard_graph stage_start graph=${event.graphId} stage=${event.stageId} attempt=${event.attempt}`,
-      agent_phase: "hard_graph",
-      status: "running",
-      work_mode,
-      hard_graph,
-      started_at: startedAt,
-    };
-    await platform.send(statusMsg);
     const workMsg: PlatformMessage = {
       type: "work_status",
       conversation_id: task.conversationId,
@@ -210,39 +172,30 @@ export async function emitHardGraphStageStatus(options: {
         );
       }
     }
-    const statusMsg: PlatformMessage = {
-      type: "status_update",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      message: `hard_graph stage_end graph=${event.graphId} stage=${event.stageId} outcome=${event.outcome}`,
-      agent_phase: "hard_graph",
-      status: "running",
-      work_mode,
-      hard_graph,
-      started_at: startedAt,
-    };
-    await platform.send(statusMsg);
     return;
   }
+}
 
-  const statusMsg: PlatformMessage = {
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: `hard_graph run_end graph=${event.graphId} terminal=${event.terminal}`,
-    agent_phase: "hard_graph",
-    // Align with harness vocabulary (not "failed" — platform maps that poorly).
-    status:
-      event.terminal === "completed"
-        ? "completed"
-        : event.terminal === "aborted"
-          ? "incomplete"
-          : "blocked",
-    work_mode,
-    hard_graph,
-    started_at: startedAt,
-  };
-  await platform.send(statusMsg);
+/** Spec #282: after Feedback pause, resume Hard at the next declared stage id. */
+async function resolvePausedStartStage(
+  caseDir: string,
+  task: TaskEnvelope,
+): Promise<string | undefined> {
+  if (task.graphExecution !== "resume") return undefined;
+  try {
+    const raw = await readFile(join(caseDir, "hard-graph", "run-result.json"), "utf8");
+    const saved = JSON.parse(raw) as {
+      terminal?: string;
+      advance?: { decision?: string; nextStageId?: string };
+    };
+    if (saved.terminal === "paused" && saved.advance?.decision === "pause") {
+      const next = String(saved.advance.nextStageId || "").trim();
+      return next || undefined;
+    }
+  } catch {
+    /* no prior run-result */
+  }
+  return undefined;
 }
 
 /**
@@ -351,21 +304,6 @@ export async function runHardGraphExpertTask(options: {
     ...(task.sessionContinue ? { session_continue: true as const } : {}),
   } as PlatformMessage);
 
-  const startMsg: PlatformMessage = {
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: `hard_graph start graph=${graph.id} stages=${graph.stages.map((s) => s.id).join(",")}`,
-    agent_phase: "hard_graph",
-    status: "running",
-    work_mode: `hard_graph:${graph.id}`,
-    hard_graph: { graph_id: graph.id, event: "run_start", stages: graph.stages.map((s) => s.id) },
-    started_at: startedAt,
-    graph_id: graph.id,
-    graph_label: graph.label,
-  };
-  await platform.send(startMsg);
-
   const workStart: PlatformMessage = {
     type: "work_status",
     conversation_id: task.conversationId,
@@ -382,6 +320,7 @@ export async function runHardGraphExpertTask(options: {
   });
 
   const availableTools = toolNamesForPack(pack);
+  const startStageId = await resolvePausedStartStage(caseDir, task);
   const executeStage =
     options.stageExecutor ??
     createHardGraphStageExecutor({
@@ -398,6 +337,8 @@ export async function runHardGraphExpertTask(options: {
       executeStage,
       availableTools,
       abortSignal: signal,
+      instruction: task.instruction,
+      ...(startStageId ? { startStageId } : {}),
       l1Budget: {
         getRefineCount: (stageId) => graphQuality.l1ByStage[stageId]?.refine_n || 0,
         recordRefine: (stageId, gaps) => {
@@ -450,9 +391,30 @@ export async function runHardGraphExpertTask(options: {
           work_mode: `hard_graph:${graph.id}:terminal:llm_error`,
         })
         .catch(() => {});
+      await disposeGraphFeedbackHandle(parentRuntime).catch(() => {});
       throw err;
     }
+    await disposeGraphFeedbackHandle(parentRuntime).catch(() => {});
     throw err;
+  }
+
+  if (
+    result.terminal === "paused" &&
+    result.advance?.decision === "pause" &&
+    result.advance.nextStageId
+  ) {
+    const card = buildStageAdvanceDecisionPayload({
+      conversationId: task.conversationId,
+      taskId: task.taskId,
+      graphId: graph.id,
+      stageId: result.advance.stageId,
+      nextStageId: result.advance.nextStageId,
+      captainSummary: result.advance.summary,
+      expertId: task.expertId,
+      expertName: task.expertName,
+      requestId: randomUUID(),
+    });
+    await platform.send(card as PlatformMessage);
   }
 
   await writeFileInsideRoot(
@@ -507,7 +469,11 @@ export async function runHardGraphExpertTask(options: {
   }
 
   panel.setMainTerminal(
-    result.terminal === "completed" ? "completed" : result.terminal === "aborted" ? "aborted" : "failed",
+    result.terminal === "completed"
+      ? "completed"
+      : result.terminal === "aborted" || result.terminal === "paused"
+        ? "aborted"
+        : "failed",
   );
   const llmUsage = runUsage.snapshot({
     agent_count: panel.list().length,
@@ -600,6 +566,8 @@ export async function runHardGraphExpertTask(options: {
     work_mode: settled.workMode,
   };
   await platform.send(workEnd);
+
+  await disposeGraphFeedbackHandle(parentRuntime).catch(() => {});
 
   return {
     harnessStatus: settled.harnessStatus,

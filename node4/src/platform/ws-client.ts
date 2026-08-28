@@ -9,7 +9,6 @@ const RELIABLE_TYPES = new Set([
   "text",
   "thinking",
   "tool_output",
-  "status_update",
   "vuln_found",
   "evidence_created",
   "traffic_exchange",

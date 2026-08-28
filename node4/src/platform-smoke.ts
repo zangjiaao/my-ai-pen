@@ -50,7 +50,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
   const target =
     targetRaw && typeof targetRaw === "object" && !Array.isArray(targetRaw)
       ? (targetRaw as Record<string, unknown>)
-      : { type: "url", value: String(message.target || "") };
+      : {};
   const scopeRaw = message.scope;
   const scope =
     scopeRaw && typeof scopeRaw === "object" && !Array.isArray(scopeRaw)

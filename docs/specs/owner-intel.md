@@ -168,7 +168,7 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 ## 9. Inject
 
 - Cold `task_assign` / compact checkpoint: `intel_summary` = **Scope ∩ living**, then an **Agent window** of **N=50** (override `MYAIPEN_INTEL_INJECT_WINDOW`, clamp 1–200). Forgotten **excluded**. Operator 线索 is **not** windowed.  
-- Hang filter (inject and Case 线索 share it): **Host-level** (no port) **+ Scope Service ports** from structured `target` / `scope.allow` (explicit `:port` or `port` field — no invented 80/443). If Scope names a Host with **no** port, that Host is whole-Host (all Service intel). `fact(list)` / asset 情报 tabs are **not** this filter — Agent can still open a sibling-port id.  
+- Hang filter (inject and Case 线索 share it): Case Host membership = **authorized Scope** (`scope.asset_ids` or unique primary∪alias match on `scope.allow`) **or** a this-Case Surface origin that **uniquely** matches an owner Host. Ambiguous identity (2+ Hosts) does not join. Then **Host-level** (no port) **+ Scope Service ports** from structured `target` / `scope.allow` (explicit `:port` or `port` field — no invented 80/443; allow=`localhost:3000` maps onto the owner Host that has alias `localhost`). If Scope names a Host with **no** port, that Host is whole-Host (all Service intel). `fact(list)` / asset 情报 tabs are **not** this filter — Agent can still open a sibling-port id. Agent must not copy intel into Case-private rows; hang on the Host via `fact`.  
 - Window is **Scope-local**, never a global popularity contest across other Hosts.  
 - **Lane A (always, newest first if over cap):** this-Case new/used + login kinds (`credential_status` / `secret` / `token` / `account`).  
 - **Lane B:** remaining by `access_count` desc, then `updated_at`. Fill until N.  
@@ -206,3 +206,4 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 | 2026-08-15 | Intel ≠ Evidence: Evidence supports Findings only; Intel is in-test operational notes. No restating booked proof into the notebook. |
 | 2026-08-17 | Unused-fold / 遗忘区 retired. Agent inject = two-lane window (this-Case + login, then frequency, N=50). Operator 线索 = full Scope list, same sort. |
 | 2026-08-17 | New + pin = this Case (`created_conversation_id`), not only current Task package. Snapshot stamps `is_new` with Case id. |
+| 2026-08-28 | Case Host membership for 线索/inject: authorized Scope ids or unique identity/Surface-origin match; aliases count; Agent does not copy intel into Case-private rows. |
