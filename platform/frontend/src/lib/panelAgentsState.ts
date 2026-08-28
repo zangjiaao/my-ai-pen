@@ -203,12 +203,61 @@ function isChildOfRoot(agent: StrixAgentStatus, rootId: string): boolean {
   return agent.parent_id === rootId || String(agent.parent_id || "") === rootId;
 }
 
-/**
- * Merge a live single-burst panel_agents payload into an existing Case roster.
- *
- * Invariant: Subagent children under the active root are upserted by id and never
- * dropped when a new burst sends main-only. Terminal settle is backend-only.
- */
+/** In-agent / hop-in-flight statuses that must pulse blue, not idle green. */
+export function isInFlightPanelStatus(status: string | undefined | null): boolean {
+  const s = String(status || "")
+    .trim()
+    .toLowerCase();
+  return (
+    s === "running" ||
+    s === "tool_running" ||
+    s === "llm_waiting" ||
+    s === "llm_stalled" ||
+    s === "working" ||
+    s === "chat" ||
+    s === "starting"
+  );
+}
+
+function isSettledPanelStatus(status: string | undefined | null): boolean {
+  const s = String(status || "")
+    .trim()
+    .toLowerCase();
+  return s === "completed" || s === "done" || s === "finished" || s === "success" || s === "idle" || !s;
+}
+
+/** Match live `role-…-feedback` against a snapshot row still keyed `feedback`. */
+function findPriorPanelChild(
+  prev: StrixAgentStatus[],
+  row: StrixAgentStatus,
+): StrixAgentStatus | null {
+  const id = String(row.id || "").trim();
+  if (!id) return null;
+  const direct = prev.find((a) => a.parent_id && a.id === id);
+  if (direct) return direct;
+  const suffixed = prev.find(
+    (a) =>
+      Boolean(a.parent_id) &&
+      (a.id.endsWith(`-${id}`) || id.endsWith(`-${a.id}`)),
+  );
+  if (suffixed) return suffixed;
+  const name = String(row.name || "")
+    .trim()
+    .toLowerCase();
+  if (name === "feedback") {
+    return (
+      prev.find(
+        (a) =>
+          Boolean(a.parent_id) &&
+          String(a.name || "")
+            .trim()
+            .toLowerCase() === "feedback",
+      ) || null
+    );
+  }
+  return null;
+}
+
 /**
  * Snapshot replace for collab tree: keep Session harness fields (work_mode / graph_* /
  * session_id) when the snapshot row is thinner than the live row.
@@ -233,10 +282,20 @@ export function mergeSnapshotAgentsPreserveHarness(
   const sidOk = (s: string) =>
     Boolean(s) && !s.startsWith("expert:") && !s.startsWith("pack:");
   return next.map((row) => {
-    const prior =
-      prevByKey.get(String(row.expert_id || "").trim()) ||
-      prevByKey.get(row.id) ||
-      null;
+    const prior = row.parent_id
+      ? findPriorPanelChild(prev, row)
+      : prevByKey.get(String(row.expert_id || "").trim()) ||
+        prevByKey.get(row.id) ||
+        null;
+    // 2s snapshot poll must not paint Feedback/Worker green while a live hop is running.
+    if (row.parent_id && prior && isInFlightPanelStatus(prior.status) && isSettledPanelStatus(row.status)) {
+      return {
+        ...row,
+        status: prior.status,
+        current_action: prior.current_action || row.current_action,
+        current_detail: prior.current_detail || row.current_detail,
+      };
+    }
     if (!prior || row.parent_id) return row;
     const liveWm = String(row.work_mode || "").trim();
     const priorWm = String(prior.work_mode || "").trim();
@@ -275,6 +334,12 @@ export function mergeSnapshotAgentsPreserveHarness(
   });
 }
 
+/**
+ * Merge a live single-burst panel_agents payload into an existing Case roster.
+ *
+ * Invariant: Subagent children under the active root are upserted by id and never
+ * dropped when a new burst sends main-only. Terminal settle is backend-only.
+ */
 export function mergeLivePanelAgents(
   prev: StrixAgentStatus[],
   panel: StrixAgentStatus[],

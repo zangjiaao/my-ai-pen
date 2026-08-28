@@ -886,6 +886,9 @@ export function createHardGraphStageExecutor(options: {
         rolePackId: pack.id,
         counters: obsCounters,
       };
+      // Flush before createBoundNode4Session: hop-done → next captain boot can take
+      // seconds; collab tree must not sit on the previous Feedback completed row.
+      await emitCheckpointUpdate(obsCtx).catch(() => {});
 
       const boundOpts = {
         config,

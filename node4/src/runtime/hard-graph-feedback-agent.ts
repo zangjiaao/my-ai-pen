@@ -250,6 +250,33 @@ async function emitFeedbackPanelSnapshot(
     .catch(() => {});
 }
 
+/**
+ * Main-chat hop chrome only — no process/details (those stay on worker_audit).
+ * Operator sees a ToolCallCard instead of a stuck 「工作中...」.
+ */
+async function emitFeedbackHopCard(
+  runtime: ToolRuntime,
+  input: { hop: string; toolRunId: string; status: "running" | "done" | "error"; summary?: string },
+): Promise<void> {
+  const task = runtime.task;
+  if (!task?.conversationId || !task.taskId) return;
+  const title = `评审 ${input.hop}`;
+  await runtime.platform
+    .send({
+      type: "tool_output",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      expert_id: task.expertId,
+      expert_name: task.expertName,
+      tool_name: "graph_feedback",
+      display_title: title,
+      tool_run_id: input.toolRunId,
+      status: input.status,
+      summary: input.summary || title,
+    })
+    .catch(() => {});
+}
+
 /** Graph terminal / error: drop the run-wide Feedback Agent. */
 export async function disposeGraphFeedbackHandle(runtime: ToolRuntime): Promise<void> {
   const run = runtime.lifecycle.hardGraphRun;
@@ -361,7 +388,14 @@ export async function runHardGraphFeedbackAgent(
     phase: "llm_waiting",
     detail: `Feedback 评审 ${hop}`,
   });
+  const hopCardId = `feedback-hop-${stage.id}-${Date.now().toString(36)}`;
   await emitFeedbackPanelSnapshot(parentRuntime, panel);
+  await emitFeedbackHopCard(parentRuntime, {
+    hop,
+    toolRunId: hopCardId,
+    status: "running",
+    summary: `评审 ${hop}`,
+  });
 
   let workerProcess: { dispose: () => void } | undefined;
   let usage: { dispose: () => void } | undefined;
@@ -442,11 +476,23 @@ export async function runHardGraphFeedbackAgent(
       summary: parsed.decision,
     });
     await emitFeedbackPanelSnapshot(parentRuntime, panel);
+    await emitFeedbackHopCard(parentRuntime, {
+      hop,
+      toolRunId: hopCardId,
+      status: "done",
+      summary: `评审 ${hop}`,
+    });
     return parsed;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     panel?.noteSubagentEnd({ id: agentId, ok: false, summary: msg.slice(0, 160) });
     await emitFeedbackPanelSnapshot(parentRuntime, panel);
+    await emitFeedbackHopCard(parentRuntime, {
+      hop,
+      toolRunId: hopCardId,
+      status: "error",
+      summary: msg.slice(0, 120),
+    });
     return failClosed(msg);
   } finally {
     try {

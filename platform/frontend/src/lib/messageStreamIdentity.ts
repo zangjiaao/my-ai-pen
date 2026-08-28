@@ -183,6 +183,18 @@ export function listTailWorkingVisible(input: {
   return false;
 }
 
+/**
+ * Stage-start work_mode is `hard_graph:${graphId}:${stageId}`.
+ * Stage-end / terminal use extra segments — those must not become pending copy.
+ */
+export function pendingLabelFromHardGraphWorkMode(workMode: string): string | undefined {
+  const parts = String(workMode || "").split(":");
+  if (parts[0] !== "hard_graph" || parts.length !== 3) return undefined;
+  const stageId = String(parts[2] || "").trim();
+  if (!stageId || stageId === "terminal") return undefined;
+  return `进入 ${stageId}`;
+}
+
 /** @deprecated use listTailWorkingVisible — kept for older tests/imports */
 export function pendingChromeVisible(
   pending: PendingChrome,

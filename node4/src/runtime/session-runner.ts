@@ -27,6 +27,7 @@ import {
   emptyOverlay,
   formatLiveStateHarness,
   lastDeltaFromRuntime,
+  isTerminalPdcaVerdict,
   mapPdcaVerdictToHarnessStatus,
   pdcaSettleEnabled,
   persistPdcaOnRuntime,
@@ -895,8 +896,9 @@ export async function runNode4Task(
     const handedOff = stopReason === "handed_off";
     // Chat-only (no target yet) still settles: HITL Stop on a card must reach paused, not skip PDCA.
     // Ledger-assist seats stay out (greeting / workspace chat).
+    // In-loop already landed blocked/completed/paused: do not re-settle (529B: post-loop used to flip blocked → replan).
     const pdcaOn = pdcaSettleEnabled() && !ledgerAssistSeat;
-    if (pdcaOn) {
+    if (pdcaOn && !isTerminalPdcaVerdict(pdcaLastSettlement?.verdict)) {
       try {
         const overlayNow = await projectOverlayFromRuntime(runtime);
         pdcaLastSettlement = settleParticipantTurn({

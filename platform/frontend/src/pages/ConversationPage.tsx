@@ -94,6 +94,7 @@ import {
   mergeMessagesWithLiveStreams,
   messageListKey,
   pendingChromeSpeakerContent,
+  pendingLabelFromHardGraphWorkMode,
   pruneLiveCatchUp,
   reducePendingChrome,
   listTailWorkingVisible,
@@ -1131,6 +1132,14 @@ export default function ConversationPage() {
     if (working) {
       launchOptimisticRef.current = false;
       setInterrupting(Boolean(interruptingFlag));
+      const stageLabel = pendingLabelFromHardGraphWorkMode(String(msg.work_mode || ""));
+      if (stageLabel) {
+        setPendingChrome((cur) => {
+          if (cur && cur.conversationId === convId) return { ...cur, label: stageLabel };
+          if (!cur) return { conversationId: convId, label: stageLabel };
+          return cur;
+        });
+      }
     } else {
       launchOptimisticRef.current = false;
       // Turn idle: hide list-tail Working (whole-turn chrome ends with work, not first stream).
@@ -1326,6 +1335,19 @@ export default function ConversationPage() {
       // (tool_output does not clear chrome). Spec #308: Worker tools must not drive Main chrome.
       if (!workerScoped) {
         setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
+        const toolNameLive = String(m.tool_name || "").trim();
+        if (toolNameLive === "graph_feedback") {
+          const hopLabel = String(m.display_title || m.summary || "").trim();
+          const hopStatus = String(m.status || "").trim().toLowerCase();
+          if (hopLabel && hopStatus === "running") {
+            setPendingChrome((cur) => (
+              cur && cur.conversationId === convId ? { ...cur, label: hopLabel } : cur
+            ));
+          }
+          // Hop done/error: keep the hop label until stage_start work_status
+          // (`进入 ${stageId}`) or task_complete. Resetting to 「工作中...」 left
+          // a ticking empty timer while the next captain booted.
+        }
         markMessageAutoScroll();
       }
       const workerStamp: Record<string, unknown> = {};
@@ -1704,6 +1726,23 @@ export default function ConversationPage() {
         // Checkpoint without panel_agents still updates pi Session id on current Main.
         setStrixAgents((prev) => stampPiSessionId(prev));
       }
+      const feedbackHop = String(checkpoint.agent_phase || "").trim().toLowerCase() === "feedback";
+      if (feedbackHop) {
+        const panelRows = Array.isArray(checkpoint.panel_agents)
+          ? checkpoint.panel_agents.filter(isStrixAgentStatus)
+          : [];
+        const fb = panelRows.find((a) => {
+          const id = String(a.id || "").toLowerCase();
+          return id === "feedback" || id.endsWith("-feedback") || String(a.name || "").trim().toLowerCase() === "feedback";
+        });
+        const st = String(fb?.status || "").toLowerCase();
+        const hopLabel = String(fb?.current_detail || "").trim();
+        if (hopLabel && (st === "running" || st === "llm_waiting" || st === "tool_running" || st === "working")) {
+          setPendingChrome((cur) => (
+            cur && cur.conversationId === convId ? { ...cur, label: hopLabel } : cur
+          ));
+        }
+      }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);
         if (todoPlan.length) setPlanTree(todoPlan);
@@ -1748,7 +1787,11 @@ export default function ConversationPage() {
       // Spec #280 Wave1: do not merge Strix/checkpoint shadow vulnerabilities into Case Findings.
       // Ledger + vuln_found (post-persist) remain the only panel sources; chat cards still render.
       clearPendingAgentMessage(convId);
-      void refreshConversationState(convId);
+      // Feedback hop already applied live panel_agents; a 2s snapshot poll can
+      // still race, but skip this immediate refresh so the row is not painted green.
+      if (String(checkpoint.agent_phase || "").trim().toLowerCase() !== "feedback") {
+        void refreshConversationState(convId);
+      }
     },
     // Live Node2 worker lifecycle — do not wait for the next throttled checkpoint.
     worker_started: (msg) => {

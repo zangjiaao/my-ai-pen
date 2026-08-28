@@ -11,6 +11,7 @@ import {
   evaluateTerminalConsistency,
   formatLiveStateHarness,
   formatReplanPrompt,
+  isTerminalPdcaVerdict,
   mapPdcaVerdictToHarnessStatus,
   pdcaSettleEnabled,
   projectLiveStateOverlay,
@@ -285,6 +286,46 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(second.verdict, "blocked");
   assert.ok(second.unresolved.some((u) => u.id === "s1"));
   assert.equal(mapPdcaVerdictToHarnessStatus("blocked"), "blocked");
+  // Keep streak exhausted: a later empty continue must stay blocked, not look like a fresh budget.
+  assert.equal(second.nextNoProgressStreak, 2);
+  const third = settleParticipantTurn({
+    overlay: after,
+    previousOverlay: after,
+    noProgressStreak: second.nextNoProgressStreak,
+    maxNoProgress: 2,
+  });
+  assert.equal(third.verdict, "blocked");
+  assert.equal(third.reason, "no_progress_budget");
+  assert.equal(third.nextNoProgressStreak, 2);
+}
+
+// --- In-loop terminal PDCA must not be overwritten by a post-loop settle ---
+{
+  assert.equal(isTerminalPdcaVerdict("blocked"), true);
+  assert.equal(isTerminalPdcaVerdict("completed"), true);
+  assert.equal(isTerminalPdcaVerdict("paused"), true);
+  assert.equal(isTerminalPdcaVerdict("replan"), false);
+  assert.equal(isTerminalPdcaVerdict("incomplete"), false);
+  const overlaySame = projectLiveStateOverlay({
+    surfaces: [{ id: "s1", location: "http://t/login", status: "seen", coverage: "untested" }],
+  });
+  const inLoop = settleParticipantTurn({
+    overlay: overlaySame,
+    previousOverlay: overlaySame,
+    noProgressStreak: 1,
+    maxNoProgress: 2,
+  });
+  assert.equal(inLoop.verdict, "blocked");
+  // Session-runner used to reset streak to 0 on blocked, then post-loop settle
+  // (same overlay, streak 0) flipped the emit to replan / unresolved_state.
+  const clobberIfReset = settleParticipantTurn({
+    overlay: overlaySame,
+    previousOverlay: overlaySame,
+    noProgressStreak: 0,
+    maxNoProgress: 2,
+  });
+  assert.equal(clobberIfReset.verdict, "replan");
+  assert.equal(isTerminalPdcaVerdict(inLoop.verdict), true);
 }
 
 // --- Cold Free and parked continue share the same verdict for equivalent state ---

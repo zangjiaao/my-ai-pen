@@ -17,6 +17,11 @@ export const DEFAULT_PDCA_MAX_NO_PROGRESS = 2;
 
 export type PdcaVerdict = "replan" | "paused" | "completed" | "incomplete" | "blocked";
 
+/** In-loop PDCA already decided; post-loop must not re-settle these. */
+export function isTerminalPdcaVerdict(verdict: PdcaVerdict | undefined): boolean {
+  return verdict === "blocked" || verdict === "completed" || verdict === "paused";
+}
+
 export type PdcaIdentityKind =
   | "surface"
   | "hypothesis"
@@ -469,7 +474,9 @@ export function settleParticipantTurn(options: {
       ? hadDelta
         ? 0
         : Math.max(0, options.noProgressStreak ?? 0) + 1
-      : 0;
+      : result.verdict === "blocked"
+        ? maxNo
+        : 0;
   return {
     ...result,
     delta,

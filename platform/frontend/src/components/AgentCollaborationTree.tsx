@@ -14,7 +14,7 @@ import {
   compareAgentNames,
 } from "../lib/workerPresentation";
 import type { StrixAgentStatus } from "../lib/panelTypes";
-import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
+import { formatAgentWorkModeBadge, isInFlightPanelStatus } from "../lib/panelAgentsState";
 import { formatAgentUsageLine } from "../lib/caseMetering";
 import {
   packageStatusDotClass,
@@ -173,7 +173,11 @@ export function StrixAgentList({
               primary && isPackageExpert(agent, packageExpertId) ? packageStatus : undefined
             }
             packageWorking={
-              primary && isPackageExpert(agent, packageExpertId) ? packageWorking : undefined
+              primary && isPackageExpert(agent, packageExpertId)
+                ? packageWorking
+                : !primary && isInFlightPanelStatus(agent.status)
+                  ? true
+                  : undefined
             }
           />
         </div>
@@ -352,12 +356,15 @@ function AgentRow({
                 agentStatus: agent.status,
                 working: packageWorking,
               })
-            : resolvePackageLightStatus({ agentStatus: agent.status });
+            : resolvePackageLightStatus({
+                agentStatus: agent.status,
+                working: packageWorking,
+              });
           return (
             <span
               aria-hidden="true"
-              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${packageStatusDotClass(lightStatus, primary ? packageWorking : undefined)}`}
-              title={packageStatusTitle(lightStatus, primary ? packageWorking : undefined)}
+              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${packageStatusDotClass(lightStatus, packageWorking)}`}
+              title={packageStatusTitle(lightStatus, packageWorking)}
             />
           );
         })()}

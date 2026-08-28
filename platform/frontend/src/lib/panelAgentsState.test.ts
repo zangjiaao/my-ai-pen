@@ -340,4 +340,36 @@ const liveMainOnly: StrixAgentStatus[] = [
   console.log("ok: mergeAgentsKeepingReleased");
 }
 
+{
+  const liveFb: StrixAgentStatus = {
+    id: "role-expert:e2-feedback",
+    name: "Feedback",
+    status: "running",
+    parent_id: "role-expert:e2",
+    task: "评审 init → surface",
+    skills: ["feedback"],
+    pending_count: 0,
+    role: "subagent",
+    current_action: "running",
+    current_detail: "评审 init → surface",
+  };
+  const staleSnap: StrixAgentStatus[] = [
+    { ...main, status: "running" },
+    {
+      id: "feedback",
+      name: "Feedback",
+      status: "completed",
+      parent_id: "node4-main",
+      task: "评审 init → surface",
+      skills: ["feedback"],
+      pending_count: 0,
+      role: "subagent",
+    },
+  ];
+  const merged = mergeSnapshotAgentsPreserveHarness([main, liveFb], staleSnap);
+  const fb = merged.find((a) => String(a.name || "").toLowerCase() === "feedback");
+  assert(fb?.status === "running", "stale completed snapshot must not paint live Feedback green");
+  console.log("ok: mergeSnapshotAgentsPreserveHarness keeps live Feedback running");
+}
+
 console.log("panelAgentsState.test.ts: all passed");

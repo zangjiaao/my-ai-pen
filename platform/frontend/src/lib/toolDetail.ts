@@ -807,6 +807,7 @@ export function toolFamilyFromName(name: string): string {
   if (/captcha|验证码/.test(lower)) return "captcha";
   if (/request_user_decision|用户授权/.test(lower)) return "decision";
   if (/hypothesis/.test(lower)) return "hypothesis";
+  if (/graph_feedback|阶段评审/.test(lower)) return "feedback";
   return lower;
 }
 

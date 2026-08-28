@@ -124,6 +124,30 @@ export function clonePhases(phases: TodoPhase[]): TodoPhase[] {
   }));
 }
 
+/** Host-derived Free phase status from projected child statuses (incl. Worker plan_status). */
+export function deriveTodoPhasePlanStatus(
+  childStatuses: readonly string[],
+): "pending" | "running" | "done" | "skipped" | "failed" | "partial" {
+  if (!childStatuses.length) return "pending";
+  const norm = childStatuses.map((s) => String(s || "pending").trim().toLowerCase());
+  const terminal = (s: string) =>
+    s === "done" ||
+    s === "completed" ||
+    s === "skipped" ||
+    s === "abandoned" ||
+    s === "failed" ||
+    s === "blocked";
+  const running = (s: string) => s === "running" || s === "in_progress" || s === "active";
+  const allTerminal = norm.every(terminal);
+  if (allTerminal) {
+    if (norm.some((s) => s === "failed" || s === "blocked")) return "failed";
+    return "done";
+  }
+  if (norm.some(terminal)) return "partial";
+  if (norm.some(running)) return "running";
+  return "pending";
+}
+
 export function nextActionableTask(phases: readonly TodoPhase[]): TodoItem | undefined {
   let firstPending: TodoItem | undefined;
   for (const phase of phases) {
@@ -368,7 +392,7 @@ export class TodoStore {
   toPlanNodes(): Array<{
     node_id: string;
     title: string;
-    status: "pending" | "running" | "done" | "skipped" | "failed";
+    status: "pending" | "running" | "done" | "skipped" | "failed" | "partial";
     kind: string;
     level: "phase" | "work_item";
     parent_id?: string | null;
@@ -381,7 +405,7 @@ export class TodoStore {
     const nodes: Array<{
       node_id: string;
       title: string;
-      status: "pending" | "running" | "done" | "skipped" | "failed";
+      status: "pending" | "running" | "done" | "skipped" | "failed" | "partial";
       kind: string;
       level: "phase" | "work_item";
       parent_id?: string | null;
@@ -394,12 +418,15 @@ export class TodoStore {
     let phasePriority = 100;
     for (const phase of this.phases) {
       const phaseId = `todo-phase-${slug(phase.name)}`;
-      const phaseDone = phase.tasks.length > 0 && phase.tasks.every((t) => t.status === "completed" || t.status === "abandoned");
-      const phaseRunning = phase.tasks.some((t) => t.status === "in_progress");
+      const childStatuses = phase.tasks.map((task) => {
+        const node_id = todoTaskNodeId(phase.name, task.content);
+        const own = this.ownershipByNodeId.get(node_id);
+        return own?.plan_status ?? mapStatus(task.status);
+      });
       nodes.push({
         node_id: phaseId,
         title: phase.name,
-        status: phaseDone ? "done" : phaseRunning ? "running" : "pending",
+        status: deriveTodoPhasePlanStatus(childStatuses),
         // Phases are level=phase (not shown in Tasks list); keep plan-compatible source.
         kind: "phase",
         level: "phase",

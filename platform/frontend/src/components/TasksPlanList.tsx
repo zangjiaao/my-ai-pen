@@ -2,6 +2,11 @@ import { useState, type ReactNode } from "react";
 import { CheckCircle2, Circle, CircleDashed, XCircle } from "lucide-react";
 import { displayTodoTitle, resolveTasksAgentChip } from "../lib/workerPresentation";
 import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
+import {
+  deriveParentPlanStatus,
+  isGraphStagePlanNode,
+  type ParentPlanDisplayStatus,
+} from "../lib/planParentStatus";
 
 export type { PlanNode, PlanStatus } from "../lib/panelTypes";
 
@@ -64,10 +69,15 @@ export function GraphAwareTodoList({
       children.length > 0
         ? children.every((c) => isTerminalPlanStatus(c.status))
         : isTerminalPlanStatus(phase.status);
+    const displayStatus = deriveParentPlanStatus({
+      children,
+      ownStatus: phase.status,
+      graphStage: isGraphStagePlanNode(phase),
+    });
     const anyRunning =
-      String(phase.status || "").toLowerCase() === "running" ||
+      displayStatus === "running" ||
       children.some((c) => normalizeTodoStatus(c.status) === "running");
-    return { phase, id, children, allDone, anyRunning };
+    return { phase, id, children, allDone, anyRunning, displayStatus };
   });
 
   const isExpanded = (m: (typeof phaseMeta)[0]): boolean => {
@@ -81,8 +91,7 @@ export function GraphAwareTodoList({
   return (
     <div className="space-y-1" data-testid="graph-todo-list">
       {phaseMeta.map((m) => {
-        const { phase, id, children } = m;
-        const status = normalizeTodoStatus(phase.status);
+        const { phase, id, children, displayStatus } = m;
         const open = isExpanded(m);
         const doneN = children.filter((c) => isTerminalPlanStatus(c.status)).length;
         const title = String(phase.title || id.replace(/^graph-stage-/, "") || id);
@@ -90,7 +99,7 @@ export function GraphAwareTodoList({
           <div key={id} className="space-y-0" data-stage-id={id} data-expanded={open ? "true" : "false"}>
             {/* L1 uses the same row chrome as L2 (icon + title); click toggles expand without chevron chrome. */}
             <PlanRow
-              status={status}
+              status={displayStatus}
               title={title}
               meta={children.length ? `${doneN}/${children.length}` : undefined}
               interactive
@@ -150,7 +159,7 @@ export function GraphAwareTodoListSkeleton() {
 function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
   const order: string[] = [];
   const seen = new Set<string>();
-  const statusByStage = new Map<string, string>();
+  const kidsByStage = new Map<string, PlanNode[]>();
   for (const n of nodes) {
     const pid = String(n.parent_id || "").trim();
     if (!pid.startsWith("graph-stage-")) continue;
@@ -158,14 +167,7 @@ function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
       seen.add(pid);
       order.push(pid);
     }
-    const st = String(n.status || "pending").toLowerCase();
-    const prev = statusByStage.get(pid) || "pending";
-    // Prefer running > pending > done for header
-    if (st === "running" || (st === "pending" && prev === "done")) {
-      statusByStage.set(pid, st === "running" ? "running" : "pending");
-    } else if (!statusByStage.has(pid)) {
-      statusByStage.set(pid, st === "done" || st === "completed" ? "done" : st || "pending");
-    }
+    kidsByStage.set(pid, [...(kidsByStage.get(pid) || []), n]);
   }
   return order.map((id, i) => ({
     node_id: id,
@@ -175,7 +177,9 @@ function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
     kind: "phase",
     source: "plan",
     parent_id: null,
-    status: statusByStage.get(id) || "pending",
+    status: deriveParentPlanStatus({
+      children: kidsByStage.get(id) || [],
+    }),
     priority: (i + 1) * 100,
   }));
 }
@@ -243,7 +247,7 @@ function PlanRow({
   ariaExpanded,
   onClick,
 }: {
-  status: ReturnType<typeof normalizeTodoStatus>;
+  status: ParentPlanDisplayStatus | ReturnType<typeof normalizeTodoStatus>;
   title: string;
   meta?: string;
   badges?: ReactNode;
@@ -393,22 +397,34 @@ function normalizeTodoStatus(status: PlanStatus | undefined): "running" | "done"
   return "pending";
 }
 
-function todoStatusIcon(status: ReturnType<typeof normalizeTodoStatus>) {
+function todoStatusIcon(status: ParentPlanDisplayStatus | ReturnType<typeof normalizeTodoStatus>) {
   if (status === "done") return CheckCircle2;
+  if (status === "partial") return CircleHalf;
   if (status === "running") return CircleDashed;
   if (status === "failed" || status === "blocked") return XCircle;
   return Circle;
 }
 
-function todoStatusIconClass(status: ReturnType<typeof normalizeTodoStatus>): string {
+function CircleHalf({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="2" />
+      <path d="M12 4a8 8 0 0 0 0 16Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function todoStatusIconClass(
+  status: ParentPlanDisplayStatus | ReturnType<typeof normalizeTodoStatus>,
+): string {
   if (status === "running") return "text-status-running";
-  if (status === "done") return "text-status-success";
+  if (status === "done" || status === "partial") return "text-status-success";
   if (status === "failed" || status === "blocked") return "text-severity-critical";
   if (status === "skipped") return "text-ink-muted";
   return "text-[#d97706]";
 }
 
-function todoTitleClass(status: ReturnType<typeof normalizeTodoStatus>): string {
+function todoTitleClass(status: ParentPlanDisplayStatus | ReturnType<typeof normalizeTodoStatus>): string {
   if (status === "done" || status === "skipped") return "text-ink-muted";
   return "text-ink";
 }

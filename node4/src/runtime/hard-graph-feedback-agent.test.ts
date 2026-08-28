@@ -169,7 +169,13 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
 {
   const dir = await mkdtemp(join(tmpdir(), "fb-live-"));
   const panel = new PanelAgentTracker("Main", "Expert");
-  const sent: Array<{ type?: string; checkpoint?: { panel_agents?: Array<{ id?: string; status?: string; current_detail?: string }> } }> = [];
+  const sent: Array<{
+    type?: string;
+    tool_name?: string;
+    status?: string;
+    display_title?: string;
+    checkpoint?: { panel_agents?: Array<{ id?: string; status?: string; current_detail?: string }> };
+  }> = [];
   const parsed = await runHardGraphFeedbackAgent({
     config: {
       workspaceDir: dir,
@@ -236,6 +242,10 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
   assert.equal(fbAt(0)?.status, "running", "Feedback light is running while the hop is in flight");
   assert.match(String(fbAt(0)?.current_detail || ""), /init → surface/);
   assert.equal(fbAt(ckpts.length - 1)?.status, "completed");
+  const hopCards = sent.filter((m) => m.type === "tool_output" && m.tool_name === "graph_feedback");
+  assert.equal(hopCards[0]?.status, "running");
+  assert.match(String(hopCards[0]?.display_title || ""), /init → surface/);
+  assert.equal(hopCards[hopCards.length - 1]?.status, "done");
 }
 
 {

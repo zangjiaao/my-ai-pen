@@ -3,6 +3,7 @@ import {
   BookOpen,
   ChevronDown,
   CircleHelp,
+  ClipboardCheck,
   Compass,
   FileText,
   Globe2,
@@ -88,7 +89,10 @@ export function ToolCallCard({
   sessionActive?: boolean;
 }) {
   // Default open so operators see the invocation list immediately (like Thinking).
-  const [expanded, setExpanded] = useState(true);
+  // Graph Feedback hop chrome is title-only — keep the body collapsed (no process dump).
+  const [expanded, setExpanded] = useState(
+    () => String(content.tool_name || "").trim() !== "graph_feedback",
+  );
   const toolNames = toolNamesFromContent(content);
   const primaryTool = toolNames[0] || "tool";
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
@@ -747,6 +751,7 @@ function toolChromeCategory(
     decision: { key: "decision", label: "决策", Icon: CircleHelp },
     hypothesis: { key: "hypothesis", label: "假设", Icon: Lightbulb },
     platform: { key: "platform", label: "台账", Icon: Library },
+    feedback: { key: "feedback", label: "阶段评审", Icon: ClipboardCheck },
     tool: { key: "tool", label: "工具", Icon: Wrench },
   };
   return categories[family] || categories.tool;

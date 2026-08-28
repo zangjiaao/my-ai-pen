@@ -18,6 +18,7 @@ import {
   listTailWorkingVisible,
   pendingChromeSpeakerContent,
   pendingChromeVisible,
+  pendingLabelFromHardGraphWorkMode,
   pruneLiveCatchUp,
   reducePendingChrome,
   upsertLiveByStreamId,
@@ -622,6 +623,15 @@ import {
   assert.equal(messageListKey(like), "stream:n4-thinking-9");
   assert.ok(!like.id.startsWith("live-slot-"));
   console.log("ok: liveFrameToMessageLike uses stream identity");
+}
+
+{
+  assert.equal(pendingLabelFromHardGraphWorkMode("hard_graph:app_assessment:surface"), "进入 surface");
+  assert.equal(pendingLabelFromHardGraphWorkMode("hard_graph:app_assessment:init"), "进入 init");
+  assert.equal(pendingLabelFromHardGraphWorkMode("hard_graph:g:s1:passed"), undefined);
+  assert.equal(pendingLabelFromHardGraphWorkMode("hard_graph:g:terminal:paused"), undefined);
+  assert.equal(pendingLabelFromHardGraphWorkMode(""), undefined);
+  console.log("ok: pendingLabelFromHardGraphWorkMode");
 }
 
 function readSid(m: { content: Record<string, unknown> }): string {
