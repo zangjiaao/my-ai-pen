@@ -36,6 +36,12 @@ export type WorksetCandidate = {
   in_scope: boolean;
   source: string;
   suggested_expert?: string;
+  /** Spec #532 — passive exposure provenance (CT/DNS/Shodan-class). */
+  intel_source?: string;
+  attribution?: string;
+  confidence?: string;
+  scope_decision?: string;
+  passive?: boolean;
 };
 
 function hostFromLocation(raw: string): string {

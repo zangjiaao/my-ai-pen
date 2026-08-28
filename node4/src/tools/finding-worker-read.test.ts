@@ -29,6 +29,10 @@ assert.ok(SUBAGENT_CHILD_TOOL_NAMES.includes("platform_get_intel"));
 assert.ok(!(SUBAGENT_CHILD_TOOL_NAMES as readonly string[]).includes("platform_record_intel"));
 assert.ok(!(SUBAGENT_CHILD_TOOL_NAMES as readonly string[]).includes("platform_forget_intel"));
 assert.ok(!(SUBAGENT_CHILD_TOOL_NAMES as readonly string[]).includes("subagent"));
+assert.ok(
+  !(SUBAGENT_CHILD_TOOL_NAMES as readonly string[]).includes("workset"),
+  "Workers must not park Workset (Main only)",
+);
 
 const dir = await mkdtemp(join(tmpdir(), "finding-worker-read-"));
 const store = new FindingStore();

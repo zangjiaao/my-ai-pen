@@ -13,6 +13,7 @@ assert.equal(friendlyToolLabel(""), "工具");
 assert.equal(friendlyToolLabel("platform_list_assets"), "查询资产台账");
 assert.equal(friendlyToolLabel("platform_record_intel"), "记录线索");
 assert.equal(friendlyToolLabel("graph_feedback"), "阶段评审");
+assert.equal(friendlyToolLabel("workset"), "暴露面候选");
 assert.ok(friendlyToolLabel("platform_unknown_thing").startsWith("平台："));
 console.log("ok: friendlyToolLabel Chinese map");
 console.log("toolLabels.test.ts: all ok");

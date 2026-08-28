@@ -105,4 +105,26 @@ assert.equal(
   "single-char path non-executable",
 );
 
+// Spec #532: filter keeps passive provenance fields (does not strip them).
+{
+  const kept = filterEmitableWorksetCandidates([
+    {
+      family: "t_host",
+      title: "cdn.example.com",
+      host: "cdn.example.com",
+      in_scope: false,
+      source: "workset_propose",
+      intel_source: "ct",
+      attribution: "crt.sh SAN",
+      confidence: "medium",
+      scope_decision: "pending",
+      passive: true,
+    },
+  ]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]!.intel_source, "ct");
+  assert.equal(kept[0]!.attribution, "crt.sh SAN");
+  assert.equal(kept[0]!.passive, true);
+}
+
 console.log("workset-emit.test.ts: ok");

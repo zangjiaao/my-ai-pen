@@ -308,6 +308,8 @@ export type ToolRuntime = {
       entity_id: string;
       summary: string;
     }>;
+    /** Spec #532: this-run Workset propose stash (settle also re-emits). */
+    worksetProposed?: import("./runtime/workset-emit.js").WorksetCandidate[];
   };
 };
 

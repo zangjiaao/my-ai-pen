@@ -19,6 +19,7 @@ const TOOL_LABEL_ZH: Record<string, string> = {
   platform_create_report: "生成交付报告",
   request_user_decision: "请求用户授权",
   graph_feedback: "阶段评审",
+  workset: "暴露面候选",
   shell: "执行命令",
   exec_command: "执行命令",
   write_stdin: "命令输入",

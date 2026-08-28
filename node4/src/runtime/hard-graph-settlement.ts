@@ -53,6 +53,8 @@ export async function settleHardGraphTask(options: {
   goalObjective?: string;
   /** Spec #519: optional live overlay — Graph may not complete while base honesty is dirty. */
   overlay?: LiveStateOverlay;
+  /** Spec #532: this-run workset(propose) stash. */
+  extraWorksetCandidates?: WorksetCandidate[];
 }): Promise<HardGraphSettlementResult> {
   let harnessStatus = hardGraphToHarnessStatus(options.terminal);
   if (options.overlay) {
@@ -61,14 +63,15 @@ export async function settleHardGraphTask(options: {
   const workMode = `hard_graph:${options.graphId}:terminal:${options.terminal}`;
   const endTime = new Date().toISOString();
 
-  const worksetCandidates = filterEmitableWorksetCandidates(
-    worksetCandidatesFromHardSettle({
+  const worksetCandidates = filterEmitableWorksetCandidates([
+    ...worksetCandidatesFromHardSettle({
       task: options.task,
       openSurfaces: options.openSurfaces,
       locationStrings: options.locationStrings,
       source: "hard_settle",
     }),
-  );
+    ...(options.extraWorksetCandidates || []),
+  ]);
 
   // Legacy next_scope shape for OOS hosts (platform still migrates into Workset).
   const nextScopeCandidates = worksetCandidates

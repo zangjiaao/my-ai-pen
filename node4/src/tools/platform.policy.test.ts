@@ -21,6 +21,7 @@ const blank = resolveRolePack({});
 assert.equal(blank.pack.id, DEFAULT_SEAT_ID);
 assert.equal(blank.blocked, undefined);
 assert.ok(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("finding"));
+assert.ok(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("workset"));
 assert.ok(toolNamesForPack(DEFAULT_SEAT_PACK).some((n) => n.startsWith("platform_")));
 assert.ok(
   toolNamesForPack(DEFAULT_SEAT_PACK).includes("request_user_decision"),

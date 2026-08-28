@@ -77,7 +77,7 @@ Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md`（Node4 
 
 1. **发现质量波动** — 模型与目标相关；需人工复核 finding。  
 2. **生产风险** — 主动测试可能影响业务；须书面授权与范围。  
-3. **主机资产** — Agent 不新建 IP/域名行；用户先建资产。  
+3. **主机资产** — Agent 不新建 IP/域名行；用户先建资产。被动暴露面（CT/DNS/Shodan 类）停在 Case Workset，用户 adopt 后才进 Host。  
 4. **开放目标无「测完」标准** — 不以官方 scoreboard 为 SLA。  
 5. **定时任务** — 复测/巡检定位，非无人挖洞。  
 6. **费用** — LLM token 与长任务时长需客户自行监控。  

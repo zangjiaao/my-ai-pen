@@ -85,6 +85,7 @@ const actTools = [
   "platform_get_asset",
   "platform_list_groups",
   "request_user_decision",
+  "workset",
 ];
 for (const id of ["chain", "postex", "lateral"]) {
   const st = deep!.stages.find((s) => s.id === id)!;

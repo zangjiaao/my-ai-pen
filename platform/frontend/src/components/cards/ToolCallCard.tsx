@@ -10,6 +10,7 @@ import {
   Library,
   Lightbulb,
   ListTodo,
+  MapPin,
   ScanEye,
   ScanSearch,
   ShieldAlert,
@@ -752,6 +753,7 @@ function toolChromeCategory(
     hypothesis: { key: "hypothesis", label: "假设", Icon: Lightbulb },
     platform: { key: "platform", label: "台账", Icon: Library },
     feedback: { key: "feedback", label: "阶段评审", Icon: ClipboardCheck },
+    workset: { key: "workset", label: "暴露面候选", Icon: MapPin },
     tool: { key: "tool", label: "工具", Icon: Wrench },
   };
   return categories[family] || categories.tool;

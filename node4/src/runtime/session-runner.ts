@@ -951,7 +951,10 @@ export async function runNode4Task(
     });
     const attackSurfaceCandidates = settlePkg.attackSurfaceCandidates;
     const sideCandidates = settlePkg.nextScopeCandidates;
-    const worksetCandidates = settlePkg.worksetCandidates;
+    const worksetCandidates = [
+      ...settlePkg.worksetCandidates,
+      ...(runtime.lifecycle.worksetProposed || []),
+    ];
     await writeAttackSurfaceCandidatesArtifact(piDir, attackSurfaceCandidates);
 
     // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).

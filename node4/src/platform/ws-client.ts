@@ -13,6 +13,7 @@ const RELIABLE_TYPES = new Set([
   "evidence_created",
   "traffic_exchange",
   "surface_upsert",
+  "workset_propose",
   "work_status",
   "checkpoint_update",
   "task_start",

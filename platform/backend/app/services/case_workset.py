@@ -21,6 +21,9 @@ WORKSET_KEY = "workset"
 FAMILIES = frozenset({"t_surface", "t_host"})
 STATUSES = frozenset({"proposed", "adopted", "done", "rejected"})
 OPEN_STATUSES = frozenset({"proposed", "adopted"})
+# Spec #532 — passive exposure metadata (not a closed source router).
+CONFIDENCES = frozenset({"low", "medium", "high"})
+SCOPE_DECISIONS = frozenset({"pending", "in_scope", "out_of_scope", "needs_authorization"})
 # Goal outer-loop budget (rounds of auto-continue). Separate from stage retries.
 DEFAULT_GOAL_OUTER_BUDGET = 8
 
@@ -200,12 +203,29 @@ def mechanical_gate(
     }
 
 
+def is_passive_exposure_item(item: dict[str, Any]) -> bool:
+    """Spec #532: CT/DNS/Shodan-class candidates stay proposed until the user adopts."""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    if payload.get("passive") is True:
+        return True
+    decision = str(payload.get("scope_decision") or "").strip().lower()
+    if decision in {"pending", "needs_authorization"}:
+        return True
+    if str(payload.get("intel_source") or "").strip():
+        return True
+    src = str(item.get("source") or "").strip().lower()
+    return src.startswith("passive") or src.startswith("exposure")
+
+
 def auto_check_safe(item: dict[str, Any], scope_hosts: set[str]) -> bool:
     """Whether Goal may auto-adopt this item (mechanical only).
 
     Spec #311: host-checkable in-scope only. Path-only t_surface (no host) is
     not auto-eligible when scope_hosts is non-empty (or empty — not checkable).
+    Spec #532: passive exposure never auto-adopts (not Host / active test).
     """
+    if is_passive_exposure_item(item):
+        return False
     family = str(item.get("family") or "")
     if family != "t_surface":
         return False
@@ -316,6 +336,25 @@ def normalize_candidate(
         kind = str(raw.get("kind") or "").strip()
         if kind:
             payload["kind"] = kind[:64]
+
+    intel_source = str(raw.get("intel_source") or payload.get("intel_source") or "").strip()[:64]
+    if intel_source:
+        payload["intel_source"] = intel_source
+    attribution = str(raw.get("attribution") or payload.get("attribution") or "").strip()
+    if attribution:
+        payload["attribution"] = _clip(attribution, 800)
+    confidence = str(raw.get("confidence") or payload.get("confidence") or "").strip().lower()
+    if confidence in CONFIDENCES:
+        payload["confidence"] = confidence
+    scope_decision = str(
+        raw.get("scope_decision") or payload.get("scope_decision") or ""
+    ).strip().lower()
+    if scope_decision in SCOPE_DECISIONS:
+        payload["scope_decision"] = scope_decision
+    if raw.get("passive") is True or payload.get("passive") is True or intel_source:
+        payload["passive"] = True
+        if "scope_decision" not in payload:
+            payload["scope_decision"] = "pending"
 
     now = _now_iso()
     item_id = str(raw.get("id") or "").strip() or f"ws_{uuid.uuid4().hex[:16]}"
@@ -1031,6 +1070,21 @@ def project_workset_for_api(
     if residual_items:
         out["closed_items"] = residual_items[-40:]
     return out
+
+
+def merge_proposed_into_context(
+    context: dict | None,
+    candidates: list[dict[str, Any]],
+    *,
+    source: str = "workset_propose",
+) -> dict[str, Any]:
+    """Mid-run Agent propose (Spec #532). Merge only — no Goal valve, no baton clear."""
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
+    ws = get_workset(ctx)
+    ws = merge_proposed_items(ws, candidates, source=source, scope_hosts=scope_hosts)
+    return put_workset(ctx, ws)
 
 
 def thin_handoff_brief(

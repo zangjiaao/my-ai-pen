@@ -542,6 +542,7 @@ export async function runHardGraphExpertTask(options: {
     overlay: pdcaSettleEnabled()
       ? await projectOverlayFromRuntime(parentRuntime).catch(() => undefined)
       : undefined,
+    extraWorksetCandidates: parentRuntime.lifecycle.worksetProposed,
   });
 
   // Terminal checkpoint via shared builder (same plan_tree / llm_usage shapes as mid-run).

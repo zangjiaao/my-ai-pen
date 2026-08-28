@@ -1614,6 +1614,14 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         else:
             # Fail closed: do not broadcast unpersisted / invalid surface frames.
             return
+    elif msg.get("type") == "workset_propose" and conv_id:
+        # Spec #532: mid-run passive candidates → Case Workset (no Goal auto-adopt).
+        persisted_ws = await _persist_workset_propose(msg, conv_id)
+        if persisted_ws:
+            msg.clear()
+            msg.update(persisted_ws)
+        else:
+            return
     elif msg.get("type") == "tool_output":
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
@@ -5851,6 +5859,43 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
             await db.commit()
     except Exception as e:
         print(f"[WS] participant plan_tree error: {e}")
+
+
+async def _persist_workset_propose(msg: dict, conv_id: str) -> dict | None:
+    """Spec #532: merge Agent workset(propose) into Case Workset without Goal valve."""
+    cands = msg.get("workset_candidates")
+    if not conv_id or not isinstance(cands, list) or not cands:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_workset import (
+            get_workset,
+            merge_proposed_into_context,
+            project_workset_for_api,
+        )
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            source = str(msg.get("workset_source") or "workset_propose").strip() or "workset_propose"
+            context = merge_proposed_into_context(
+                dict(c.context or {}),
+                [row for row in cands if isinstance(row, dict)],
+                source=source,
+            )
+            c.context = context
+            await db.commit()
+            return {
+                "type": "workset_updated",
+                "conversation_id": conv_id,
+                "workset": project_workset_for_api(get_workset(context)),
+            }
+    except Exception as e:
+        print(f"[WS] workset_propose persist error: {e}")
+        return None
 
 
 async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:

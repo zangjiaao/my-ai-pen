@@ -207,6 +207,72 @@ def test_goal_on_auto_adopt_only_safe_t_surface():
             assert i["status"] == "proposed"
 
 
+def test_passive_exposure_keeps_source_fields_and_never_auto_adopts():
+    from app.services.case_workset import is_passive_exposure_item, merge_proposed_into_context
+
+    item = normalize_candidate(
+        {
+            "host": "cdn.example.com",
+            "in_scope": False,
+            "intel_source": "ct",
+            "attribution": "crt.sh SAN cdn.example.com 2026-01-01",
+            "confidence": "medium",
+            "scope_decision": "pending",
+            "passive": True,
+        },
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    assert item is not None
+    assert item["family"] == "t_host"
+    assert item["status"] == "proposed"
+    assert item["auto_eligible"] is False
+    assert is_passive_exposure_item(item) is True
+    payload = item["payload"]
+    assert payload["intel_source"] == "ct"
+    assert "crt.sh" in payload["attribution"]
+    assert payload["confidence"] == "medium"
+    assert payload["scope_decision"] == "pending"
+    assert payload["passive"] is True
+
+    # Even an in-scope-looking t_surface from CT must not Goal-adopt.
+    surface = normalize_candidate(
+        {
+            "location": "https://target.local/",
+            "host": "target.local",
+            "in_scope": True,
+            "intel_source": "dns",
+            "attribution": "passive DNS A record",
+            "confidence": "high",
+        },
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    assert surface is not None
+    assert surface["family"] == "t_surface"
+    assert surface["auto_eligible"] is False
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [surface, item],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    ws2, adopted = goal_auto_adopt(ws, scope_hosts=SCOPE, goal_on=True)
+    assert adopted == []
+    assert all(i["status"] == "proposed" for i in ws2["items"])
+
+    ctx = merge_proposed_into_context(
+        {"task": _task()},
+        [{"host": "mail.example.com", "intel_source": "shodan", "attribution": "shodan:443", "passive": True}],
+        source="workset_propose",
+    )
+    parked = get_workset(ctx)["items"]
+    assert len(parked) == 1
+    assert parked[0]["auto_eligible"] is False
+    assert parked[0]["payload"]["intel_source"] == "shodan"
+    assert get_workset(ctx).get("goal") is None
+
+
 def test_goal_terminals_complete_with_awaiting_scope_confirm():
     ws = merge_proposed_items(
         {"version": 1, "items": [], "goal": {"status": "running", "outer_budget": 8, "outer_rounds": 1}},

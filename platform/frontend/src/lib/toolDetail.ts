@@ -808,6 +808,7 @@ export function toolFamilyFromName(name: string): string {
   if (/request_user_decision|用户授权/.test(lower)) return "decision";
   if (/hypothesis/.test(lower)) return "hypothesis";
   if (/graph_feedback|阶段评审/.test(lower)) return "feedback";
+  if (/^workset$|暴露面候选/.test(lower)) return "workset";
   return lower;
 }
 

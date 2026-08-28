@@ -395,7 +395,10 @@ export async function runParkedWorkingContinue(options: {
     started_at: startedAt,
     attack_surface_candidates: settlePkg.attackSurfaceCandidates,
     next_scope_candidates: settlePkg.nextScopeCandidates,
-    workset_candidates: settlePkg.worksetCandidates,
+    workset_candidates: [
+      ...settlePkg.worksetCandidates,
+      ...(parked.runtime?.lifecycle.worksetProposed || []),
+    ],
     workset_source: settlePkg.worksetSource,
     goal_mode: goalModeOn,
     goal_objective: task.goalObjective || undefined,

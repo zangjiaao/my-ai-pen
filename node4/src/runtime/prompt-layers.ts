@@ -373,6 +373,11 @@ export function buildPromptLayers(
       "Attack surface (surface tool): summary|list|get; coverage via mark/unmark/skip (not purpose=test); ledger from Traffic settle + TARGET seed; disclose remaining untested; upsert optional (cannot write coverage).",
     );
   }
+  if (pack.toolNames.includes("workset")) {
+    runtimeParts.push(
+      "Workset (workset tool): park passive exposure (CT/DNS/Shodan-class) with source/attribution/confidence; not Host or active test until the user adopts. A missing optional intel source is not a failure.",
+    );
+  }
   if (pack.recipeDir) {
     const root = pack.packRoot;
     const recipePath = root ? `${root}/${pack.recipeDir}` : `experts/<pack>/${pack.recipeDir}`;
