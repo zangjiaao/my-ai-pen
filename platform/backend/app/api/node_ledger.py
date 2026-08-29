@@ -444,7 +444,6 @@ async def conversation_asset_intake_node(
     if mode == "enroll_group" and not group_id and not group_name:
         raise HTTPException(400, "enroll_group requires group_id or group_name")
     from app.services.case_workset import (
-        apply_intake_enroll_to_context,
         get_asset_intake,
         materialize_intake_hosts,
         put_asset_intake,
@@ -469,7 +468,6 @@ async def conversation_asset_intake_node(
             "set_by": "agent",
         },
     )
-    ctx, _enrolled = apply_intake_enroll_to_context(ctx)
     ctx = await materialize_intake_hosts(
         db,
         user_id=conv.user_id,

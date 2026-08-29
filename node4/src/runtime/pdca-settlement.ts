@@ -10,6 +10,7 @@ import { isSurfaceActionable, coerceSurfaceCoverage } from "../stores/surface-co
 import { hasOpenApproval } from "./approvals.js";
 import { HARNESS_CONTINUE_NOTICE } from "./harness-channel.js";
 import type { ToolRuntime } from "../types.js";
+import { mergeStashIntoCaseList } from "../tools/workset.js";
 
 export const PDCA_IDENTITY_CAP = 12;
 export const PDCA_DELTA_CAP = 20;
@@ -95,7 +96,14 @@ export type OverlayProjectionInput = {
   findings?: Array<{ id: string; status: string; title?: string; location?: string }>;
   pendingUserDecision?: boolean;
   /** Spec #540 — Case Workset open refs (pending admission). */
-  worksetOpen?: Array<{ id?: string; family?: string; title?: string; status?: string }>;
+  worksetOpen?: Array<{
+    id?: string;
+    family?: string;
+    title?: string;
+    status?: string;
+    host?: string;
+    location?: string;
+  }>;
 };
 
 export type TerminalConsistencyResult = {
@@ -230,8 +238,12 @@ export function projectLiveStateOverlay(input: OverlayProjectionInput = {}): Liv
     const st = String(w.status || "").trim().toLowerCase();
     const fam = String(w.family || "").trim().toLowerCase();
     if (st !== "proposed" || fam !== "t_host") continue;
-    const id = String(w.id || "").trim();
-    if (!id) continue;
+    const id =
+      String(w.id || "").trim() ||
+      (fam === "t_host"
+        ? `t_host:${String(w.host || w.title || "").trim().toLowerCase()}`
+        : `t_surface:${String(w.location || w.title || "").trim().toLowerCase()}`);
+    if (!id || id.endsWith(":")) continue;
     admissionRaw.push({
       kind: "workset",
       id,
@@ -594,6 +606,32 @@ function runningPackagesFromRuntime(runtime: ToolRuntime): Array<{ id: string; s
 }
 
 /**
+ * Case Workset snapshot plus this-burst `workset(propose)` stash.
+ * Assign-time `next_work.workset_open` is empty until the next task_assign.
+ */
+export function worksetOpenForPdcaOverlay(
+  caseOpen: OverlayProjectionInput["worksetOpen"],
+  stash?: import("./workset-emit.js").WorksetCandidate[],
+): NonNullable<OverlayProjectionInput["worksetOpen"]> {
+  const caseItems = (Array.isArray(caseOpen) ? caseOpen : []).map((w) => ({
+    id: w.id,
+    family: w.family,
+    title: w.title,
+    status: w.status || "proposed",
+    host: w.host,
+    location: w.location,
+  }));
+  return mergeStashIntoCaseList(caseItems, stash).map((row) => ({
+    id: String(row.id || "").trim() || undefined,
+    family: row.family,
+    title: row.title,
+    status: row.status || "proposed",
+    host: row.host,
+    location: row.location,
+  }));
+}
+
+/**
  * Best-effort live projection from a ToolRuntime. Empty overlay on read failure.
  */
 export async function projectOverlayFromRuntime(runtime: ToolRuntime): Promise<LiveStateOverlay> {
@@ -637,6 +675,9 @@ export async function projectOverlayFromRuntime(runtime: ToolRuntime): Promise<L
     pendingUserDecision:
       Boolean(runtime.lifecycle.pendingUserDecision) ||
       hasOpenApproval(runtime.task?.conversationId),
-    worksetOpen: runtime.task?.caseContext?.next_work?.workset_open,
+    worksetOpen: worksetOpenForPdcaOverlay(
+      runtime.task?.caseContext?.next_work?.workset_open,
+      runtime.lifecycle.worksetProposed,
+    ),
   });
 }

@@ -157,42 +157,13 @@ def intake_enroll_eligible(item: dict[str, Any], policy: object) -> bool:
 def apply_intake_enroll_to_context(
     context: dict | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Apply enroll_group policy: adopt eligible t_host and expand this Case Scope.
+    """Enrollment is committed only after Owner Host create succeeds.
 
-    Does not write Owner Host rows — persist layer materializes into the Group.
+    Sync callers (merge/settle) must not adopt or expand Scope here — that left
+    adopted rows with no Host when materialize failed.
     """
     ctx = dict(context or {}) if isinstance(context, dict) else {}
-    policy = get_asset_intake(ctx)
-    if policy["mode"] != "enroll_group":
-        return ctx, []
-    ws = get_workset(ctx)
-    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
-    enrolled: list[dict[str, Any]] = []
-    for item in list(ws.get("items") or []):
-        if not isinstance(item, dict):
-            continue
-        if not intake_enroll_eligible(item, policy):
-            continue
-        expand_fields = host_expand_fields_from_item(item)
-        if policy.get("into_scope") is not False and expand_fields:
-            expanded, expand_err = expand_task_scope_for_host(
-                task,
-                host=expand_fields["host"],
-                port=expand_fields.get("port"),
-                urls=expand_fields.get("urls"),
-            )
-            if expand_err:
-                continue
-            task = expanded
-        ws2, found, err = adopt_item(ws, str(item.get("id")), actor="intake_policy")
-        if err or not found:
-            continue
-        ws = ws2
-        enrolled.append(dict(found))
-    if enrolled:
-        ctx["task"] = task
-        ctx = put_workset(ctx, ws)
-    return ctx, enrolled
+    return ctx, []
 
 
 def scope_hosts_from_task(task: object) -> set[str]:
@@ -944,8 +915,9 @@ def expand_task_scope_for_host(
     host: str,
     port: str | None = None,
     urls: list | None = None,
+    asset_id: str | None = None,
 ) -> tuple[dict[str, Any], str | None]:
-    """Extend task Scope.allow with a confirmed host (t_host adopt / next-scope spirit).
+    """Extend task Scope.allow (and optional Host id) with a confirmed host.
 
     Does not wipe prior allow entries. Returns (task, error).
     """
@@ -971,6 +943,16 @@ def expand_task_scope_for_host(
         if entry and entry not in allow:
             allow.append(entry)
     scope["allow"] = allow
+    aid = str(asset_id or "").strip()
+    if aid:
+        try:
+            uuid.UUID(aid)
+            ids = list(scope.get("asset_ids") or []) if isinstance(scope.get("asset_ids"), list) else []
+            if aid not in ids:
+                ids.append(aid)
+            scope["asset_ids"] = ids
+        except ValueError:
+            pass
     if "deny" not in scope:
         scope["deny"] = list(scope.get("deny") or []) if isinstance(scope.get("deny"), list) else []
     out["scope"] = scope
@@ -1289,7 +1271,6 @@ def merge_proposed_into_context(
     ws = get_workset(ctx)
     ws = merge_proposed_items(ws, candidates, source=source, scope_hosts=scope_hosts)
     ctx = put_workset(ctx, ws)
-    ctx, _enrolled = apply_intake_enroll_to_context(ctx)
     return ctx
 
 
@@ -1373,7 +1354,6 @@ def apply_settle_to_context(
     ws = clear_in_progress(ws)
 
     ctx = put_workset(ctx, ws)
-    ctx, _enrolled = apply_intake_enroll_to_context(ctx)
     ws = get_workset(ctx)
     task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
     scope_hosts = scope_hosts_from_task(task)
@@ -1452,6 +1432,79 @@ def apply_settle_to_context(
     return ctx
 
 
+def _first_host_asset_id(result: object) -> str | None:
+    """Host id from create_hosts_for_user (created or merged into the intake Group)."""
+    if not isinstance(result, dict):
+        return None
+    rows: list[Any] = []
+    for key in ("assets", "created", "merged"):
+        val = result.get(key)
+        if isinstance(val, list):
+            rows.extend(val)
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id") or "").strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        try:
+            uuid.UUID(aid)
+        except ValueError:
+            continue
+        return aid
+    return None
+
+
+def commit_intake_enrollment(
+    context: dict | None,
+    item_id: str,
+    *,
+    asset_id: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
+    """Adopt + Scope after a successful Owner Host create (id required)."""
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    aid = str(asset_id or "").strip()
+    try:
+        uuid.UUID(aid)
+    except ValueError:
+        return ctx, None, "invalid_asset_id"
+    ws = get_workset(ctx)
+    item = next(
+        (i for i in (ws.get("items") or []) if isinstance(i, dict) and str(i.get("id")) == str(item_id)),
+        None,
+    )
+    if not item:
+        return ctx, None, "not_found"
+    policy = get_asset_intake(ctx)
+    fields = host_expand_fields_from_item(item)
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    if policy.get("into_scope") is not False and fields:
+        expanded, expand_err = expand_task_scope_for_host(
+            task,
+            host=fields["host"],
+            port=fields.get("port"),
+            urls=fields.get("urls"),
+            asset_id=aid,
+        )
+        if expand_err:
+            return ctx, None, expand_err
+        ctx["task"] = expanded
+    if str(item.get("status") or "") == "proposed":
+        ws2, found, err = adopt_item(ws, str(item_id), actor="intake_policy")
+        if err or not found:
+            return ctx, None, err or "adopt_failed"
+        ws = ws2
+        item = found
+    payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+    payload["intake_materialized"] = True
+    payload["intake_asset_id"] = aid
+    item["payload"] = payload
+    ctx = put_workset(ctx, ws)
+    return ctx, dict(item), None
+
+
 async def materialize_intake_hosts(
     db: Any,
     *,
@@ -1459,29 +1512,42 @@ async def materialize_intake_hosts(
     conversation_id: str,
     context: dict[str, Any],
 ) -> dict[str, Any]:
-    """Create Owner Hosts in the intake Group for rows adopted by intake_policy."""
+    """Create Owner Hosts first; adopt and expand Scope only after a Host id exists."""
     policy = get_asset_intake(context)
     if policy["mode"] != "enroll_group":
         return context
-    ws = get_workset(context)
-    changed = False
     from app.services.node_ledger import NodeLedgerError, create_hosts_for_user
 
-    for item in ws.get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("status") or "") != "adopted":
-            continue
-        if str(item.get("status_actor") or "") != "intake_policy":
+    ctx = dict(context)
+    ws = get_workset(ctx)
+    item_ids = [
+        str(i.get("id"))
+        for i in (ws.get("items") or [])
+        if isinstance(i, dict) and i.get("id")
+    ]
+    for item_id in item_ids:
+        ws = get_workset(ctx)
+        item = next(
+            (i for i in (ws.get("items") or []) if isinstance(i, dict) and str(i.get("id")) == item_id),
+            None,
+        )
+        if not item:
             continue
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         if payload.get("intake_materialized"):
+            continue
+        eligible = intake_enroll_eligible(item, policy)
+        legacy = (
+            str(item.get("status") or "") == "adopted"
+            and str(item.get("status_actor") or "") == "intake_policy"
+        )
+        if not eligible and not legacy:
             continue
         fields = host_expand_fields_from_item(item)
         if not fields:
             continue
         try:
-            await create_hosts_for_user(
+            created = await create_hosts_for_user(
                 db,
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -1491,14 +1557,25 @@ async def materialize_intake_hosts(
                 group_id=policy.get("group_id"),
                 group_name=policy.get("group_name"),
             )
+            asset_id = _first_host_asset_id(created)
+            if not asset_id:
+                raise NodeLedgerError("create_hosts_for_user returned no Host id", status_code=500)
         except NodeLedgerError as e:
             print(f"[intake] materialize skip {fields.get('host')}: {e}")
+            if legacy:
+                item["status"] = "proposed"
+                item.pop("status_actor", None)
+                ctx = put_workset(ctx, ws)
             continue
         except Exception as e:
             print(f"[intake] materialize error {fields.get('host')}: {e}")
+            if legacy:
+                item["status"] = "proposed"
+                item.pop("status_actor", None)
+                ctx = put_workset(ctx, ws)
             continue
-        item["payload"] = {**payload, "intake_materialized": True}
-        changed = True
-    if changed:
-        context = put_workset(context, ws)
-    return context
+        ctx, _, err = commit_intake_enrollment(ctx, item_id, asset_id=asset_id)
+        if err:
+            print(f"[intake] commit skip {fields.get('host')}: {err}")
+            continue
+    return ctx

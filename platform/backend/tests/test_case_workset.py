@@ -20,6 +20,7 @@ from app.services.case_workset import (
     mechanical_gate,
     merge_proposed_into_context,
     merge_proposed_items,
+    materialize_intake_hosts,
     normalize_asset_intake,
     normalize_candidate,
     order_workset_items,
@@ -963,10 +964,39 @@ def test_intake_enroll_adopts_t_host_and_expands_scope():
     )
     ws = get_workset(ctx)
     assert len(ws["items"]) == 1
-    assert ws["items"][0]["status"] == "adopted"
-    assert ws["items"][0]["status_actor"] == "intake_policy"
-    hosts = scope_hosts_from_task(ctx["task"])
-    assert "mail.example.com" in hosts
+    assert ws["items"][0]["status"] == "proposed"
+    assert "mail.example.com" not in scope_hosts_from_task(ctx["task"])
+    aid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+    async def fake_create(*_a, **_k):
+        return {"ok": True, "assets": [{"id": aid}]}
+
+    import app.services.node_ledger as nl
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_create
+    try:
+        import asyncio
+
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "adopted"
+    assert item["status_actor"] == "intake_policy"
+    assert item["payload"]["intake_asset_id"] == aid
+    assert "mail.example.com" in scope_hosts_from_task(ctx["task"])
+    assert aid in (ctx["task"]["scope"].get("asset_ids") or [])
+
+
+def test_expand_task_scope_records_host_asset_id():
+    aid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    task, err = expand_task_scope_for_host(_task(), host="mail.example.com", asset_id=aid)
+    assert err is None
+    assert "mail.example.com" in scope_hosts_from_task(task)
+    assert aid in task["scope"]["asset_ids"]
 
 
 def test_intake_ask_leaves_passive_proposed():
@@ -996,8 +1026,8 @@ def test_intake_skips_low_confidence_and_oos():
     by_host = {i["payload"]["host"]: i for i in get_workset(ctx)["items"]}
     assert by_host["low.example.com"]["status"] == "proposed"
     assert by_host["cdn.cloudflare.com"]["status"] == "proposed"
-    assert by_host["vpn.example.com"]["status"] == "adopted"
-    assert "vpn.example.com" in scope_hosts_from_task(ctx["task"])
+    assert by_host["vpn.example.com"]["status"] == "proposed"
+    assert "vpn.example.com" not in scope_hosts_from_task(ctx["task"])
     assert "low.example.com" not in scope_hosts_from_task(ctx["task"])
 
 
@@ -1029,7 +1059,7 @@ def test_apply_intake_enroll_is_idempotent():
     ctx = merge_proposed_into_context(ctx, [_passive_host("mail.example.com")], source="workset_propose")
     ctx2, enrolled = apply_intake_enroll_to_context(ctx)
     assert enrolled == []
-    assert get_workset(ctx2)["items"][0]["status"] == "adopted"
+    assert get_workset(ctx2)["items"][0]["status"] == "proposed"
 
 
 def test_settle_respects_intake_policy():
@@ -1041,6 +1071,68 @@ def test_settle_respects_intake_policy():
         goal_on=False,
     )
     item = get_workset(ctx)["items"][0]
-    assert item["status"] == "adopted"
-    assert item["status_actor"] == "intake_policy"
-    assert "api.example.com" in scope_hosts_from_task(ctx["task"])
+    assert item["status"] == "proposed"
+    assert "api.example.com" not in scope_hosts_from_task(ctx["task"])
+
+
+def test_materialize_create_failure_leaves_proposed():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("ghost.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    from app.services.node_ledger import NodeLedgerError
+    import app.services.node_ledger as nl
+    import asyncio
+
+    async def fake_fail(*_a, **_k):
+        raise NodeLedgerError("group missing", status_code=400)
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_fail
+    try:
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "proposed"
+    assert "ghost.example.com" not in scope_hosts_from_task(ctx["task"])
+    assert not (ctx.get("task") or {}).get("scope", {}).get("asset_ids")
+
+
+def test_materialize_reopens_legacy_adopted_when_create_fails():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("stale.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    iid = get_workset(ctx)["items"][0]["id"]
+    ws, found, err = adopt_item(get_workset(ctx), iid, actor="intake_policy")
+    assert err is None and found
+    ctx = put_workset(ctx, ws)
+    from app.services.node_ledger import NodeLedgerError
+    import app.services.node_ledger as nl
+    import asyncio
+
+    async def fake_fail(*_a, **_k):
+        raise NodeLedgerError("create failed", status_code=400)
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_fail
+    try:
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    assert get_workset(ctx)["items"][0]["status"] == "proposed"

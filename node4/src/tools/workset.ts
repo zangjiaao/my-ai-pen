@@ -31,7 +31,7 @@ export type WorksetListRow = {
   source?: string;
 };
 
-function worksetDedupeKey(row: WorksetListRow | WorksetCandidate): string {
+export function worksetDedupeKey(row: WorksetListRow | WorksetCandidate): string {
   const fam = String(row.family || "t_host");
   const host = String(row.host || "").trim().toLowerCase();
   const loc = String(row.location || "").trim().toLowerCase();
@@ -54,6 +54,11 @@ export function mergeStashIntoCaseList(
   }
   for (const row of stash || []) {
     const mapped: WorksetListRow = {
+      id: worksetDedupeKey({
+        family: row.family,
+        host: row.host,
+        location: row.location,
+      }),
       family: row.family,
       title: row.title,
       summary: row.summary,

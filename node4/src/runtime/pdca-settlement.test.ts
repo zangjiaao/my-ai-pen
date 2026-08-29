@@ -15,6 +15,7 @@ import {
   mapPdcaVerdictToHarnessStatus,
   pdcaSettleEnabled,
   projectLiveStateOverlay,
+  projectOverlayFromRuntime,
   settleParticipantTurn,
   type LiveStateOverlay,
 } from "./pdca-settlement.js";
@@ -402,6 +403,29 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
     findings: [{ id: "other", status: "booked", title: "other" }],
   });
   assert.equal(snap.pendingWorkerReconciliation.length, 1);
+  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
+}
+
+// --- This-burst workset(propose) stash is unresolved admission (not assign-time snapshot) ---
+{
+  const runtime = {
+    task: { caseContext: { next_work: { workset_open: [] } } },
+    lifecycle: {
+      worksetProposed: [
+        {
+          family: "t_host",
+          title: "cdn.example.com",
+          host: "cdn.example.com",
+          in_scope: false,
+          source: "workset_propose",
+        },
+      ],
+    },
+    todo: { openCount: () => 0 },
+  } as import("../types.js").ToolRuntime;
+  const snap = await projectOverlayFromRuntime(runtime);
+  assert.equal(snap.admission.length, 1);
+  assert.match(snap.admission[0]!.id, /cdn\.example\.com/);
   assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
 }
 
