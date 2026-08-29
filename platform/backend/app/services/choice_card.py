@@ -441,6 +441,20 @@ def merge_authorized_host_scope(
     return {"allow": new_allow, "deny": new_deny, "asset_ids": new_ids}
 
 
+def sync_task_asset_id_from_scope(task: dict | None) -> None:
+    """Keep task.asset_id only when Scope names exactly one Host."""
+    if not isinstance(task, dict):
+        return
+    scope = task.get("scope") if isinstance(task.get("scope"), dict) else {}
+    ids = [_s(x) for x in (scope.get("asset_ids") or []) if isinstance(scope.get("asset_ids"), list) and _s(x)]
+    if not isinstance(scope.get("asset_ids"), list):
+        ids = []
+    if len(ids) == 1:
+        task["asset_id"] = ids[0]
+    else:
+        task.pop("asset_id", None)
+
+
 def format_selected_summary(summary_titles: list[str] | None) -> str:
     titles = [_s(t) for t in (summary_titles or []) if _s(t)]
     if not titles:

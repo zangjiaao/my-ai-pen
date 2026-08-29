@@ -1146,9 +1146,13 @@ def test_workset_routes_require_bound_node():
     from fastapi import HTTPException
 
     from app.api.node_ledger import require_conversation_bound_to_node
+    from app.services.node_ledger import conversation_bound_to_node_id
 
     nid = uuid4()
     require_conversation_bound_to_node(SimpleNamespace(node_id=nid), SimpleNamespace(id=nid))
+    assert conversation_bound_to_node_id(nid, str(nid)) is True
+    assert conversation_bound_to_node_id(None, str(nid)) is False
+    assert conversation_bound_to_node_id(nid, str(uuid4())) is False
     try:
         require_conversation_bound_to_node(SimpleNamespace(node_id=None), SimpleNamespace(id=nid))
         raise AssertionError("unbound conversation must 403")

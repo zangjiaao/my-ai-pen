@@ -44,7 +44,7 @@ async def _user_for_conversation(db: AsyncSession, conversation_id: str | None) 
 
 def require_conversation_bound_to_node(conv: Conversation, node: Node) -> None:
     """Workset / asset-intake mutate Case Scope — only the bound Node may call them."""
-    if conv.node_id is None or conv.node_id != node.id:
+    if not ledger.conversation_bound_to_node_id(conv.node_id, str(node.id)):
         raise HTTPException(403, "conversation not bound to this node")
 
 

@@ -33,6 +33,15 @@ from app.services.asset_ledger import (
 
 # Management lifecycle (same as vulnerabilities API)
 ALLOWED_STATUSES = frozenset({"to_fix", "fixing", "fixed"})
+
+
+def conversation_bound_to_node_id(conv_node_id: uuid.UUID | None, node_id: str | None) -> bool:
+    incoming = str(node_id or "").strip()
+    if conv_node_id is None or not incoming:
+        return False
+    return str(conv_node_id) == incoming
+
+
 LEGACY_STATUS_MAP = {
     "pending": "to_fix",
     "open": "to_fix",

@@ -1616,7 +1616,7 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             return
     elif msg.get("type") == "workset_propose" and conv_id:
         # Spec #532: mid-run passive candidates → Case Workset (no Goal auto-adopt).
-        persisted_ws = await _persist_workset_propose(msg, conv_id)
+        persisted_ws = await _persist_workset_propose(msg, conv_id, client_id)
         if persisted_ws:
             msg.clear()
             msg.update(persisted_ws)
@@ -4309,15 +4309,14 @@ async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]
             found_ids = [str(a.id) for a in ordered]
             context = dict(c.context or {}) if isinstance(c.context, dict) else {}
             task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
-            from app.services.choice_card import merge_authorized_host_scope
+            from app.services.choice_card import merge_authorized_host_scope, sync_task_asset_id_from_scope
 
             task["scope"] = merge_authorized_host_scope(
                 task.get("scope") if isinstance(task.get("scope"), dict) else {},
                 allow=allow,
                 asset_ids=found_ids,
             )
-            if len(task["scope"].get("asset_ids") or []) == 1:
-                task["asset_id"] = task["scope"]["asset_ids"][0]
+            sync_task_asset_id_from_scope(task)
             context["task"] = task
             c.context = context
             flag_modified(c, "context")
@@ -5867,7 +5866,7 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
         print(f"[WS] participant plan_tree error: {e}")
 
 
-async def _persist_workset_propose(msg: dict, conv_id: str) -> dict | None:
+async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None = None) -> dict | None:
     """Spec #532: merge Agent workset(propose) into Case Workset without Goal valve."""
     cands = msg.get("workset_candidates")
     if not conv_id or not isinstance(cands, list) or not cands:
@@ -5882,11 +5881,15 @@ async def _persist_workset_propose(msg: dict, conv_id: str) -> dict | None:
             merge_proposed_into_context,
             project_workset_for_api,
         )
+        from app.services.node_ledger import conversation_bound_to_node_id
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
             if not c:
+                return None
+            if not conversation_bound_to_node_id(c.node_id, node_id):
+                print("[WS] workset_propose rejected: conversation not bound to this node")
                 return None
             source = str(msg.get("workset_source") or "workset_propose").strip() or "workset_propose"
             context = merge_proposed_into_context(

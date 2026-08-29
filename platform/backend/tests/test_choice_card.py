@@ -12,6 +12,7 @@ from app.services.choice_card import (
     expand_selected_options,
     format_selected_summary,
     merge_authorized_host_scope,
+    sync_task_asset_id_from_scope,
     is_next_steps_choice,
     is_question_answer_valid,
     map_authorize_decision,
@@ -173,6 +174,12 @@ def test_expand_and_collect_host_scope_ids():
     assert "new.example" in merged["allow"]
     assert merged["deny"] == ["evil.example"]
     assert "old" in merged["asset_ids"] and a in merged["asset_ids"]
+    task = {"asset_id": "old", "scope": merged}
+    sync_task_asset_id_from_scope(task)
+    assert "asset_id" not in task
+    one = {"asset_id": "stale", "scope": {"asset_ids": [a]}}
+    sync_task_asset_id_from_scope(one)
+    assert one["asset_id"] == a
 
 
 def test_s3_confirm_text_custom_is_peer_option():
