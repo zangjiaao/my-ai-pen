@@ -5870,7 +5870,9 @@ async def _persist_workset_propose(msg: dict, conv_id: str) -> dict | None:
         from app.db.base import async_session
         from app.models.conversation import Conversation
         from app.services.case_workset import (
+            get_asset_intake,
             get_workset,
+            materialize_intake_hosts,
             merge_proposed_into_context,
             project_workset_for_api,
         )
@@ -5886,12 +5888,19 @@ async def _persist_workset_propose(msg: dict, conv_id: str) -> dict | None:
                 [row for row in cands if isinstance(row, dict)],
                 source=source,
             )
+            context = await materialize_intake_hosts(
+                db,
+                user_id=c.user_id,
+                conversation_id=str(c.id),
+                context=context,
+            )
             c.context = context
             await db.commit()
             return {
                 "type": "workset_updated",
                 "conversation_id": conv_id,
                 "workset": project_workset_for_api(get_workset(context)),
+                "asset_intake": get_asset_intake(context),
             }
     except Exception as e:
         print(f"[WS] workset_propose persist error: {e}")
@@ -6024,6 +6033,14 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 except Exception as fe:
                     print(f"[WS] goal free session land error: {fe}")
 
+            from app.services.case_workset import materialize_intake_hosts
+
+            context = await materialize_intake_hosts(
+                db,
+                user_id=c.user_id,
+                conversation_id=str(c.id),
+                context=context,
+            )
             c.context = context
             await db.commit()
 

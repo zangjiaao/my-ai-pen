@@ -960,6 +960,7 @@ def build_case_context_payload(
     workset: dict | None = None,
     scope_intel: dict | None = None,
     intel_summary: list[dict] | None = None,
+    asset_intake: dict | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
@@ -1051,6 +1052,14 @@ def build_case_context_payload(
             payload["next_work"] = thin_handoff_brief(workset, boundary="case_assign")
         except Exception:
             pass
+    if isinstance(asset_intake, dict) and str(asset_intake.get("mode") or "") == "enroll_group":
+        nw = payload.get("next_work") if isinstance(payload.get("next_work"), dict) else {}
+        nw["asset_intake"] = {
+            "mode": "enroll_group",
+            "group_id": asset_intake.get("group_id"),
+            "group_name": asset_intake.get("group_name"),
+        }
+        payload["next_work"] = nw
     # Spec #312: mark whether transcript already has a legal next_steps card (soft-gate input).
     try:
         from app.services.choice_card import messages_have_legal_next_steps_choice
@@ -1670,13 +1679,17 @@ async def load_case_context_for_conversation(
         evidence_rows = []
 
     workset_blob = None
+    intake_blob = None
     try:
-        from app.services.case_workset import get_workset
+        from app.services.case_workset import get_asset_intake, get_workset
 
+        ctx_now = conv_context if isinstance(conv_context, dict) else {}
         if conv is not None:
-            workset_blob = get_workset(conv_context if isinstance(conv_context, dict) else {})
+            workset_blob = get_workset(ctx_now)
+            intake_blob = get_asset_intake(ctx_now)
     except Exception:
         workset_blob = None
+        intake_blob = None
 
     scope_intel = None
     try:
@@ -1705,4 +1718,5 @@ async def load_case_context_for_conversation(
         workset=workset_blob,
         scope_intel=scope_intel,
         intel_summary=intel_summary,
+        asset_intake=intake_blob,
     )

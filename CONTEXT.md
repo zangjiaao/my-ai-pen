@@ -138,7 +138,7 @@ _Avoid_: single-parent folder; Host-only membership that always drags every port
 
 **Host**:
 An owner-enrolled address card: one primary IP or domain, plus optional aliases (child addresses). Aliases are the same machine — edited on the Host dialog (`properties.aliases`); the Host note is not identity. Distinct vhosts are distinct Hosts even if they resolve to one IP. Lookup that hits two Host ids is ambiguous: ask the user; do not pick the first row. A Host belongs to a Case when the user authorized its id as Scope, or a this-Case Surface origin uniquely matches it; harness projects living intel for those Hosts. Agent reads the projection / `fact(get)` and does not upsert a Case-private copy.
-_Avoid_: auto-merging vhosts because of DNS; treating domain + public IP + internal IP as a Service-level 分身; parsing note as aliases; first-match on identity collision; assembling a Group as silent Scope; inventing a scan workflow after the user allows Hosts
+_Avoid_: auto-merging vhosts because of DNS; treating domain + public IP + internal IP as a Service-level 分身; parsing note as aliases; first-match on identity collision; assembling a Group as silent Scope; inventing a scan workflow after the user allows Hosts; inventing Hosts from recon without user ask or Case enroll_group intake
 
 **Service**:
 One network face of a Host: that Host + one port (proto is display). Durable 攻击面 hangs here. Findings hang here by host:port.
@@ -157,8 +157,8 @@ This-Case attack-surface identities, born from Traffic settle and TARGET seed �
 _Avoid_: Agent-invented path menus as the sitemap; treating Owner 攻击面 as this-run inventory; parking unauthorized CT/DNS names here
 
 **Workset**:
-Case-scoped **pending admission** inventory. Discovered subdomains and sibling hosts wait here (`t_host` = new host; `t_surface` = in-scope deepen) until the user adopts. Not Case Surface coverage. Not Owner Host / 攻击面. Not Intel. Adopt is the only path into Owner Host / this-Case Scope; then traffic-born paths settle onto Case Surface and clues may hang on that Host.
-_Avoid_: a Candidate Asset product; treating Workset as a choice UI (#312 Choice Card binds ids); hanging Intel on a name that is not yet a Host; listing `next_scope_candidates` as a second SoT
+Case-scoped **pending admission** inventory. Discovered subdomains and sibling hosts wait here (`t_host` = new host; `t_surface` = in-scope deepen). Default: user adopt is the path into Owner Host / this-Case Scope. A **Case asset-intake policy** (`enroll_group` + Group id, written when the user asked — not inferred from keywords) may enroll eligible `t_host` rows into that Group and this Case Scope; exceptions (out_of_scope / low confidence / needs_authorization / invalid host) stay proposed. Not Case Surface coverage. Not Intel. Then traffic-born paths settle onto Case Surface and clues may hang on that Host.
+_Avoid_: a Candidate Asset product; treating Workset as a choice UI (#312 Choice Card binds ids); hanging Intel on a name that is not yet a Host; listing `next_scope_candidates` as a second SoT; treating Group membership of *other* hosts as this-Case Scope; Agent inventing Hosts from recon without user ask or intake policy
 
 **TESTED** (Case Surface):
 Agent-maintained, Case-shared **coverage work-state** on an existing Case Surface identity. Three values: `untested` | `tested` | `skipped` (`skipped` reason `deadend` or `roe`). The captain reviews tested / untested / skipped / newly appeared, then plans and acts again. Not inferred from Traffic or MITM. Origin/root may be marked without HTTP; child paths must already sit on the tree. Persists across park/Reset with the Case row.

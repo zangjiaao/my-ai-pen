@@ -1,5 +1,6 @@
 """Spec #311 — Case Workset projection, mechanical gate, Goal outer terminals."""
 from app.services.case_workset import (
+    apply_intake_enroll_to_context,
     apply_settle_to_context,
     auto_check_safe,
     adopt_item,
@@ -11,14 +12,19 @@ from app.services.case_workset import (
     detect_user_stopped_settle,
     evaluate_goal_terminal,
     expand_task_scope_for_host,
+    get_asset_intake,
     get_workset,
     goal_auto_adopt,
     goal_wants_session_free,
+    intake_enroll_eligible,
     mechanical_gate,
+    merge_proposed_into_context,
     merge_proposed_items,
+    normalize_asset_intake,
     normalize_candidate,
     order_workset_items,
     project_workset_for_api,
+    put_asset_intake,
     put_workset,
     reorder_items,
     scope_hosts_from_task,
@@ -880,3 +886,161 @@ def test_annotation_fields_from_context_session_graph():
     ann2 = annotation_fields_from_context(ctx2)
     assert ann2["work_mode"] == "free"
     assert ann2["graph_id"] is None
+
+
+def _passive_host(host: str, **extra):
+    payload = {
+        "host": host,
+        "in_scope": False,
+        "passive": True,
+        "intel_source": extra.get("intel_source", "ct"),
+        "attribution": extra.get("attribution", "crt.sh SAN"),
+        "confidence": extra.get("confidence", "high"),
+        "scope_decision": extra.get("scope_decision", "pending"),
+    }
+    return {
+        "family": "t_host",
+        "title": host,
+        "host": host,
+        "in_scope": False,
+        "passive": True,
+        **payload,
+    }
+
+
+def test_intake_default_is_ask():
+    assert normalize_asset_intake(None)["mode"] == "ask"
+    assert get_asset_intake({})["mode"] == "ask"
+    ctx = put_asset_intake({}, {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"})
+    got = get_asset_intake(ctx)
+    assert got["mode"] == "enroll_group"
+    assert got["group_id"] == "g1"
+    assert got["group_name"] == "example公司"
+
+
+def test_intake_enroll_group_requires_group():
+    bad = normalize_asset_intake({"mode": "enroll_group"})
+    assert bad["mode"] == "ask"
+    ok = normalize_asset_intake({"mode": "enroll_group", "group_name": "example公司"})
+    assert ok["mode"] == "enroll_group"
+    assert ok["group_name"] == "example公司"
+
+
+def test_intake_eligible_skips_low_oos_surface():
+    policy = normalize_asset_intake({"mode": "enroll_group", "group_id": "g1"})
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    item = ws["items"][0]
+    assert intake_enroll_eligible(item, policy) is True
+    item["payload"]["confidence"] = "low"
+    assert intake_enroll_eligible(item, policy) is False
+    item["payload"]["confidence"] = "high"
+    item["payload"]["scope_decision"] = "out_of_scope"
+    assert intake_enroll_eligible(item, policy) is False
+    surface = {
+        "family": "t_surface",
+        "status": "proposed",
+        "title": "/admin",
+        "payload": {"location": "http://target.local/admin", "host": "target.local", "in_scope": True},
+    }
+    assert intake_enroll_eligible(surface, policy) is False
+    assert intake_enroll_eligible(item, {"mode": "ask"}) is False
+
+
+def test_intake_enroll_adopts_t_host_and_expands_scope():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("mail.example.com", confidence="high", scope_decision="in_scope")],
+        source="workset_propose",
+    )
+    ws = get_workset(ctx)
+    assert len(ws["items"]) == 1
+    assert ws["items"][0]["status"] == "adopted"
+    assert ws["items"][0]["status_actor"] == "intake_policy"
+    hosts = scope_hosts_from_task(ctx["task"])
+    assert "mail.example.com" in hosts
+
+
+def test_intake_ask_leaves_passive_proposed():
+    ctx = merge_proposed_into_context(
+        {"task": _task()},
+        [_passive_host("mail.example.com")],
+        source="workset_propose",
+    )
+    ws = get_workset(ctx)
+    assert ws["items"][0]["status"] == "proposed"
+
+
+def test_intake_skips_low_confidence_and_oos():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [
+            _passive_host("low.example.com", confidence="low"),
+            _passive_host("cdn.cloudflare.com", scope_decision="out_of_scope", confidence="high"),
+            _passive_host("vpn.example.com", confidence="medium", scope_decision="pending"),
+        ],
+        source="workset_propose",
+    )
+    by_host = {i["payload"]["host"]: i for i in get_workset(ctx)["items"]}
+    assert by_host["low.example.com"]["status"] == "proposed"
+    assert by_host["cdn.cloudflare.com"]["status"] == "proposed"
+    assert by_host["vpn.example.com"]["status"] == "adopted"
+    assert "vpn.example.com" in scope_hosts_from_task(ctx["task"])
+    assert "low.example.com" not in scope_hosts_from_task(ctx["task"])
+
+
+def test_goal_still_never_auto_adopts_t_host_when_intake_is_ask():
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    ws2, adopted = goal_auto_adopt(ws, scope_hosts=SCOPE, goal_on=True)
+    assert adopted == []
+    assert ws2["items"][0]["status"] == "proposed"
+
+
+def test_agent_still_cannot_self_adopt_intake_items():
+    ctx = put_asset_intake({"task": _task()}, {"mode": "ask"})
+    ctx = merge_proposed_into_context(ctx, [_passive_host("mail.example.com")], source="workset_propose")
+    iid = get_workset(ctx)["items"][0]["id"]
+    _, _, err = adopt_item(get_workset(ctx), iid, actor="agent")
+    assert err == "agent_cannot_self_adopt"
+
+
+def test_apply_intake_enroll_is_idempotent():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(ctx, [_passive_host("mail.example.com")], source="workset_propose")
+    ctx2, enrolled = apply_intake_enroll_to_context(ctx)
+    assert enrolled == []
+    assert get_workset(ctx2)["items"][0]["status"] == "adopted"
+
+
+def test_settle_respects_intake_policy():
+    ctx = put_asset_intake({"task": _task()}, {"mode": "enroll_group", "group_id": "g1"})
+    ctx = apply_settle_to_context(
+        ctx,
+        candidates=[_passive_host("api.example.com", confidence="high")],
+        source="free_settle",
+        goal_on=False,
+    )
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "adopted"
+    assert item["status_actor"] == "intake_policy"
+    assert "api.example.com" in scope_hosts_from_task(ctx["task"])

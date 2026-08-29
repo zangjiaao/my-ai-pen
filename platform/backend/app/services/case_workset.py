@@ -1,11 +1,12 @@
 """Case Workset («下一步») — durable multi-discovery parking lot (Spec #311).
 
 Host-gated store on conversation.context["workset"]. Agent may propose only;
-adopt is user or Goal mechanical valve. Never silent Scope/RoE expand.
+adopt is user, Goal mechanical valve (in-scope t_surface), or Case asset-intake
+policy (user-delegated enroll_group). Never silent Scope/RoE expand.
 
 Families V1:
   t_surface — in-Scope deepen (adopt ≠ expand rights)
-  t_host    — new host; human confirm expands Scope
+  t_host    — new host; human confirm or Case enroll_group policy expands Scope
 
 Statuses: proposed | adopted | done | rejected
 """
@@ -78,6 +79,120 @@ def put_workset(context: dict | None, workset: dict[str, Any]) -> dict[str, Any]
         "goal": dict(workset["goal"]) if isinstance(workset.get("goal"), dict) else None,
     }
     return ctx
+
+
+INTAKE_KEY = "asset_intake"
+INTAKE_MODES = frozenset({"ask", "enroll_group"})
+ADOPT_ACTORS = frozenset({"user", "goal_mechanical", "system", "intake_policy"})
+
+
+def normalize_asset_intake(raw: object) -> dict[str, Any]:
+    """Case user policy for discovery → Owner Host.
+
+    Default ``ask``: Workset stays pending until user (or Goal t_surface valve) adopts.
+    ``enroll_group``: eligible t_host rows enroll into the named Group and this Case Scope.
+    Platform does not infer the mode from free-text; Agent/UI writes this structured field.
+    """
+    src = raw if isinstance(raw, dict) else {}
+    mode = str(src.get("mode") or "ask").strip().lower()
+    if mode not in INTAKE_MODES:
+        mode = "ask"
+    group_id = str(src.get("group_id") or "").strip()
+    group_name = str(src.get("group_name") or src.get("group") or "").strip()
+    if mode == "enroll_group" and not group_id and not group_name:
+        mode = "ask"
+    into_scope = src.get("into_scope")
+    if into_scope is None:
+        into_scope = True
+    return {
+        "mode": mode,
+        "group_id": group_id or None,
+        "group_name": group_name or None,
+        "into_scope": bool(into_scope),
+        "set_by": str(src.get("set_by") or "").strip()[:40] or None,
+        "updated_at": str(src.get("updated_at") or "").strip() or None,
+    }
+
+
+def get_asset_intake(context: object) -> dict[str, Any]:
+    ctx = context if isinstance(context, dict) else {}
+    return normalize_asset_intake(ctx.get(INTAKE_KEY))
+
+
+def put_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    normalized = normalize_asset_intake(policy)
+    if not normalized.get("updated_at"):
+        normalized["updated_at"] = _now_iso()
+    ctx[INTAKE_KEY] = normalized
+    return ctx
+
+
+def intake_enroll_eligible(item: dict[str, Any], policy: object) -> bool:
+    """Eligible t_host for Case enroll_group policy. Exceptions stay proposed."""
+    pol = normalize_asset_intake(policy)
+    if pol["mode"] != "enroll_group":
+        return False
+    if not pol.get("group_id") and not pol.get("group_name"):
+        return False
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("status") or "proposed") != "proposed":
+        return False
+    if str(item.get("family") or "") != "t_host":
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    host = _host_from_payload(payload, "t_host") or str(payload.get("host") or "").strip().lower()
+    if not host or not is_valid_ledger_address(host):
+        return False
+    decision = str(payload.get("scope_decision") or "").strip().lower()
+    if decision in {"out_of_scope", "needs_authorization"}:
+        return False
+    confidence = str(payload.get("confidence") or "").strip().lower()
+    if confidence == "low":
+        return False
+    return True
+
+
+def apply_intake_enroll_to_context(
+    context: dict | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply enroll_group policy: adopt eligible t_host and expand this Case Scope.
+
+    Does not write Owner Host rows — persist layer materializes into the Group.
+    """
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    policy = get_asset_intake(ctx)
+    if policy["mode"] != "enroll_group":
+        return ctx, []
+    ws = get_workset(ctx)
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    enrolled: list[dict[str, Any]] = []
+    for item in list(ws.get("items") or []):
+        if not isinstance(item, dict):
+            continue
+        if not intake_enroll_eligible(item, policy):
+            continue
+        expand_fields = host_expand_fields_from_item(item)
+        if policy.get("into_scope") is not False and expand_fields:
+            expanded, expand_err = expand_task_scope_for_host(
+                task,
+                host=expand_fields["host"],
+                port=expand_fields.get("port"),
+                urls=expand_fields.get("urls"),
+            )
+            if expand_err:
+                continue
+            task = expanded
+        ws2, found, err = adopt_item(ws, str(item.get("id")), actor="intake_policy")
+        if err or not found:
+            continue
+        ws = ws2
+        enrolled.append(dict(found))
+    if enrolled:
+        ctx["task"] = task
+        ctx = put_workset(ctx, ws)
+    return ctx, enrolled
 
 
 def scope_hosts_from_task(task: object) -> set[str]:
@@ -471,11 +586,11 @@ def update_item_status(
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
     """Host-gated status transition. Returns (workset, item, error).
 
-    Agent cannot self-approve adopted — actor must be user|goal_mechanical|system.
+    Agent cannot self-approve adopted — actor must be user|goal_mechanical|system|intake_policy.
     """
     if status not in STATUSES:
         return workset, None, "invalid_status"
-    if status == "adopted" and actor not in {"user", "goal_mechanical", "system"}:
+    if status == "adopted" and actor not in ADOPT_ACTORS:
         return workset, None, "agent_cannot_self_adopt"
     ws = {
         "version": int(workset.get("version") or 1),
@@ -508,7 +623,7 @@ def adopt_item(
     require_auto_eligible: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
     """Adopt a proposed item with optional mechanical gate for Goal."""
-    if actor not in {"user", "goal_mechanical", "system"}:
+    if actor not in ADOPT_ACTORS:
         return workset, None, "agent_cannot_self_adopt"
     items = workset.get("items") if isinstance(workset.get("items"), list) else []
     target = next((i for i in items if isinstance(i, dict) and str(i.get("id")) == item_id), None)
@@ -1155,7 +1270,8 @@ def list_workset_for_agent(
         "cap": cap_n,
         "note": (
             "Case Workset is pending admission — not Host, not Surface coverage, not Intel. "
-            "Adopt is a user action. Parked hosts must not be probed or hung as Intel until adopt."
+            "Adopt is a user action unless Case asset-intake enroll_group applies. "
+            "Parked hosts must not be probed or hung as Intel until adopt or enroll."
         ),
     }
 
@@ -1172,7 +1288,9 @@ def merge_proposed_into_context(
     scope_hosts = scope_hosts_from_task(task)
     ws = get_workset(ctx)
     ws = merge_proposed_items(ws, candidates, source=source, scope_hosts=scope_hosts)
-    return put_workset(ctx, ws)
+    ctx = put_workset(ctx, ws)
+    ctx, _enrolled = apply_intake_enroll_to_context(ctx)
+    return ctx
 
 
 def thin_handoff_brief(
@@ -1254,6 +1372,12 @@ def apply_settle_to_context(
     # Settle always clears in-progress baton annotation (baton ends with this burst).
     ws = clear_in_progress(ws)
 
+    ctx = put_workset(ctx, ws)
+    ctx, _enrolled = apply_intake_enroll_to_context(ctx)
+    ws = get_workset(ctx)
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
+
     stop_goal = bool(user_stopped or goal_explicit_off)
 
     # Goal state init / keep
@@ -1326,3 +1450,55 @@ def apply_settle_to_context(
     ctx.pop("attack_surface_candidates", None)
     ctx.pop("next_scope_suggested", None)
     return ctx
+
+
+async def materialize_intake_hosts(
+    db: Any,
+    *,
+    user_id: Any,
+    conversation_id: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Create Owner Hosts in the intake Group for rows adopted by intake_policy."""
+    policy = get_asset_intake(context)
+    if policy["mode"] != "enroll_group":
+        return context
+    ws = get_workset(context)
+    changed = False
+    from app.services.node_ledger import NodeLedgerError, create_hosts_for_user
+
+    for item in ws.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") != "adopted":
+            continue
+        if str(item.get("status_actor") or "") != "intake_policy":
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if payload.get("intake_materialized"):
+            continue
+        fields = host_expand_fields_from_item(item)
+        if not fields:
+            continue
+        try:
+            await create_hosts_for_user(
+                db,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                address=fields["host"],
+                ports=[fields["port"]] if fields.get("port") else None,
+                reason="Case asset-intake policy (user-delegated enroll_group)",
+                group_id=policy.get("group_id"),
+                group_name=policy.get("group_name"),
+            )
+        except NodeLedgerError as e:
+            print(f"[intake] materialize skip {fields.get('host')}: {e}")
+            continue
+        except Exception as e:
+            print(f"[intake] materialize error {fields.get('host')}: {e}")
+            continue
+        item["payload"] = {**payload, "intake_materialized": True}
+        changed = True
+    if changed:
+        context = put_workset(context, ws)
+    return context

@@ -106,7 +106,7 @@ Case is **never** the hang. Group hang is **not v1**.
 |----------------------|------|
 | Whole machine (OS, default creds, WAF, cert) | **Host** |
 | One port / site | **Service** (existing Host+port) |
-| No Host yet | Park the name on Case **Workset** (`workset(propose)`). Inventory / scope first (`create_asset` only when the user asked, or authorize / Workset adopt). **Do not invent a Host to hang intel.** |
+| No Host yet | Park the name on Case **Workset** (`workset(propose)`). Inventory / scope first (`create_asset` only when the user asked, authorize / Workset adopt, or Case enroll_group intake). **Do not invent a Host to hang intel.** |
 | Unsure | **Host** (coarse beats wrong port) |
 
 ---

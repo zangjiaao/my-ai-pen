@@ -488,6 +488,11 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         ),
         # Spec #311: Case Workset («下一步») — durable multi-discovery parking lot
         "workset": _workset_projection(context),
+        "asset_intake": (
+            context.get("asset_intake")
+            if isinstance(context.get("asset_intake"), dict)
+            else {"mode": "ask"}
+        ),
         "goal_outer": (
             context.get("goal_outer")
             if isinstance(context.get("goal_outer"), dict)

@@ -99,6 +99,13 @@ const onlyNext = parseCaseContext({
 });
 assert.ok(onlyNext);
 assert.equal(onlyNext!.next_work!.workset_open?.[0]?.id, "x");
+const intakeOnly = parseCaseContext({
+  next_work: { asset_intake: { mode: "enroll_group", group_name: "example公司" } },
+});
+assert.ok(intakeOnly);
+assert.equal(intakeOnly!.next_work!.asset_intake?.mode, "enroll_group");
+assert.match(formatCaseContextInjection(intakeOnly), /enroll_group/);
+assert.match(formatCaseContextInjection(intakeOnly), /example公司/);
 // scope_intel alone is enough to parse
 const onlyIntel = parseCaseContext({
   scope_intel: { hosts: [{ address: "lab.local", on_ledger: true }] },

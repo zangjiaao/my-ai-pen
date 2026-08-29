@@ -155,4 +155,19 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   assert.match(listText, /from-case|parked\.lab/);
 }
 
+{
+  const { runtime } = makeRuntime();
+  const tool = createWorksetTool(runtime);
+  const missing = await tool.execute!("s1", { op: "set_intake", mode: "enroll_group" });
+  const missingText = (missing as any).content?.[0]?.text || JSON.stringify(missing);
+  assert.match(missingText, /group_id or group_name/);
+  const noApi = await tool.execute!("s2", {
+    op: "set_intake",
+    mode: "enroll_group",
+    group_name: "example公司",
+  });
+  const noApiText = (noApi as any).content?.[0]?.text || JSON.stringify(noApi);
+  assert.match(noApiText, /asset-intake persist failed|ok":\s*false/);
+}
+
 console.log("workset.test.ts: ok");

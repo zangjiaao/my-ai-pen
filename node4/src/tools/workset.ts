@@ -224,10 +224,11 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
     label: "Workset",
     description: [
       "Park pending-admission candidates on Case Workset. Not a Host, not Surface coverage, not Intel.",
-      "Ops: propose | list | get.",
+      "Ops: propose | list | get | set_intake.",
       "list/get read Case Workset SoT (filtered, capped) — not this-burst stash only.",
       "propose: host (or location URL), intel_source (ct|dns|shodan|fofa|ssl_history|other), attribution evidence, confidence (low|medium|high), scope_decision (pending|in_scope|out_of_scope|needs_authorization).",
-      "Do not http-probe, surface(mark), or create_asset until the user adopts. No Host means no Intel hang.",
+      "set_intake: when the user asked this Case's discoveries to go into a Group. mode=enroll_group needs group_id or group_name; mode=ask restores per-row adopt. Platform does not infer this from free text.",
+      "Default: do not http-probe, surface(mark), or create_asset until the user adopts or Case asset-intake enroll_group applies. No Host means no Intel hang.",
       "A missing optional intel source is not a failure — propose what the tools you have actually returned.",
     ].join(" "),
     parameters: Type.Object({
@@ -246,9 +247,51 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
       q: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Number()),
+      mode: Type.Optional(Type.String()),
+      group_id: Type.Optional(Type.String()),
+      group_name: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const op = String(params.op || "list").trim().toLowerCase();
+      if (op === "set_intake") {
+        const cid = String(runtime.task?.conversationId || "").trim();
+        if (!cid) {
+          return jsonResult({ ok: false, error: "conversation_id required" });
+        }
+        const mode = String(params.mode || "enroll_group").trim().toLowerCase() || "enroll_group";
+        const group_id = String(params.group_id || "").trim();
+        const group_name = String(params.group_name || "").trim();
+        if (mode === "enroll_group" && !group_id && !group_name) {
+          return jsonResult({ ok: false, error: "enroll_group requires group_id or group_name" });
+        }
+        const path = `/api/node/ledger/conversations/${encodeURIComponent(cid)}/asset-intake`;
+        const res = await platformLedgerFetch(runtime, "PUT", path, {
+          mode,
+          group_id: group_id || undefined,
+          group_name: group_name || undefined,
+        });
+        if (!res.ok) {
+          return jsonResult({
+            ok: false,
+            error: "asset-intake persist failed",
+            status: res.status,
+            data: res.data,
+          });
+        }
+        return jsonResult({
+          ok: true,
+          op: "set_intake",
+          asset_intake: (res.data as { asset_intake?: unknown })?.asset_intake ?? {
+            mode,
+            group_id: group_id || undefined,
+            group_name: group_name || undefined,
+          },
+          guidance:
+            mode === "enroll_group"
+              ? "Case policy set. Eligible proposed t_host rows enroll into that Group and this Case Scope. Out-of-scope, low-confidence, and needs_authorization stay on Workset."
+              : "Case policy is ask. New hosts stay on Workset until the user adopts.",
+        });
+      }
       if (op === "list" || op === "get") {
         const filters = {
           family: String(params.family || "").trim() || undefined,
@@ -269,11 +312,11 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
           op,
           ...listed,
           note:
-            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Adopt is a user action.",
+            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Adopt is a user action unless Case asset-intake enroll_group applies.",
         });
       }
       if (op !== "propose") {
-        return textResult("error: op must be propose, list, or get");
+        return textResult("error: op must be propose, list, get, or set_intake");
       }
       const built = buildPassiveWorksetCandidate({
         host: String(params.host || ""),
@@ -310,7 +353,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
         op: "propose",
         item: built,
         guidance:
-          "Parked on Workset. Do not create_asset or active-test this host until the user adopts it.",
+          "Parked on Workset. Do not create_asset or active-test until the user adopts, unless Case asset-intake enroll_group already enrolled this host.",
       });
     },
   };
