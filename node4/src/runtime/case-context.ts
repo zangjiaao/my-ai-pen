@@ -47,6 +47,7 @@ export type CaseNextWorkItem = {
   family?: string;
   title?: string;
   status?: string;
+  host?: string;
   auto_eligible?: boolean;
   suggested_expert?: string;
 };
@@ -189,6 +190,7 @@ function parseNextWork(raw: unknown): CaseNextWork | undefined {
     if (r.family != null) item.family = String(r.family);
     if (r.title != null) item.title = String(r.title);
     if (r.status != null) item.status = String(r.status);
+    if (r.host != null) item.host = String(r.host);
     if (r.auto_eligible != null) item.auto_eligible = Boolean(r.auto_eligible);
     if (r.suggested_expert != null) item.suggested_expert = String(r.suggested_expert);
     workset_open.push(item);

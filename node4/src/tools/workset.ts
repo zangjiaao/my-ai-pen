@@ -32,11 +32,23 @@ export type WorksetListRow = {
 };
 
 export function worksetDedupeKey(row: WorksetListRow | WorksetCandidate): string {
+  const id = String((row as WorksetListRow).id || "").trim();
   const fam = String(row.family || "t_host");
   const host = String(row.host || "").trim().toLowerCase();
   const loc = String(row.location || "").trim().toLowerCase();
-  if (fam === "t_host") return `t_host:${host}`;
-  return `t_surface:${loc || host}`;
+  const title = String((row as WorksetListRow).title || "").trim().toLowerCase();
+  const synthetic = id.startsWith("t_host:") || id.startsWith("t_surface:");
+  if (id && !synthetic) return `id:${id}`;
+  if (fam === "t_host") return `t_host:${host || title || id}`;
+  return `t_surface:${loc || host || title || id}`;
+}
+
+function worksetAliasKeys(row: WorksetListRow | WorksetCandidate): string[] {
+  const keys = [worksetDedupeKey(row)];
+  const fam = String(row.family || "t_host");
+  const host = String(row.host || "").trim().toLowerCase();
+  if (fam !== "t_surface" && host) keys.push(`t_host:${host}`);
+  return keys;
 }
 
 export function mergeStashIntoCaseList(
@@ -47,9 +59,9 @@ export function mergeStashIntoCaseList(
   const seen = new Set<string>();
   for (const row of caseItems) {
     if (!row || typeof row !== "object") continue;
-    const key = worksetDedupeKey(row);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const keys = worksetAliasKeys(row);
+    if (keys.some((k) => seen.has(k))) continue;
+    for (const k of keys) seen.add(k);
     out.push(row);
   }
   for (const row of stash || []) {
@@ -58,6 +70,7 @@ export function mergeStashIntoCaseList(
         family: row.family,
         host: row.host,
         location: row.location,
+        title: row.title,
       }),
       family: row.family,
       title: row.title,
@@ -72,9 +85,9 @@ export function mergeStashIntoCaseList(
       source: row.source,
       status: "proposed",
     };
-    const key = worksetDedupeKey(mapped);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const aliases = worksetAliasKeys(mapped);
+    if (aliases.some((k) => seen.has(k))) continue;
+    for (const k of aliases) seen.add(k);
     out.push(mapped);
   }
   return out;

@@ -107,7 +107,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 - **Platform WS / conversation:** persist choice messages; accept user_decision for next_steps; project to FE; optional soft-gate inject on assign/continue.  
 - **Platform Case Workset:** remains inventory SoT; options may reference item ids; no requirement that UI list every item.  
 - **FE conversation:** unified ChoiceCard shell; authorize preset + next_steps multi-select; retire WorksetChoiceBar mount and right-panel Next; freeze card on free-text continue (parity with confirm answered).  
-- **case_context / Node parse:** carry next_work / choice-related thin refs so Agent can see open Workset when curating (fix earlier gap: platform `next_work` dropped by Node parse).
+- **case_context / Node parse:** carry next_work / choice-related thin refs (including Workset `id` + `host`) so Agent and PDCA overlay can see open Workset without collapsing host-blind `t_host` rows (fix earlier gap: platform `next_work` dropped by Node parse).
 
 ### Message / decision shape (normative intent)
 

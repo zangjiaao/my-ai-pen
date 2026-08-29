@@ -785,6 +785,7 @@ def test_thin_brief_not_fat_dump():
     brief = thin_handoff_brief(ws, boundary="graph_to_free")
     assert brief["boundary"] == "graph_to_free"
     assert brief["workset_open_count"] == 1
+    assert brief["workset_open"][0].get("host") == "target.local"
     assert "thread" not in brief
     assert "findings_summary" not in brief
 

@@ -127,6 +127,11 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   if ("error" in stashRow) throw new Error(stashRow.error);
   const merged = mergeStashIntoCaseList(caseItems, [stashRow]);
   assert.equal(merged.length, 1, "same host does not double-park");
+  const thinCase = [
+    { id: "ws-a", family: "t_host" as const, status: "adopted", title: "a.example.com" },
+    { id: "ws-b", family: "t_host" as const, status: "proposed", title: "b.example.com" },
+  ];
+  assert.equal(mergeStashIntoCaseList(thinCase, []).length, 2);
   const extra = buildPassiveWorksetCandidate({
     host: "mail.example.com",
     intel_source: "dns",

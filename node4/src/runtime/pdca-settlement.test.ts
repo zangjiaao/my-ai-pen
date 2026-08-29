@@ -16,6 +16,7 @@ import {
   pdcaSettleEnabled,
   projectLiveStateOverlay,
   projectOverlayFromRuntime,
+  worksetOpenForPdcaOverlay,
   settleParticipantTurn,
   type LiveStateOverlay,
 } from "./pdca-settlement.js";
@@ -426,6 +427,21 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   const snap = await projectOverlayFromRuntime(runtime);
   assert.equal(snap.admission.length, 1);
   assert.match(snap.admission[0]!.id, /cdn\.example\.com/);
+  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
+}
+
+{
+  const merged = worksetOpenForPdcaOverlay(
+    [
+      { id: "ws-adopted", family: "t_host", title: "a.example.com", status: "adopted" },
+      { id: "ws-open", family: "t_host", title: "b.example.com", status: "proposed" },
+    ],
+    undefined,
+  );
+  assert.equal(merged.length, 2, "thin Case refs without host must not collapse to one t_host:");
+  const snap = projectLiveStateOverlay({ worksetOpen: merged });
+  assert.equal(snap.admission.length, 1);
+  assert.equal(snap.admission[0]!.id, "ws-open");
   assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
 }
 

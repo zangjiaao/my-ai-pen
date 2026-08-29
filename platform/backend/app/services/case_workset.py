@@ -1285,11 +1285,20 @@ def thin_handoff_brief(
     open_items = proj.get("items") or []
     slim = []
     for item in open_items[:max_items]:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        family = str(item.get("family") or "")
+        host = (
+            item.get("host")
+            or payload.get("host")
+            or _host_from_payload(payload, family)
+            or None
+        )
         slim.append({
             "id": item.get("id"),
             "family": item.get("family"),
             "title": item.get("title"),
             "status": item.get("status"),
+            "host": host,
             "auto_eligible": bool(item.get("auto_eligible")),
             "suggested_expert": item.get("suggested_expert"),
         })

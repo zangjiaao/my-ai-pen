@@ -99,6 +99,10 @@ const onlyNext = parseCaseContext({
 });
 assert.ok(onlyNext);
 assert.equal(onlyNext!.next_work!.workset_open?.[0]?.id, "x");
+const withHost = parseCaseContext({
+  next_work: { workset_open: [{ id: "x", family: "t_host", host: "a.example.com" }] },
+});
+assert.equal(withHost!.next_work!.workset_open?.[0]?.host, "a.example.com");
 const intakeOnly = parseCaseContext({
   next_work: { asset_intake: { mode: "enroll_group", group_name: "example公司" } },
 });
