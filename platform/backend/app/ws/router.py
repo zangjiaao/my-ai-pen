@@ -1338,6 +1338,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             )
         return
 
+    if conv_id and str(msg.get("type") or "") == "request_decision":
+        await _stamp_owned_host_labels_on_decision(msg, conv_id)
+
     if conv_id:
         msg["agent_node_id"] = client_id
         sticky_eng = await _conversation_task_engagement(conv_id)
@@ -2872,6 +2875,10 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             for key in ("handoff_pack_id", "handoff_expert_id", "handoff_expert_name", "pack_id"):
                 if msg.get(key) is not None and str(msg.get(key) or "").strip():
                     content[key] = str(msg.get(key)).strip()
+            if isinstance(msg.get("asset_ids"), list) and msg.get("asset_ids"):
+                content["asset_ids"] = [str(x) for x in msg["asset_ids"] if str(x or "").strip()]
+            if isinstance(msg.get("host_labels"), list) and msg.get("host_labels"):
+                content["host_labels"] = [str(x) for x in msg["host_labels"] if str(x or "").strip()]
         elif msg_type == "completion_blocked":
             msg_type = "status"
             content = {
@@ -4256,6 +4263,55 @@ def _request_decision_asset_ids(msg: dict | None) -> list[str]:
     from app.services.choice_card import parse_card_asset_ids
 
     return parse_card_asset_ids(msg if isinstance(msg, dict) else None)
+
+
+async def _stamp_owned_host_labels_on_decision(msg: dict, conv_id: str) -> None:
+    """Show the Hosts that authorize will Scope — drop ids this owner does not have."""
+    from app.services.choice_card import filter_owned_card_hosts, parse_card_asset_ids
+
+    raw_ids = parse_card_asset_ids(msg)
+    if not raw_ids:
+        return
+    owner_id, _ = await _conversation_owner(conv_id)
+    if not owner_id:
+        msg["asset_ids"] = []
+        msg["host_labels"] = []
+        return
+    ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in raw_ids:
+        try:
+            guid = uuid.UUID(str(raw))
+        except ValueError:
+            continue
+        if guid in seen:
+            continue
+        seen.add(guid)
+        ids.append(guid)
+    if not ids:
+        msg["asset_ids"] = []
+        msg["host_labels"] = []
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.asset import Asset
+
+        async with async_session() as db:
+            rows = list(
+                (
+                    await db.execute(
+                        select(Asset).where(Asset.user_id == owner_id, Asset.id.in_(ids))
+                    )
+                ).scalars().all()
+            )
+        owned = {str(a.id): str(a.address or a.name or a.id) for a in rows}
+        kept_ids, labels = filter_owned_card_hosts(raw_ids, owned)
+        msg["asset_ids"] = kept_ids
+        msg["host_labels"] = labels
+    except Exception as e:
+        print(f"[WS] stamp host_labels error: {e}")
+        msg["asset_ids"] = []
+        msg["host_labels"] = []
 
 
 async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]) -> None:
@@ -5877,7 +5933,7 @@ async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None 
         from app.services.case_workset import (
             get_asset_intake,
             get_workset,
-            materialize_intake_hosts,
+            materialize_user_committed_intake,
             merge_proposed_into_context,
             project_workset_for_api,
         )
@@ -5897,7 +5953,7 @@ async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None 
                 [row for row in cands if isinstance(row, dict)],
                 source=source,
             )
-            context = await materialize_intake_hosts(
+            context = await materialize_user_committed_intake(
                 db,
                 user_id=c.user_id,
                 conversation_id=str(c.id),
@@ -6042,9 +6098,9 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 except Exception as fe:
                     print(f"[WS] goal free session land error: {fe}")
 
-            from app.services.case_workset import materialize_intake_hosts
+            from app.services.case_workset import materialize_user_committed_intake
 
-            context = await materialize_intake_hosts(
+            context = await materialize_user_committed_intake(
                 db,
                 user_id=c.user_id,
                 conversation_id=str(c.id),

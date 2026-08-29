@@ -430,9 +430,10 @@ async def conversation_asset_intake_node(
     db: AsyncSession = Depends(get_db),
     node: Node = Depends(get_node_from_token),
 ):
-    """Case user policy: enroll discoveries into a Group, or revert to ask.
+    """Record Case intake policy. Does not create Hosts or expand Scope.
 
-    Agent writes this when the user asked. Platform does not infer from free text.
+    Agent writes this when the user asked. Hosts enroll after the owner confirms
+    (user PUT / Workset adopt). Platform does not infer from free text.
     """
     try:
         cid = uuid.UUID(conversation_id)
@@ -453,7 +454,6 @@ async def conversation_asset_intake_node(
         raise HTTPException(400, "enroll_group requires group_id or group_name")
     from app.services.case_workset import (
         get_asset_intake,
-        materialize_intake_hosts,
         put_asset_intake,
     )
 
@@ -475,12 +475,6 @@ async def conversation_asset_intake_node(
             "group_name": group_name or None,
             "set_by": "agent",
         },
-    )
-    ctx = await materialize_intake_hosts(
-        db,
-        user_id=conv.user_id,
-        conversation_id=str(conv.id),
-        context=ctx,
     )
     conv.context = ctx
     await db.commit()

@@ -258,9 +258,15 @@ export function resolveChoicePresentation(
 
 function projectedAuthorizeQuestion(content: ChoiceCardPayload): WizardQuestion {
   const kind = nonEmptyString(content.kind).toLowerCase();
-  const prompt =
+  const base =
     nonEmptyString(content.question) ||
     (kind === "handoff" ? "需要授权移交" : "需要授权");
+  const labels = Array.isArray(content.host_labels)
+    ? content.host_labels.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  const prompt = labels.length
+    ? `${base}\n将纳入本 Case Scope：\n${labels.map((h) => `- ${h}`).join("\n")}`
+    : base;
   return {
     id: PROJECTED_AUTHORIZE_QUESTION_ID,
     prompt,

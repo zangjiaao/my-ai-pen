@@ -74,13 +74,13 @@ Do **not** auto-merge a vhost into an IP Host. Do **not** invent a Service clust
 
 | # | Lock |
 |---|------|
-| **Host** | User create / authorize-register / promote, **or Agent `platform_create_asset` when the user explicitly asked** (reason required; CIDR ≤256/call), **or Case asset-intake `enroll_group`** (user-asked policy; harness creates into that Group). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `platform_enrich_asset` / **`platform_batch_enrich_assets`**. Never invent Hosts from recon alone. `platform_assemble_group` ports = Group **view subset** only. |
+| **Host** | User create / authorize-register / promote, **or Agent `platform_create_asset` when the user explicitly asked** (reason required; CIDR ≤256/call), **or Case asset-intake `enroll_group` after the owner confirms** (user PUT / Workset adopt; Agent `set_intake` only records policy). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `platform_enrich_asset` / **`platform_batch_enrich_assets`**. Never invent Hosts from recon alone. `platform_assemble_group` ports = Group **view subset** only. |
 | **Service row** | User adds a port on a Host, **or** book / accepted HTTP(S) settle names that `host:port` on an existing Host. nmap-sized dumps do not become Service rows. |
 | **Group** | User create / rename / delete. Agent does **not** create Groups. |
 | **Assembly** | User puts a Host into a Group and picks which Services belong there. Adding a Host to a Group does **not** imply every port. Removing the last Service from an assembly leaves a bare Host in the Group or removes the Host from the Group (UI: user chooses). |
 | **Tags** | User (and Agent, non-`sys`) on Host or Service. Editing a tag does **not** create or extend a Group. |
 | **Path onto Service 攻击面** | Book or accepted HTTP(S) settle only. Wave 2 — do not block Wave 1 tree on path persist. |
-| **Scope** | Still **host-based**. Assembly / Group membership does **not** auto-expand `scope.allow` for *other* members. User-authorized Host **ids** (decision card, 资产页开测, Workset adopt, or this-Case enroll_group of *that* discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
+| **Scope** | Still **host-based**. Assembly / Group membership does **not** auto-expand `scope.allow` for *other* members. User-authorized Host **ids** (decision card, 资产页开测, Workset adopt, or owner-confirmed this-Case enroll_group of *that* discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
 
 ### Reads / search
 
@@ -160,7 +160,7 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | **S2 Service** | Same host+port merges; different ports distinct; two ports keep separate tags. Scan-sized enrich does not admit. |
 | **S3 Assembly** | Group1+Host1+{80,443} and Group2+Host1+{8080} coexist; opening Group2 does not show :80/:443. |
 | **S4 Tags** | Host tag + Service tag AND filter matches sample (部门1 ∧ 系统2 → Host + :443 only). Tag write does not create a Group. |
-| **S5 Scope** | Assembling a Group does not add members to `scope.allow`. User-authorized Host **ids** (decision card `asset_ids` / `options.asset_id`, 资产页开测, Workset adopt, or Case enroll_group of that discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
+| **S5 Scope** | Assembling a Group does not add members to `scope.allow`. User-authorized Host **ids** (decision card `asset_ids` / `options.asset_id`, 资产页开测, Workset adopt, or owner-confirmed Case enroll_group of that discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
 | **S6 Surface isolation** | Inventory writes do not mark Case Surface TESTED. Wave 2 path admit does not rewrite #368/#410 rows. |
 | **S7 Dual-read** | Until Service rows exist, `properties.services` + Host tags still list. No silent loss. |
 
@@ -211,3 +211,4 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-28 | Identity lookup: unique / none / **ambiguous (2+)** → `request_user_decision`; never first-match. |
 | 2026-08-28 | Pentest Hard Graph `tools.allow` lists inventory reads (`platform_list_assets` / `get_asset` / `list_groups`); runner does not special-case them. |
 | 2026-08-29 | Case asset-intake `enroll_group`: user-asked Group policy may enroll eligible Workset `t_host` into that Group + this Case Scope; Group assembly still does not pull other members into Scope. |
+| 2026-08-30 | Agent `set_intake` records enroll_group only (`set_by=agent`). Host create + Scope expand wait for owner confirm (user PUT / adopt) or later propose/settle when `set_by=user`. Authorize cards show owned Host addresses. |

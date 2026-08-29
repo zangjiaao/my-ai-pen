@@ -33,7 +33,7 @@ The product Node (**Node4 lineage / Graph × Pi**) runs **Expert packs** (one ca
 - After a stage L0 pass, Node prompts the run’s **one Feedback Agent** (same pi session + panel row; not configured per-stage in the JSON). It judges refine vs pass and whether to open **this hop’s** next stage. Captains do not self-vote stage-advance. Graph **Main** is also one pi session for the run (next stage = next turn, tools rebound); **Workers** may mint a new session per package.
 - **default** = full citizen (R/W ledger, reports, handoff orchestration).
 - **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
-- Host **create** is never a free agent tool from recon — user asset page, open-task Authorize, next-scope / promote, Workset **adopt**, or this Case **asset-intake `enroll_group`** (user asked discoveries into a Group; harness enrolls eligible `t_host`). Passive exposure (CT/DNS/Shodan-class) parks on Workset until adopt or that policy.
+- Host **create** is never a free agent tool from recon — user asset page, open-task Authorize, next-scope / promote, Workset **adopt**, or this Case **asset-intake `enroll_group` after the owner confirms** (Agent `set_intake` only records policy). Passive exposure (CT/DNS/Shodan-class) parks on Workset until adopt or that confirmed policy.
 
 1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking.
 2. **Catalog** — this tree (source of **expert** pack content; not auto-loaded).

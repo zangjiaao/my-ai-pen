@@ -375,7 +375,7 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("workset")) {
     runtimeParts.push(
-      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped). set_intake records a user-asked Group enroll policy. Not Host or Surface until the user adopts or enroll_group applies. No Host means no Intel hang. A missing optional intel source is not a failure.",
+      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped). set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake or adopts. No Host means no Intel hang. A missing optional intel source is not a failure.",
     );
   }
   if (pack.recipeDir) {

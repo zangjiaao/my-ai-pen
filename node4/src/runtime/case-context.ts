@@ -61,6 +61,7 @@ export type CaseNextWork = {
     mode?: string;
     group_id?: string | null;
     group_name?: string | null;
+    set_by?: string | null;
   };
   goal?: {
     status?: string;
@@ -211,6 +212,7 @@ function parseNextWork(raw: unknown): CaseNextWork | undefined {
       mode: a.mode != null ? String(a.mode) : undefined,
       group_id: a.group_id != null ? String(a.group_id) : null,
       group_name: a.group_name != null ? String(a.group_name) : null,
+      set_by: a.set_by != null ? String(a.set_by) : null,
     };
   }
   if (o.goal && typeof o.goal === "object" && !Array.isArray(o.goal)) {
@@ -467,17 +469,20 @@ export function formatCaseContextInjection(
         nextWork.asset_intake?.group_name ||
         nextWork.asset_intake?.group_id ||
         "named Group";
+      const userCommitted = String(nextWork.asset_intake?.set_by || "") === "user";
       lines.push(
-        `Asset-intake policy: enroll_group → ${g}. Eligible new hosts enroll into that Group and this Case Scope. Out-of-scope / low-confidence / needs_authorization stay parked.`,
+        userCommitted
+          ? `Asset-intake policy: enroll_group → ${g} (user-confirmed). Eligible new hosts enroll into that Group and this Case Scope. Out-of-scope / low-confidence / needs_authorization stay parked.`
+          : `Asset-intake policy recorded: enroll_group → ${g}. Not user-confirmed yet — keep hosts on Workset. User confirm or adopt enrolls.`,
       );
     }
     lines.push(
       `Open Workset items: ${count} (refs only — inventory SoT, not a user choice UI).`,
     );
     lines.push(
-      intakeOn
+      intakeOn && String(nextWork.asset_intake?.set_by || "") === "user"
         ? "Parked rows are exceptions. Enrolled hosts are Owner Hosts — Intel may hang. Do not probe out-of-scope names."
-        : "Parked hosts are not Case Surface coverage and are not Owner Hosts. No Host means no Intel hang. Do not probe until the user adopts.",
+        : "Parked hosts are not Case Surface coverage and are not Owner Hosts. No Host means no Intel hang. Do not probe until the user adopts or confirms Case intake.",
     );
     lines.push(
       "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body; optional workset_item_ids). Do not only say 等待指示 or free-text A/B/C/D.",

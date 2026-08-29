@@ -65,6 +65,40 @@ def parse_card_asset_ids(card: dict | None) -> list[str]:
     return out
 
 
+def filter_owned_card_hosts(
+    asset_ids: list[str] | None,
+    owned: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Keep request-order ids that exist in owned (id → visible label)."""
+    ids_out: list[str] = []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for raw in asset_ids or []:
+        aid = str(raw or "").strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        label = owned.get(aid)
+        if not label:
+            continue
+        ids_out.append(aid)
+        labels.append(str(label))
+    return ids_out, labels
+
+
+def host_scope_prompt_suffix(value: dict | None) -> str:
+    """Visible Hosts that authorize will put into this Case Scope."""
+    if not isinstance(value, dict):
+        return ""
+    raw = value.get("host_labels")
+    if not isinstance(raw, list):
+        return ""
+    labels = [_s(x) for x in raw if _s(x)]
+    if not labels:
+        return ""
+    return "\n将纳入本 Case Scope：\n" + "\n".join(f"- {h}" for h in labels)
+
+
 def is_next_steps_choice(content: dict | None) -> bool:
     if not isinstance(content, dict):
         return False
@@ -256,6 +290,7 @@ def _projected_authorize_question(value: dict[str, Any]) -> dict[str, Any]:
     prompt = _s(value.get("question")) or (
         "需要授权移交" if kind == "handoff" else "需要授权"
     )
+    prompt = prompt + host_scope_prompt_suffix(value)
     return {
         "id": PROJECTED_AUTHORIZE_QUESTION_ID,
         "prompt": prompt,

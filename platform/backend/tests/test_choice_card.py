@@ -10,6 +10,7 @@ from app.services.choice_card import (
     build_confirm_options_text,
     collect_authorized_asset_ids,
     expand_selected_options,
+    filter_owned_card_hosts,
     format_selected_summary,
     merge_authorized_host_scope,
     sync_task_asset_id_from_scope,
@@ -47,6 +48,21 @@ def test_s1_authorize_without_options():
     assert map_authorize_decision(["authorize"]) == "authorize"
     assert map_authorize_decision(["cancel"]) == "cancel"
     assert map_authorize_decision([], "同意，限制在 lab") == "authorize"
+    host_q = parse_wizard_questions(
+        {
+            "kind": "confirm",
+            "question": "这 2 台要开测吗",
+            "host_labels": ["app.example.com", "10.0.0.2"],
+        }
+    )
+    assert "将纳入本 Case Scope" in host_q[0]["prompt"]
+    assert "app.example.com" in host_q[0]["prompt"]
+    ids, labels = filter_owned_card_hosts(
+        ["keep", "skip", "keep"],
+        {"keep": "app.example.com"},
+    )
+    assert ids == ["keep"]
+    assert labels == ["app.example.com"]
     reduced = reduce_choice_decision(
         {"kind": "confirm", "question": "Authorize?"},
         custom_text="同意，限制在 lab",

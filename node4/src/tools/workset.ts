@@ -246,8 +246,8 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
       "Ops: propose | list | get | set_intake.",
       "list/get read Case Workset SoT (filtered, capped) — not this-burst stash only.",
       "propose: host (or location URL), intel_source (ct|dns|shodan|fofa|ssl_history|other), attribution evidence, confidence (low|medium|high), scope_decision (pending|in_scope|out_of_scope|needs_authorization).",
-      "set_intake: when the user asked this Case's discoveries to go into a Group. Requires explicit mode=enroll_group (group_id or group_name) or mode=ask. Not available during a Graph stage. Platform does not infer this from free text.",
-      "Default: do not http-probe, surface(mark), or create_asset until the user adopts or Case asset-intake enroll_group applies. No Host means no Intel hang.",
+      "set_intake: when the user asked this Case's discoveries to go into a Group. Records mode=enroll_group (group_id or group_name) or mode=ask. Does not create Hosts — the user must confirm Case intake or adopt a row. Not available during a Graph stage. Platform does not infer this from free text.",
+      "Default: do not http-probe, surface(mark), or create_asset until the user adopts or confirms Case enroll_group intake. No Host means no Intel hang.",
       "A missing optional intel source is not a failure — propose what the tools you have actually returned.",
     ].join(" "),
     parameters: Type.Object({
@@ -316,7 +316,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
           },
           guidance:
             mode === "enroll_group"
-              ? "Case policy set. Eligible proposed t_host rows enroll into that Group and this Case Scope. Out-of-scope, low-confidence, and needs_authorization stay on Workset."
+              ? "Case policy recorded. Eligible t_host stay proposed until the user confirms this Case intake or adopts a row. Out-of-scope, low-confidence, and needs_authorization stay on Workset."
               : "Case policy is ask. New hosts stay on Workset until the user adopts.",
         });
       }
@@ -340,7 +340,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
           op,
           ...listed,
           note:
-            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Adopt is a user action unless Case asset-intake enroll_group applies.",
+            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Adopt is a user action unless the owner confirmed Case enroll_group intake.",
         });
       }
       if (op !== "propose") {
@@ -381,7 +381,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
         op: "propose",
         item: built,
         guidance:
-          "Parked on Workset. Do not create_asset or active-test until the user adopts, unless Case asset-intake enroll_group already enrolled this host.",
+          "Parked on Workset. Do not create_asset or active-test until the user adopts or confirms Case enroll_group intake.",
       });
     },
   };

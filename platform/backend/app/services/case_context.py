@@ -1058,6 +1058,7 @@ def build_case_context_payload(
             "mode": "enroll_group",
             "group_id": asset_intake.get("group_id"),
             "group_name": asset_intake.get("group_name"),
+            "set_by": asset_intake.get("set_by"),
         }
         payload["next_work"] = nw
     # Spec #312: mark whether transcript already has a legal next_steps card (soft-gate input).

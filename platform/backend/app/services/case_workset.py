@@ -128,6 +128,12 @@ def put_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
     return ctx
 
 
+def intake_policy_user_committed(policy: object) -> bool:
+    """True only after the owner confirmed enroll_group (not agent-recorded intent)."""
+    pol = normalize_asset_intake(policy)
+    return pol["mode"] == "enroll_group" and str(pol.get("set_by") or "") == "user"
+
+
 def intake_enroll_eligible(item: dict[str, Any], policy: object) -> bool:
     """Eligible t_host for Case enroll_group policy. Exceptions stay proposed."""
     pol = normalize_asset_intake(policy)
@@ -1512,6 +1518,24 @@ def commit_intake_enrollment(
     item["payload"] = payload
     ctx = put_workset(ctx, ws)
     return ctx, dict(item), None
+
+
+async def materialize_user_committed_intake(
+    db: Any,
+    *,
+    user_id: Any,
+    conversation_id: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """WS/agent paths: enroll only when the owner already confirmed this Case policy."""
+    if not intake_policy_user_committed(get_asset_intake(context)):
+        return context
+    return await materialize_intake_hosts(
+        db,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        context=context,
+    )
 
 
 async def materialize_intake_hosts(

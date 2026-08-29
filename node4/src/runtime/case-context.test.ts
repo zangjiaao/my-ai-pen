@@ -110,6 +110,13 @@ assert.ok(intakeOnly);
 assert.equal(intakeOnly!.next_work!.asset_intake?.mode, "enroll_group");
 assert.match(formatCaseContextInjection(intakeOnly), /enroll_group/);
 assert.match(formatCaseContextInjection(intakeOnly), /example公司/);
+assert.match(formatCaseContextInjection(intakeOnly), /Not user-confirmed/);
+assert.doesNotMatch(formatCaseContextInjection(intakeOnly), /Eligible new hosts enroll/);
+const intakeUser = parseCaseContext({
+  next_work: { asset_intake: { mode: "enroll_group", group_name: "example公司", set_by: "user" } },
+});
+assert.match(formatCaseContextInjection(intakeUser), /user-confirmed/);
+assert.match(formatCaseContextInjection(intakeUser), /Eligible new hosts enroll/);
 // scope_intel alone is enough to parse
 const onlyIntel = parseCaseContext({
   scope_intel: { hosts: [{ address: "lab.local", on_ledger: true }] },

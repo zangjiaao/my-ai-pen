@@ -17,10 +17,12 @@ from app.services.case_workset import (
     goal_auto_adopt,
     goal_wants_session_free,
     intake_enroll_eligible,
+    intake_policy_user_committed,
     mechanical_gate,
     merge_proposed_into_context,
     merge_proposed_items,
     materialize_intake_hosts,
+    materialize_user_committed_intake,
     normalize_asset_intake,
     normalize_candidate,
     order_workset_items,
@@ -926,6 +928,44 @@ def test_intake_enroll_group_requires_group():
     ok = normalize_asset_intake({"mode": "enroll_group", "group_name": "example公司"})
     assert ok["mode"] == "enroll_group"
     assert ok["group_name"] == "example公司"
+
+
+def test_intake_policy_user_committed_not_agent():
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1"}) is False
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "agent"}) is False
+    assert intake_policy_user_committed({"mode": "ask", "set_by": "user"}) is False
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "user"}) is True
+
+
+def test_ws_path_does_not_materialize_agent_intake():
+    import app.services.node_ledger as nl
+    import asyncio
+
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1", "set_by": "agent"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    called = {"n": 0}
+
+    async def boom(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("must not create Hosts for agent-set intake")
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = boom
+    try:
+        out = asyncio.run(
+            materialize_user_committed_intake(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    assert called["n"] == 0
+    assert get_workset(out)["items"][0]["status"] == "proposed"
 
 
 def test_intake_eligible_skips_low_oos_surface():
