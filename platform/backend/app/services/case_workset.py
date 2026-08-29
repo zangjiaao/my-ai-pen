@@ -128,6 +128,36 @@ def put_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
     return ctx
 
 
+def same_intake_group(a: object, b: object) -> bool:
+    left, right = normalize_asset_intake(a), normalize_asset_intake(b)
+    gid_a = str(left.get("group_id") or "").strip()
+    gid_b = str(right.get("group_id") or "").strip()
+    if gid_a and gid_b:
+        return gid_a == gid_b
+    name_a = str(left.get("group_name") or "").strip().lower()
+    name_b = str(right.get("group_name") or "").strip().lower()
+    return bool(name_a and name_b and name_a == name_b)
+
+
+def agent_intake_set_by(prior: object, incoming: object) -> str:
+    """Agent restating the same enroll_group must not demote owner confirm."""
+    nxt = normalize_asset_intake(incoming)
+    if (
+        intake_policy_user_committed(prior)
+        and nxt["mode"] == "enroll_group"
+        and same_intake_group(prior, nxt)
+    ):
+        return "user"
+    return "agent"
+
+
+def put_agent_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    incoming = dict(policy) if isinstance(policy, dict) else {}
+    incoming["set_by"] = agent_intake_set_by(get_asset_intake(ctx), incoming)
+    return put_asset_intake(ctx, incoming)
+
+
 def intake_policy_user_committed(policy: object) -> bool:
     """True only after the owner confirmed enroll_group (not agent-recorded intent)."""
     pol = normalize_asset_intake(policy)

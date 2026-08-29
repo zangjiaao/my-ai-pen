@@ -11,6 +11,7 @@ from app.services.choice_card import (
     collect_authorized_asset_ids,
     expand_selected_options,
     filter_owned_card_hosts,
+    apply_owned_host_stamp,
     format_selected_summary,
     merge_authorized_host_scope,
     sync_task_asset_id_from_scope,
@@ -63,6 +64,16 @@ def test_s1_authorize_without_options():
     )
     assert ids == ["keep"]
     assert labels == ["app.example.com"]
+    aid = "11111111-1111-1111-1111-111111111111"
+    keep = {"asset_ids": [aid], "kind": "confirm", "question": "开测?"}
+    apply_owned_host_stamp(keep, None)
+    assert keep["asset_ids"] == [aid]
+    assert "host_labels" not in keep
+    apply_owned_host_stamp(keep, {aid: "app.example.com"})
+    assert keep["host_labels"] == ["app.example.com"]
+    apply_owned_host_stamp(keep, {})
+    assert keep["asset_ids"] == []
+    assert keep["host_labels"] == []
     reduced = reduce_choice_decision(
         {"kind": "confirm", "question": "Authorize?"},
         custom_text="同意，限制在 lab",

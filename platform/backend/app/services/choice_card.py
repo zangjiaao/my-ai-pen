@@ -99,6 +99,18 @@ def host_scope_prompt_suffix(value: dict | None) -> str:
     return "\n将纳入本 Case Scope：\n" + "\n".join(f"- {h}" for h in labels)
 
 
+def apply_owned_host_stamp(card: dict, owned: dict[str, str] | None) -> None:
+    """Filter to owned Hosts. ``owned is None`` means lookup failed — keep asset_ids."""
+    if owned is None or not isinstance(card, dict):
+        return
+    raw_ids = parse_card_asset_ids(card)
+    if not raw_ids:
+        return
+    kept, labels = filter_owned_card_hosts(raw_ids, owned)
+    card["asset_ids"] = kept
+    card["host_labels"] = labels
+
+
 def is_next_steps_choice(content: dict | None) -> bool:
     if not isinstance(content, dict):
         return False

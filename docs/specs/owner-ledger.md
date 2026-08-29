@@ -211,4 +211,4 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-28 | Identity lookup: unique / none / **ambiguous (2+)** → `request_user_decision`; never first-match. |
 | 2026-08-28 | Pentest Hard Graph `tools.allow` lists inventory reads (`platform_list_assets` / `get_asset` / `list_groups`); runner does not special-case them. |
 | 2026-08-29 | Case asset-intake `enroll_group`: user-asked Group policy may enroll eligible Workset `t_host` into that Group + this Case Scope; Group assembly still does not pull other members into Scope. |
-| 2026-08-30 | Agent `set_intake` records enroll_group only (`set_by=agent`). Host create + Scope expand wait for owner confirm (user PUT / adopt) or later propose/settle when `set_by=user`. Authorize cards show owned Host addresses. |
+| 2026-08-30 | Agent `set_intake` records enroll_group only (`set_by=agent`). Host create + Scope expand wait for owner confirm (user PUT / adopt) or later propose/settle when `set_by=user`. Authorize cards show owned Host addresses. Agent restating the same Group keeps `set_by=user`; stamp lookup failure does not wipe authorize `asset_ids`. |

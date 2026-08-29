@@ -18,6 +18,7 @@ from app.services.case_workset import (
     goal_wants_session_free,
     intake_enroll_eligible,
     intake_policy_user_committed,
+    put_agent_asset_intake,
     mechanical_gate,
     merge_proposed_into_context,
     merge_proposed_items,
@@ -935,6 +936,33 @@ def test_intake_policy_user_committed_not_agent():
     assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "agent"}) is False
     assert intake_policy_user_committed({"mode": "ask", "set_by": "user"}) is False
     assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "user"}) is True
+
+
+def test_agent_intake_keeps_owner_confirm_for_same_group():
+    ctx = put_asset_intake(
+        {},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司", "set_by": "user"},
+    )
+    ctx = put_agent_asset_intake(
+        ctx,
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    got = get_asset_intake(ctx)
+    assert got["set_by"] == "user"
+    assert intake_policy_user_committed(got) is True
+
+    switched = put_agent_asset_intake(
+        ctx,
+        {"mode": "enroll_group", "group_id": "g2", "group_name": "other公司"},
+    )
+    assert get_asset_intake(switched)["set_by"] == "agent"
+    asked = put_agent_asset_intake(ctx, {"mode": "ask"})
+    assert get_asset_intake(asked)["set_by"] == "agent"
+    fresh = put_agent_asset_intake(
+        {},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    assert get_asset_intake(fresh)["set_by"] == "agent"
 
 
 def test_ws_path_does_not_materialize_agent_intake():

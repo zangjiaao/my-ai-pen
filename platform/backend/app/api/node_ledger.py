@@ -454,7 +454,7 @@ async def conversation_asset_intake_node(
         raise HTTPException(400, "enroll_group requires group_id or group_name")
     from app.services.case_workset import (
         get_asset_intake,
-        put_asset_intake,
+        put_agent_asset_intake,
     )
 
     if mode == "enroll_group" and not group_id and group_name:
@@ -467,13 +467,12 @@ async def conversation_asset_intake_node(
         except ledger.NodeLedgerError as e:
             raise HTTPException(e.status_code, e.message) from e
     ctx = dict(conv.context or {}) if isinstance(conv.context, dict) else {}
-    ctx = put_asset_intake(
+    ctx = put_agent_asset_intake(
         ctx,
         {
             "mode": mode,
             "group_id": group_id or None,
             "group_name": group_name or None,
-            "set_by": "agent",
         },
     )
     conv.context = ctx

@@ -4266,33 +4266,29 @@ def _request_decision_asset_ids(msg: dict | None) -> list[str]:
 
 
 async def _stamp_owned_host_labels_on_decision(msg: dict, conv_id: str) -> None:
-    """Show the Hosts that authorize will Scope — drop ids this owner does not have."""
-    from app.services.choice_card import filter_owned_card_hosts, parse_card_asset_ids
+    """Show owned Hosts on authorize. Lookup/query failure must not wipe asset_ids."""
+    from app.services.choice_card import apply_owned_host_stamp, parse_card_asset_ids
 
     raw_ids = parse_card_asset_ids(msg)
     if not raw_ids:
         return
-    owner_id, _ = await _conversation_owner(conv_id)
-    if not owner_id:
-        msg["asset_ids"] = []
-        msg["host_labels"] = []
-        return
-    ids: list[uuid.UUID] = []
-    seen: set[uuid.UUID] = set()
-    for raw in raw_ids:
-        try:
-            guid = uuid.UUID(str(raw))
-        except ValueError:
-            continue
-        if guid in seen:
-            continue
-        seen.add(guid)
-        ids.append(guid)
-    if not ids:
-        msg["asset_ids"] = []
-        msg["host_labels"] = []
-        return
     try:
+        owner_id, _ = await _conversation_owner(conv_id)
+        if not owner_id:
+            return
+        ids: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for raw in raw_ids:
+            try:
+                guid = uuid.UUID(str(raw))
+            except ValueError:
+                continue
+            if guid in seen:
+                continue
+            seen.add(guid)
+            ids.append(guid)
+        if not ids:
+            return
         from app.db.base import async_session
         from app.models.asset import Asset
 
@@ -4305,13 +4301,9 @@ async def _stamp_owned_host_labels_on_decision(msg: dict, conv_id: str) -> None:
                 ).scalars().all()
             )
         owned = {str(a.id): str(a.address or a.name or a.id) for a in rows}
-        kept_ids, labels = filter_owned_card_hosts(raw_ids, owned)
-        msg["asset_ids"] = kept_ids
-        msg["host_labels"] = labels
+        apply_owned_host_stamp(msg, owned)
     except Exception as e:
         print(f"[WS] stamp host_labels error: {e}")
-        msg["asset_ids"] = []
-        msg["host_labels"] = []
 
 
 async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]) -> None:
