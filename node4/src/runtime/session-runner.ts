@@ -23,8 +23,20 @@ import {
   resolveOuterContinueBudgets,
   normalizeProductStopReason,
 } from "./loop-policy.js";
+import {
+  emptyOverlay,
+  formatLiveStateHarness,
+  lastDeltaFromRuntime,
+  isTerminalPdcaVerdict,
+  mapPdcaVerdictToHarnessStatus,
+  pdcaSettleEnabled,
+  persistPdcaOnRuntime,
+  projectOverlayFromRuntime,
+  settleParticipantTurn,
+  type ParticipantTurnSettlement,
+} from "./pdca-settlement.js";
+import { joinHarnessPrefixes } from "./harness-channel.js";
 import { selectNewUntestedSurfaces } from "./surface-harness.js";
-import { hasNamedEngagement } from "./attack-surface.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { SubagentHost } from "./subagent.js";
@@ -124,8 +136,8 @@ export async function runNode4Task(
   /** Work-burst wall clock: right-panel Elapsed uses started_at → end_time (task lifecycle hooks). */
   const startedAt = new Date().toISOString();
   /**
-   * Chat-only turn: built-in default seat, or expert without authorized target/scope.
-   * Execution work bursts must NOT auto-start — respond conversationally (and use ledger tools for default).
+   * Chat-only turn: built-in ledger-assist seats. Expert pentest with an empty
+   * envelope Target is still a work turn (Surface / Scope own what to hit).
    */
   const chatOnly = isChatOnlyTask(task, pack.id);
   /** default/consult/workspace: chat + ledger/report tools (not recon). Multi-tool work is in-loop, not outer continue. */
@@ -201,7 +213,7 @@ export async function runNode4Task(
   const eventsPath = join(piDir, "events.jsonl");
   const hostWriteRoot = caseDir || piDir;
   /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
-  const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking", "status_update"]);
+  const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking"]);
   const loggingPlatform: PlatformSink = {
     async send(message) {
       const line = `${JSON.stringify({ ts: new Date().toISOString(), ...message })}\n`;
@@ -403,14 +415,6 @@ export async function runNode4Task(
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
     const onCancel = () => {
-      void loggingPlatform
-        .send({
-          type: "status_update",
-          conversation_id: task.conversationId,
-          task_id: task.taskId,
-          message: "harness abort: cancelled",
-        })
-        .catch(() => {});
       try {
         sessionRef?.abort();
       } catch {
@@ -531,6 +535,9 @@ export async function runNode4Task(
   let prematureStopCount = 0;
   let goalContinueCount = 0;
   let stopReason = "natural";
+  let pdcaPreviousOverlay = emptyOverlay();
+  let pdcaNoProgressStreak = 0;
+  let pdcaLastSettlement: ParticipantTurnSettlement | undefined;
   const cancelled = () => Boolean(signal?.aborted);
 
   // Optional seed goal mode from structured task field (not free-text NLP),
@@ -549,37 +556,15 @@ export async function runNode4Task(
     }
   }
 
-  const who = panelLabel;
-  await loggingPlatform.send({
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: chatOnly
-      ? `${who} chat mode (no target yet) pack=${pack.id}`
-      : `${who} starting pack=${pack.id} work_mode=${
-          graphResolved.mode === "graph"
-            ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
-            : "free"
-        } tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
-    agent_phase: chatOnly ? "chat" : "starting",
-    status: "running",
-    work_mode:
-      graphResolved.mode === "graph"
-        ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
-        : "free",
-    llm_usage: usage.snapshot(),
-  });
-
-  // Initial checkpoint so right panel has structure even before first model turn.
+  // Initial checkpoint so Agent tree has structure even before first model turn.
   await emitCheckpointUpdate(obsCtx);
   checkpointThrottle.markEmitted();
 
-  // L2 tooling health: observability only (piDir + status_update). Never gates the loop.
+  // L2 tooling health: observability only (piDir JSON). Never gates the loop.
   if (shouldEmitToolingHealth({ chatOnly, toolNames })) {
     try {
       await recordToolingHealthAtTaskStart({
         piDir,
-        platform: loggingPlatform,
         task,
       });
     } catch {
@@ -675,10 +660,18 @@ export async function runNode4Task(
         selfExpertName: task.expertName,
         thisTurnText: userPrompt,
       });
+      if (pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat) {
+        pdcaPreviousOverlay = await projectOverlayFromRuntime(runtime).catch(() => emptyOverlay());
+      }
       await promptAndAssert(
         userPrompt,
         "user",
-        formatCaseSpeechHarness(speech.lines) || undefined,
+        joinHarnessPrefixes(
+          formatCaseSpeechHarness(speech.lines),
+          pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat
+            ? formatLiveStateHarness(pdcaPreviousOverlay, lastDeltaFromRuntime(runtime))
+            : undefined,
+        ),
       );
       speechCursor = speech.cursorAfter;
     }
@@ -704,15 +697,6 @@ export async function runNode4Task(
       // OMP: one-shot budget-limit steer when token_budget just flipped status.
       const budgetSteerGoal = goals.takePendingBudgetLimitSteer();
       if (budgetSteerGoal && !cancelled()) {
-        await loggingPlatform.send({
-          type: "status_update",
-          conversation_id: task.conversationId,
-          task_id: task.taskId,
-          message: `goal budget-limited tokens=${budgetSteerGoal.tokensUsed}/${budgetSteerGoal.tokenBudget ?? "?"} — steer wrap-up (not complete)`,
-          agent_phase: "goal_budget_limit",
-          status: "running",
-          llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-        });
         segmentCounter.tools = 0;
         runtime.lifecycle.toolsInLastSegment = 0;
         try {
@@ -761,7 +745,39 @@ export async function runNode4Task(
         continueCount,
         toolsInLastSegment: toolsInLast,
       });
-      if (!decision.continue) break;
+      if (!decision.continue) {
+        // Spec #519: natural stop is a settle proposal. Host may replan when
+        // Product state still names unresolved work (flag off = legacy settle).
+        if (pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat && !cancelled()) {
+          try {
+            const overlayNow = await projectOverlayFromRuntime(runtime);
+            const pdca = settleParticipantTurn({
+              overlay: overlayNow,
+              previousOverlay: pdcaPreviousOverlay,
+              noProgressStreak: pdcaNoProgressStreak,
+            });
+            pdcaLastSettlement = pdca;
+            persistPdcaOnRuntime(runtime, pdca);
+            pdcaPreviousOverlay = overlayNow;
+            pdcaNoProgressStreak = pdca.nextNoProgressStreak;
+            if (pdca.verdict === "replan" && pdca.replanPrompt) {
+              stopReason = "pdca_replan";
+              segmentCounter.tools = 0;
+              runtime.lifecycle.toolsInLastSegment = 0;
+              if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
+              await promptAndAssert(
+                `${formatLiveStateHarness(overlayNow)}\n\n${pdca.replanPrompt}`,
+                "harness",
+              );
+              continue;
+            }
+            stopReason = pdca.reason;
+          } catch {
+            /* overlay read must not crash settlement */
+          }
+        }
+        break;
+      }
 
       if (decision.kind === "booking_gap") bookingContinueUsed = true;
       if (decision.kind === "premature") prematureStopCount += 1;
@@ -806,15 +822,6 @@ export async function runNode4Task(
           ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
           : undefined;
 
-      await loggingPlatform.send({
-        type: "status_update",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalLabel} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
-        agent_phase: "continue",
-        status: "running",
-        llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-      });
       // Mid-run checkpoint on outer continues so tokens/tasks refresh even if throttle was idle.
       await emitCheckpointUpdate(obsCtx);
       checkpointThrottle.markEmitted();
@@ -829,7 +836,14 @@ export async function runNode4Task(
                 ? "premature"
                 : "empty";
         await promptAndAssert(
-          composeContinuePrompt({
+          [
+            pdcaSettleEnabled() && !chatOnly && !ledgerAssistSeat
+              ? formatLiveStateHarness(
+                  await projectOverlayFromRuntime(runtime).catch(() => emptyOverlay()),
+                  lastDeltaFromRuntime(runtime),
+                )
+              : "",
+            composeContinuePrompt({
             attempt: continueCount,
             max: maxContinues,
             openTodoCount,
@@ -844,6 +858,10 @@ export async function runNode4Task(
             prematureMax: maxPrematureStops,
             goalContinuationBody,
           }),
+          ]
+            .map((s) => String(s || "").trim())
+            .filter(Boolean)
+            .join("\n\n"),
           "harness",
         );
       } catch (err) {
@@ -876,17 +894,36 @@ export async function runNode4Task(
 
     const booked = await loadConfirmedFindings(runtime.findingsDir);
     const handedOff = stopReason === "handed_off";
-    // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
-    // Authorized handoff supersede is a successful Default finish, not an abort.
-    const harnessStatus = chatOnly
-      ? cancelled() && !handedOff
-        ? "incomplete"
-        : "completed"
-      : resolveHarnessTerminalStatus({
-          bookedFindingCount: booked.count,
+    // Chat-only (no target yet) still settles: HITL Stop on a card must reach paused, not skip PDCA.
+    // Ledger-assist seats stay out (greeting / workspace chat).
+    // In-loop already landed blocked/completed/paused: do not re-settle (529B: post-loop used to flip blocked → replan).
+    const pdcaOn = pdcaSettleEnabled() && !ledgerAssistSeat;
+    if (pdcaOn && !isTerminalPdcaVerdict(pdcaLastSettlement?.verdict)) {
+      try {
+        const overlayNow = await projectOverlayFromRuntime(runtime);
+        pdcaLastSettlement = settleParticipantTurn({
+          overlay: overlayNow,
+          previousOverlay: pdcaPreviousOverlay,
+          noProgressStreak: pdcaNoProgressStreak,
           aborted: cancelled() && !handedOff,
-          stopReason,
         });
+        persistPdcaOnRuntime(runtime, pdcaLastSettlement);
+      } catch {
+        /* overlay read must not crash settlement */
+      }
+    }
+    const harnessStatus =
+      pdcaOn && pdcaLastSettlement
+        ? mapPdcaVerdictToHarnessStatus(pdcaLastSettlement.verdict)
+        : chatOnly
+          ? cancelled() && !handedOff
+            ? "incomplete"
+            : "completed"
+          : resolveHarnessTerminalStatus({
+              bookedFindingCount: booked.count,
+              aborted: cancelled() && !handedOff,
+              stopReason,
+            });
     const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
     const endTime = new Date().toISOString();
 
@@ -914,7 +951,10 @@ export async function runNode4Task(
     });
     const attackSurfaceCandidates = settlePkg.attackSurfaceCandidates;
     const sideCandidates = settlePkg.nextScopeCandidates;
-    const worksetCandidates = settlePkg.worksetCandidates;
+    const worksetCandidates = [
+      ...settlePkg.worksetCandidates,
+      ...(runtime.lifecycle.worksetProposed || []),
+    ];
     await writeAttackSurfaceCandidatesArtifact(piDir, attackSurfaceCandidates);
 
     // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
@@ -945,6 +985,13 @@ export async function runNode4Task(
       workset_source: settlePkg.worksetSource,
       goal_mode: goals.isActive() || Boolean(task.goalObjective),
       goal_objective: task.goalObjective || undefined,
+      ...(pdcaLastSettlement
+        ? {
+            pdca_verdict: pdcaLastSettlement.verdict,
+            pdca_unresolved: pdcaLastSettlement.unresolved,
+            pdca_reason: pdcaLastSettlement.reason,
+          }
+        : {}),
     });
 
     try {
@@ -1049,13 +1096,13 @@ function abortReasonIsHandoff(signal?: AbortSignal): boolean {
 
 /**
  * True when this turn must not open an execution work-burst UX:
- * - built-in default seat (always chat/ledger assist), or
- * - expert dispatch with no authorized target/scope yet.
+ * built-in ledger-assist seats only. Expert pentest with an empty envelope
+ * target is still a work turn — Surface / Scope own “what to hit”, not a
+ * regex-invented Task Target.
  */
 export function isChatOnlyTask(task: TaskEnvelope, packId?: string): boolean {
   const pack = String(packId || task.engagement || task.role || "").toLowerCase().trim();
-  if (pack === "default" || pack === "consult" || pack === "workspace") return true;
-  return !hasNamedEngagement(task);
+  return pack === "default" || pack === "consult" || pack === "workspace";
 }
 
 /** Built-in workspace seats: conversation + ledger/report tools, not recon execution. */

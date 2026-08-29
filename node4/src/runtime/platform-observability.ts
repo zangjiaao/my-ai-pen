@@ -600,6 +600,10 @@ export function buildNode4Checkpoint(
     active_tool: ctx.counters.activeTool || "",
     tool_call_count: ctx.counters.toolCallCount,
     attack_surface_candidates: options?.attackSurfaceCandidates || [],
+    // Spec #353: stall snapshot lives on checkpoint (Agent tree), not status_update.
+    ...(ctx.counters.phase === "llm_stalled" && ctx.streamHealth
+      ? { stream_health: ctx.streamHealth.snapshot() }
+      : {}),
   };
 }
 
@@ -717,21 +721,6 @@ export async function applyStreamHealthTick(
       tool: "",
       detail: streamStallDetail(),
     });
-    const snap = health.snapshot();
-    const panel = ctx.panel.list()[0];
-    await ctx.platform.send({
-      type: "status_update",
-      conversation_id: ctx.task.conversationId,
-      task_id: ctx.task.taskId,
-      message: streamStallDetail(),
-      active_tool: "",
-      agent_phase: "llm_stalled",
-      current_detail: panel?.current_detail || streamStallDetail(),
-      status: "running",
-      stream_health: snap,
-      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-      panel_agents: ctx.panel.list(),
-    } as PlatformMessage);
     await emitCheckpointUpdate(ctx);
     options?.checkpointThrottle?.markEmitted();
     return "stalled";
@@ -770,7 +759,7 @@ export async function emitCheckpointUpdate(
 }
 
 /**
- * Handle Pi session events for usage, text, status, and throttled checkpoints.
+ * Handle Pi session events for usage, text, and checkpoints (tool/stall unthrottled).
  * Pure orchestration — tests can call with synthetic events.
  */
 export async function handleNode4SessionEvent(
@@ -784,7 +773,7 @@ export async function handleNode4SessionEvent(
   const health = ctx.streamHealth;
 
   // tool_output is emitted only by attachProductToolEventBridge (createBoundNode4Session).
-  // This handler owns panel / status / text stream / usage for Main.
+  // This handler owns panel / text stream / usage for Main.
   let panelChanged = false;
   if (event.type === "tool_execution_start") {
     // Spec #353: tool execution is not an LLM stream wait — close health watch.
@@ -798,20 +787,6 @@ export async function handleNode4SessionEvent(
       tool: ctx.counters.activeTool,
     });
     panelChanged = true;
-    const panel = ctx.panel.list()[0];
-    await ctx.platform.send({
-      type: "status_update",
-      conversation_id: ctx.task.conversationId,
-      task_id: ctx.task.taskId,
-      message: `${ctx.counters.activeTool} running`,
-      active_tool: ctx.counters.activeTool,
-      agent_phase: "tool_running",
-      current_detail: panel?.current_detail,
-      status: "running",
-      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-      // Live panel patch so UI does not wait for throttled checkpoint.
-      panel_agents: ctx.panel.list(),
-    } as PlatformMessage);
   }
 
   if (event.type === "tool_execution_end") {
@@ -827,20 +802,6 @@ export async function handleNode4SessionEvent(
       ctx.counters.activeTool = undefined;
       // Clear active tool; lastTool is retained for "分析…结果" detail.
       ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
-      await ctx.platform.send({
-        type: "status_update",
-        conversation_id: ctx.task.conversationId,
-        task_id: ctx.task.taskId,
-        // User-visible (not opaque llm_waiting token) so re-wait / reattempt is scannable.
-        message: "正在请求模型…",
-        active_tool: "",
-        agent_phase: "llm_waiting",
-        current_detail: ctx.panel.list()[0]?.current_detail,
-        status: "running",
-        stream_health: health?.snapshot(),
-        llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-        panel_agents: ctx.panel.list(),
-      } as PlatformMessage);
       // Spec #305: textStream.handle(tool_execution_end) opens T1 empty running thinking
       // so chat is not silent during llm_waiting after tools (before thinking_* tokens).
     }
@@ -852,19 +813,6 @@ export async function handleNode4SessionEvent(
     ctx.counters.phase = "llm_waiting";
     ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
     panelChanged = true;
-    await ctx.platform.send({
-      type: "status_update",
-      conversation_id: ctx.task.conversationId,
-      task_id: ctx.task.taskId,
-      message: "正在请求模型…",
-      active_tool: "",
-      agent_phase: "llm_waiting",
-      current_detail: ctx.panel.list()[0]?.current_detail,
-      status: "running",
-      stream_health: health?.snapshot(),
-      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-      panel_agents: ctx.panel.list(),
-    } as PlatformMessage);
     // Do not open T1 on bare turn_start — pure text-only replies must stay silent
     // until thinking_* (Issue 10). Mid-task gap is covered by tool_execution_end.
   }
@@ -901,19 +849,6 @@ export async function handleNode4SessionEvent(
       if (wasStalled) {
         ctx.counters.phase = "llm_waiting";
         ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
-        await ctx.platform.send({
-          type: "status_update",
-          conversation_id: ctx.task.conversationId,
-          task_id: ctx.task.taskId,
-          message: "正在请求模型…",
-          active_tool: "",
-          agent_phase: "llm_waiting",
-          current_detail: ctx.panel.list()[0]?.current_detail,
-          status: "running",
-          stream_health: health.snapshot(),
-          llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-          panel_agents: ctx.panel.list(),
-        } as PlatformMessage);
         panelChanged = true;
       }
     }

@@ -1,5 +1,6 @@
 """Spec #311 — Case Workset projection, mechanical gate, Goal outer terminals."""
 from app.services.case_workset import (
+    apply_intake_enroll_to_context,
     apply_settle_to_context,
     auto_check_safe,
     adopt_item,
@@ -11,14 +12,23 @@ from app.services.case_workset import (
     detect_user_stopped_settle,
     evaluate_goal_terminal,
     expand_task_scope_for_host,
+    get_asset_intake,
     get_workset,
     goal_auto_adopt,
     goal_wants_session_free,
+    intake_enroll_eligible,
+    intake_policy_user_committed,
+    put_agent_asset_intake,
     mechanical_gate,
+    merge_proposed_into_context,
     merge_proposed_items,
+    materialize_intake_hosts,
+    materialize_user_committed_intake,
+    normalize_asset_intake,
     normalize_candidate,
     order_workset_items,
     project_workset_for_api,
+    put_asset_intake,
     put_workset,
     reorder_items,
     scope_hosts_from_task,
@@ -205,6 +215,126 @@ def test_goal_on_auto_adopt_only_safe_t_surface():
             assert i.get("status_actor") == "goal_mechanical"
         if i["family"] == "t_host":
             assert i["status"] == "proposed"
+
+
+def test_passive_exposure_keeps_source_fields_and_never_auto_adopts():
+    from app.services.case_workset import is_passive_exposure_item, merge_proposed_into_context
+
+    item = normalize_candidate(
+        {
+            "host": "cdn.example.com",
+            "in_scope": False,
+            "intel_source": "ct",
+            "attribution": "crt.sh SAN cdn.example.com 2026-01-01",
+            "confidence": "medium",
+            "scope_decision": "pending",
+            "passive": True,
+        },
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    assert item is not None
+    assert item["family"] == "t_host"
+    assert item["status"] == "proposed"
+    assert item["auto_eligible"] is False
+    assert is_passive_exposure_item(item) is True
+    payload = item["payload"]
+    assert payload["intel_source"] == "ct"
+    assert "crt.sh" in payload["attribution"]
+    assert payload["confidence"] == "medium"
+    assert payload["scope_decision"] == "pending"
+    assert payload["passive"] is True
+
+    # Even an in-scope-looking t_surface from CT must not Goal-adopt.
+    surface = normalize_candidate(
+        {
+            "location": "https://target.local/",
+            "host": "target.local",
+            "in_scope": True,
+            "intel_source": "dns",
+            "attribution": "passive DNS A record",
+            "confidence": "high",
+        },
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    assert surface is not None
+    assert surface["family"] == "t_surface"
+    assert surface["auto_eligible"] is False
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [surface, item],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    ws2, adopted = goal_auto_adopt(ws, scope_hosts=SCOPE, goal_on=True)
+    assert adopted == []
+    assert all(i["status"] == "proposed" for i in ws2["items"])
+
+    ctx = merge_proposed_into_context(
+        {"task": _task()},
+        [{"host": "mail.example.com", "intel_source": "shodan", "attribution": "shodan:443", "passive": True}],
+        source="workset_propose",
+    )
+    parked = get_workset(ctx)["items"]
+    assert len(parked) == 1
+    assert parked[0]["auto_eligible"] is False
+    assert parked[0]["payload"]["intel_source"] == "shodan"
+    assert get_workset(ctx).get("goal") is None
+
+
+def test_settle_legacy_arrays_collapse_into_workset_and_are_dropped():
+    from app.services.case_workset import list_workset_for_agent
+
+    ctx = {
+        "task": _task(),
+        "next_scope_candidates": [{"host": "side.lab", "in_scope": False}],
+        "attack_surface_candidates": [{"host": "side.lab", "in_scope": False}],
+        "next_scope_suggested": True,
+    }
+    ctx2 = apply_settle_to_context(
+        ctx,
+        candidates=[
+            {
+                "host": "side.lab",
+                "in_scope": False,
+                "intel_source": "ct",
+                "attribution": "crt.sh SAN",
+                "passive": True,
+            }
+        ],
+        next_scope_candidates=[{"host": "side.lab", "in_scope": False}],
+        attack_surface_candidates=[{"host": "side.lab", "in_scope": False}],
+        source="free_settle",
+        goal_on=False,
+    )
+    items = [i for i in get_workset(ctx2)["items"] if i["family"] == "t_host"]
+    assert len(items) == 1
+    assert items[0]["payload"]["host"] == "side.lab"
+    assert items[0]["payload"]["intel_source"] == "ct"
+    assert "next_scope_candidates" not in ctx2
+    assert "attack_surface_candidates" not in ctx2
+    listed = list_workset_for_agent(get_workset(ctx2), needle="side")
+    assert listed["total"] == 1
+    assert listed["items"][0]["intel_source"] == "ct"
+    rejected = {
+        "version": 1,
+        "items": items
+        + [
+            {
+                "id": "old",
+                "family": "t_host",
+                "status": "rejected",
+                "title": "gone.lab",
+                "payload": {"host": "gone.lab"},
+            }
+        ],
+        "goal": None,
+    }
+    open_only = list_workset_for_agent(rejected)
+    assert all(i["id"] != "old" for i in open_only["items"])
+    by_id = list_workset_for_agent(rejected, item_id="old")
+    assert by_id["items"][0]["id"] == "old"
 
 
 def test_goal_terminals_complete_with_awaiting_scope_confirm():
@@ -658,6 +788,7 @@ def test_thin_brief_not_fat_dump():
     brief = thin_handoff_brief(ws, boundary="graph_to_free")
     assert brief["boundary"] == "graph_to_free"
     assert brief["workset_open_count"] == 1
+    assert brief["workset_open"][0].get("host") == "target.local"
     assert "thread" not in brief
     assert "findings_summary" not in brief
 
@@ -760,3 +891,344 @@ def test_annotation_fields_from_context_session_graph():
     ann2 = annotation_fields_from_context(ctx2)
     assert ann2["work_mode"] == "free"
     assert ann2["graph_id"] is None
+
+
+def _passive_host(host: str, **extra):
+    payload = {
+        "host": host,
+        "in_scope": False,
+        "passive": True,
+        "intel_source": extra.get("intel_source", "ct"),
+        "attribution": extra.get("attribution", "crt.sh SAN"),
+        "confidence": extra.get("confidence", "high"),
+        "scope_decision": extra.get("scope_decision", "pending"),
+    }
+    return {
+        "family": "t_host",
+        "title": host,
+        "host": host,
+        "in_scope": False,
+        "passive": True,
+        **payload,
+    }
+
+
+def test_intake_default_is_ask():
+    assert normalize_asset_intake(None)["mode"] == "ask"
+    assert get_asset_intake({})["mode"] == "ask"
+    ctx = put_asset_intake({}, {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"})
+    got = get_asset_intake(ctx)
+    assert got["mode"] == "enroll_group"
+    assert got["group_id"] == "g1"
+    assert got["group_name"] == "example公司"
+
+
+def test_intake_enroll_group_requires_group():
+    bad = normalize_asset_intake({"mode": "enroll_group"})
+    assert bad["mode"] == "ask"
+    ok = normalize_asset_intake({"mode": "enroll_group", "group_name": "example公司"})
+    assert ok["mode"] == "enroll_group"
+    assert ok["group_name"] == "example公司"
+
+
+def test_intake_policy_user_committed_not_agent():
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1"}) is False
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "agent"}) is False
+    assert intake_policy_user_committed({"mode": "ask", "set_by": "user"}) is False
+    assert intake_policy_user_committed({"mode": "enroll_group", "group_id": "g1", "set_by": "user"}) is True
+
+
+def test_agent_intake_keeps_owner_confirm_for_same_group():
+    ctx = put_asset_intake(
+        {},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司", "set_by": "user"},
+    )
+    ctx = put_agent_asset_intake(
+        ctx,
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    got = get_asset_intake(ctx)
+    assert got["set_by"] == "user"
+    assert intake_policy_user_committed(got) is True
+
+    switched = put_agent_asset_intake(
+        ctx,
+        {"mode": "enroll_group", "group_id": "g2", "group_name": "other公司"},
+    )
+    assert get_asset_intake(switched)["set_by"] == "agent"
+    asked = put_agent_asset_intake(ctx, {"mode": "ask"})
+    assert get_asset_intake(asked)["set_by"] == "agent"
+    fresh = put_agent_asset_intake(
+        {},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    assert get_asset_intake(fresh)["set_by"] == "agent"
+
+
+def test_ws_path_does_not_materialize_agent_intake():
+    import app.services.node_ledger as nl
+    import asyncio
+
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1", "set_by": "agent"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    called = {"n": 0}
+
+    async def boom(*_a, **_k):
+        called["n"] += 1
+        raise AssertionError("must not create Hosts for agent-set intake")
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = boom
+    try:
+        out = asyncio.run(
+            materialize_user_committed_intake(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    assert called["n"] == 0
+    assert get_workset(out)["items"][0]["status"] == "proposed"
+
+
+def test_intake_eligible_skips_low_oos_surface():
+    policy = normalize_asset_intake({"mode": "enroll_group", "group_id": "g1"})
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    item = ws["items"][0]
+    assert intake_enroll_eligible(item, policy) is True
+    item["payload"]["confidence"] = "low"
+    assert intake_enroll_eligible(item, policy) is False
+    item["payload"]["confidence"] = "high"
+    item["payload"]["scope_decision"] = "out_of_scope"
+    assert intake_enroll_eligible(item, policy) is False
+    surface = {
+        "family": "t_surface",
+        "status": "proposed",
+        "title": "/admin",
+        "payload": {"location": "http://target.local/admin", "host": "target.local", "in_scope": True},
+    }
+    assert intake_enroll_eligible(surface, policy) is False
+    assert intake_enroll_eligible(item, {"mode": "ask"}) is False
+
+
+def test_intake_enroll_adopts_t_host_and_expands_scope():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1", "group_name": "example公司"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("mail.example.com", confidence="high", scope_decision="in_scope")],
+        source="workset_propose",
+    )
+    ws = get_workset(ctx)
+    assert len(ws["items"]) == 1
+    assert ws["items"][0]["status"] == "proposed"
+    assert "mail.example.com" not in scope_hosts_from_task(ctx["task"])
+    aid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+    async def fake_create(*_a, **_k):
+        return {"ok": True, "assets": [{"id": aid}]}
+
+    import app.services.node_ledger as nl
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_create
+    try:
+        import asyncio
+
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "adopted"
+    assert item["status_actor"] == "intake_policy"
+    assert item["payload"]["intake_asset_id"] == aid
+    assert "mail.example.com" in scope_hosts_from_task(ctx["task"])
+    assert aid in (ctx["task"]["scope"].get("asset_ids") or [])
+
+
+def test_expand_task_scope_records_host_asset_id():
+    aid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    task, err = expand_task_scope_for_host(_task(), host="mail.example.com", asset_id=aid)
+    assert err is None
+    assert "mail.example.com" in scope_hosts_from_task(task)
+    assert aid in task["scope"]["asset_ids"]
+
+
+def test_intake_ask_leaves_passive_proposed():
+    ctx = merge_proposed_into_context(
+        {"task": _task()},
+        [_passive_host("mail.example.com")],
+        source="workset_propose",
+    )
+    ws = get_workset(ctx)
+    assert ws["items"][0]["status"] == "proposed"
+
+
+def test_intake_skips_low_confidence_and_oos():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [
+            _passive_host("low.example.com", confidence="low"),
+            _passive_host("cdn.cloudflare.com", scope_decision="out_of_scope", confidence="high"),
+            _passive_host("vpn.example.com", confidence="medium", scope_decision="pending"),
+        ],
+        source="workset_propose",
+    )
+    by_host = {i["payload"]["host"]: i for i in get_workset(ctx)["items"]}
+    assert by_host["low.example.com"]["status"] == "proposed"
+    assert by_host["cdn.cloudflare.com"]["status"] == "proposed"
+    assert by_host["vpn.example.com"]["status"] == "proposed"
+    assert "vpn.example.com" not in scope_hosts_from_task(ctx["task"])
+    assert "low.example.com" not in scope_hosts_from_task(ctx["task"])
+
+
+def test_goal_still_never_auto_adopts_t_host_when_intake_is_ask():
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [_passive_host("mail.example.com", confidence="high")],
+        source="workset_propose",
+        scope_hosts=SCOPE,
+    )
+    ws2, adopted = goal_auto_adopt(ws, scope_hosts=SCOPE, goal_on=True)
+    assert adopted == []
+    assert ws2["items"][0]["status"] == "proposed"
+
+
+def test_agent_still_cannot_self_adopt_intake_items():
+    ctx = put_asset_intake({"task": _task()}, {"mode": "ask"})
+    ctx = merge_proposed_into_context(ctx, [_passive_host("mail.example.com")], source="workset_propose")
+    iid = get_workset(ctx)["items"][0]["id"]
+    _, _, err = adopt_item(get_workset(ctx), iid, actor="agent")
+    assert err == "agent_cannot_self_adopt"
+
+
+def test_apply_intake_enroll_is_idempotent():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(ctx, [_passive_host("mail.example.com")], source="workset_propose")
+    ctx2, enrolled = apply_intake_enroll_to_context(ctx)
+    assert enrolled == []
+    assert get_workset(ctx2)["items"][0]["status"] == "proposed"
+
+
+def test_settle_respects_intake_policy():
+    ctx = put_asset_intake({"task": _task()}, {"mode": "enroll_group", "group_id": "g1"})
+    ctx = apply_settle_to_context(
+        ctx,
+        candidates=[_passive_host("api.example.com", confidence="high")],
+        source="free_settle",
+        goal_on=False,
+    )
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "proposed"
+    assert "api.example.com" not in scope_hosts_from_task(ctx["task"])
+
+
+def test_materialize_create_failure_leaves_proposed():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("ghost.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    from app.services.node_ledger import NodeLedgerError
+    import app.services.node_ledger as nl
+    import asyncio
+
+    async def fake_fail(*_a, **_k):
+        raise NodeLedgerError("group missing", status_code=400)
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_fail
+    try:
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    item = get_workset(ctx)["items"][0]
+    assert item["status"] == "proposed"
+    assert "ghost.example.com" not in scope_hosts_from_task(ctx["task"])
+    assert not (ctx.get("task") or {}).get("scope", {}).get("asset_ids")
+
+
+def test_materialize_reopens_legacy_adopted_when_create_fails():
+    ctx = put_asset_intake(
+        {"task": _task()},
+        {"mode": "enroll_group", "group_id": "g1"},
+    )
+    ctx = merge_proposed_into_context(
+        ctx,
+        [_passive_host("stale.example.com", confidence="high")],
+        source="workset_propose",
+    )
+    iid = get_workset(ctx)["items"][0]["id"]
+    ws, found, err = adopt_item(get_workset(ctx), iid, actor="intake_policy")
+    assert err is None and found
+    ctx = put_workset(ctx, ws)
+    from app.services.node_ledger import NodeLedgerError
+    import app.services.node_ledger as nl
+    import asyncio
+
+    async def fake_fail(*_a, **_k):
+        raise NodeLedgerError("create failed", status_code=400)
+
+    orig = nl.create_hosts_for_user
+    nl.create_hosts_for_user = fake_fail
+    try:
+        ctx = asyncio.run(
+            materialize_intake_hosts(object(), user_id="u", conversation_id="c", context=ctx)
+        )
+    finally:
+        nl.create_hosts_for_user = orig
+    assert get_workset(ctx)["items"][0]["status"] == "proposed"
+
+
+def test_workset_routes_require_bound_node():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from app.api.node_ledger import require_conversation_bound_to_node
+    from app.services.node_ledger import conversation_bound_to_node_id
+
+    nid = uuid4()
+    require_conversation_bound_to_node(SimpleNamespace(node_id=nid), SimpleNamespace(id=nid))
+    assert conversation_bound_to_node_id(nid, str(nid)) is True
+    assert conversation_bound_to_node_id(None, str(nid)) is False
+    assert conversation_bound_to_node_id(nid, str(uuid4())) is False
+    try:
+        require_conversation_bound_to_node(SimpleNamespace(node_id=None), SimpleNamespace(id=nid))
+        raise AssertionError("unbound conversation must 403")
+    except HTTPException as e:
+        assert e.status_code == 403
+    try:
+        require_conversation_bound_to_node(SimpleNamespace(node_id=uuid4()), SimpleNamespace(id=nid))
+        raise AssertionError("foreign node must 403")
+    except HTTPException as e:
+        assert e.status_code == 403
+

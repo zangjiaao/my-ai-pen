@@ -22,6 +22,11 @@ function hasPlatformApi(runtime: ToolRuntime): boolean {
   return Boolean(runtime.platformApi?.baseUrl && runtime.platformApi?.nodeToken);
 }
 
+/** Graph Feedback agentId — keep local; do not import the Feedback module (tool cycle). */
+function isGraphFeedbackSession(runtime: ToolRuntime): boolean {
+  return String(runtime.lifecycle.workerAudit?.agentId || "") === "feedback";
+}
+
 export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "fact",
@@ -90,6 +95,9 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       }
 
       if (op === "forget") {
+        if (isGraphFeedbackSession(runtime)) {
+          return textResult("error: Graph Feedback cannot fact(forget) Host notebook", { isError: true });
+        }
         const intelId = String(params.id || params.fact_key || "").trim();
         const reason = String(params.reason || "").trim();
         if (!intelId) return textResult("error: id required for forget", { isError: true });
@@ -115,6 +123,17 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
         let intel: unknown = null;
         let intelError: string | undefined;
         const hang = resolveIntelHang(params, runtime.task.caseContext?.scope_intel?.hosts);
+        if (isGraphFeedbackSession(runtime) && hang) {
+          return jsonResult({
+            ok: true,
+            op: "upsert",
+            fact_key: result.fact_key,
+            summary: result.summary,
+            updated_at: result.updated_at,
+            hung: false,
+            guidance: "Graph Feedback: this-session process fact saved; Host notebook hang is not allowed.",
+          });
+        }
         if (hasPlatformApi(runtime) && hang) {
           const res = await recordIntelRow(runtime, {
             asset_id: hang.asset_id,

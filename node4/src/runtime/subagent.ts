@@ -78,25 +78,11 @@ export class SubagentHost {
     return typeof t === "function" ? t() : t;
   }
 
-  /** Push Main + children so Status collaboration tree updates live. */
+  /** Push Main + children so the Agent collaboration tree updates live. */
   private async emitPanelAgentsSnapshot(): Promise<void> {
     const panel = this.opts.panelAgents;
     if (!panel) return;
     const agents = panel.list();
-    await this.opts.platform
-      .send({
-        type: "status_update",
-        conversation_id: this.task().conversationId,
-        task_id: this.task().taskId,
-        message: "panel_agents",
-        agent_phase: "subagent",
-        status: "running",
-        panel_agents: agents,
-        expert_id: this.task().expertId,
-        expert_name: this.task().expertName,
-      })
-      .catch(() => {});
-    // Persist into checkpoint path consumers (Case participants / snapshot).
     await this.opts.platform
       .send({
         type: "checkpoint_update",

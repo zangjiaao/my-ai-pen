@@ -79,7 +79,7 @@ const fakeExecutor = async (input: {
   tools: string[];
 }) => {
   if (input.stage.id === "init") {
-    return { structured: { ok: true, summary: "init", surfaces: [], candidates: [] } };
+    return { structured: { ok: true, summary: "init", surfaces: [], candidates: [], stage_advance: "continue" } };
   }
   if (input.stage.id === "surface") {
     assert.ok(input.tools.includes("shell") || input.tools.includes("http"));
@@ -89,10 +89,11 @@ const fakeExecutor = async (input: {
         summary: "surf",
         surfaces: [{ location: "http://t/" }],
         candidates: [],
+        stage_advance: "continue",
       },
     };
   }
-  return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+  return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [], stage_advance: "continue" } };
 };
 
 const result = await runHardGraphExpertTask({
@@ -135,10 +136,15 @@ const checkpoints = messages.filter((m) => m.type === "checkpoint_update");
 assert.ok(checkpoints.length >= 1, "terminal checkpoint_update");
 
 const workModes = messages
-  .filter((m) => m.type === "work_status" || m.type === "status_update")
+  .filter((m) => m.type === "work_status")
   .map((m) => String((m as any).work_mode || ""));
 assert.ok(workModes.some((w) => w.startsWith("hard_graph:app_assessment_thin")));
 assert.ok(workModes.some((w) => w.includes("surface")));
+assert.equal(
+  messages.filter((m) => m.type === "status_update").length,
+  0,
+  "Graph stages must not use status_update as a ledger",
+);
 
 const raw = await readFile(join(taskDir, "hard-graph", "run-result.json"), "utf8");
 const saved = JSON.parse(raw);
@@ -160,7 +166,14 @@ await emitHardGraphStageStatus({
   startedAt: new Date().toISOString(),
 });
 assert.ok(more.some((m) => m.type === "work_status"));
-assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.stage_id, "s1");
+assert.equal(
+  more.filter((m) => m.type === "status_update").length,
+  0,
+  "stage_start does not emit status_update",
+);
+assert.ok(
+  more.some((m) => m.type === "work_status" && String((m as any).work_mode || "").includes("s1")),
+);
 
 // skipped stage_end → plan status "skipped" (not blocked)
 {
@@ -218,7 +231,7 @@ assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.
 
   const llmExecutor = async (input: { stage: { id: string } }) => {
     if (input.stage.id === "init") {
-      return { structured: { ok: true, summary: "init", surfaces: [], candidates: [] } };
+      return { structured: { ok: true, summary: "init", surfaces: [], candidates: [], stage_advance: "continue" } };
     }
     throw new LlmTurnError("403 model not available in region");
   };
@@ -294,7 +307,6 @@ assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.
   const assertPath = (messages: unknown[]) => {
     const t = extractLlmTurnError(messages);
     if (!t) return "ok";
-    emitted.push({ type: "status_update" });
     throw new LlmTurnError(t);
   };
   let freeCaught: unknown;
@@ -306,12 +318,65 @@ assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.
   }
   assert.ok(isLlmTurnError(freeCaught));
   assert.equal(emitted.filter((e) => e.type === "task_complete").length, 0);
-  assert.equal(emitted.filter((e) => e.type === "status_update").length, 1);
   // Normal end_turn must not trip assert path
   assert.equal(
     assertPath([{ role: "assistant", stopReason: "end_turn", content: [] }]),
     "ok",
   );
+}
+
+// Feedback Agent pause vote: host card uses next stage id
+{
+  const pauseDir = await mkdtemp(join(tmpdir(), "hard-graph-pause-"));
+  const pauseMsgs: PlatformMessage[] = [];
+  const pausePlatform = { send: async (m: PlatformMessage) => { pauseMsgs.push(m); } };
+  const pauseRuntime = {
+    task: { ...task, taskId: "t-pause", instruction: "stop after mapping" },
+    workspaceDir: pauseDir,
+    piDir: pauseDir,
+    platform: pausePlatform,
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(pauseDir, "evidence")),
+    findingsDir: join(pauseDir, "findings"),
+    goals: new GoalStore(),
+    rolePackId: "pentest",
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as ToolRuntime;
+  const pausedTask = await runHardGraphExpertTask({
+    config: {
+      workspaceDir: pauseDir,
+      piAgentDir: join(pauseDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    platform: pausePlatform,
+    task: { ...task, taskId: "t-pause", instruction: "stop after mapping" },
+    caseDir: pauseDir,
+    pack: pack as any,
+    graph: graph!,
+    parentRuntime: pauseRuntime,
+    stageExecutor: (async (input: { stage: { id: string } }) => {
+      if (input.stage.id === "init") {
+        return {
+          structured: { ok: true, summary: "init", surfaces: [], candidates: [] },
+          stageAdvance: "pause",
+        };
+      }
+      return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+    }) as any,
+  });
+  assert.equal(pausedTask.terminal, "paused");
+  assert.equal(pausedTask.harnessStatus, "incomplete");
+  const cards = pauseMsgs.filter((m) => m.type === "request_decision");
+  assert.equal(cards.length, 1);
+  assert.match(String(cards[0]?.question || ""), /surface/);
+  assert.ok(!pauseMsgs.some((m) => m.type === "task_complete" && (m as any).status === "completed"));
+  const pauseCk = [...pauseMsgs].reverse().find((m) => m.type === "checkpoint_update") as
+    | { checkpoint?: { panel_agents?: Array<{ parent_id?: string | null; status?: string; current_detail?: string }> } }
+    | undefined;
+  const pauseMain = pauseCk?.checkpoint?.panel_agents?.find((a) => !a.parent_id);
+  assert.equal(pauseMain?.status, "paused", "Feedback pause is wait, not abort");
+  assert.ok(!/已中止/.test(String(pauseMain?.current_detail || "")));
 }
 
 console.log("hard-graph-task.test.ts: ok");

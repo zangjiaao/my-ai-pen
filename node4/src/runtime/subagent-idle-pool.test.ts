@@ -194,7 +194,8 @@ assert.equal(
   assert.equal(await pool.release("sub_gone"), false);
   assert.equal(panel.list().some((a) => a.id === "sub_gone"), true, "session dispose keeps collab row");
   assert.equal(await pool.release("sub_gone", { dropFromPanel: true }), true, "End of panel-only child is accepted");
-  assert.equal(panel.list().some((a) => a.id === "sub_gone"), false, "explicit End drops collab row even if session already gone");
+  const gone = panel.list().find((a) => a.id === "sub_gone");
+  assert.equal(gone?.status, "released", "explicit End keeps collab row as released");
 }
 
 // End after collab row / before noteLive must not park later.
@@ -204,7 +205,7 @@ assert.equal(
   panel.noteSubagentStart({ id: "sub_early", assignment: "ping" });
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 }, panel, "case-a");
   assert.equal(await releaseWorkerById("sub_early", "case-a"), true);
-  assert.equal(panel.list().some((a) => a.id === "sub_early"), false);
+  assert.equal(panel.list().find((a) => a.id === "sub_early")?.status, "released");
   const h = fakeHandle("sub_early", "p");
   assert.equal(await pool.noteLive(h), false, "noteLive must refuse a pending End");
   assert.equal(h.hardReleased, true);

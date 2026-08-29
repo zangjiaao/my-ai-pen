@@ -1,11 +1,12 @@
 """Case Workset («下一步») — durable multi-discovery parking lot (Spec #311).
 
 Host-gated store on conversation.context["workset"]. Agent may propose only;
-adopt is user or Goal mechanical valve. Never silent Scope/RoE expand.
+adopt is user, Goal mechanical valve (in-scope t_surface), or Case asset-intake
+policy (user-delegated enroll_group). Never silent Scope/RoE expand.
 
 Families V1:
   t_surface — in-Scope deepen (adopt ≠ expand rights)
-  t_host    — new host; human confirm expands Scope
+  t_host    — new host; human confirm or Case enroll_group policy expands Scope
 
 Statuses: proposed | adopted | done | rejected
 """
@@ -21,8 +22,14 @@ WORKSET_KEY = "workset"
 FAMILIES = frozenset({"t_surface", "t_host"})
 STATUSES = frozenset({"proposed", "adopted", "done", "rejected"})
 OPEN_STATUSES = frozenset({"proposed", "adopted"})
+# Spec #532 — passive exposure metadata (not a closed source router).
+CONFIDENCES = frozenset({"low", "medium", "high"})
+SCOPE_DECISIONS = frozenset({"pending", "in_scope", "out_of_scope", "needs_authorization"})
 # Goal outer-loop budget (rounds of auto-continue). Separate from stage retries.
 DEFAULT_GOAL_OUTER_BUDGET = 8
+# Spec #540 — Agent list is an index, not a dump.
+AGENT_WORKSET_LIST_CAP = 24
+AGENT_WORKSET_LIST_CAP_MAX = 40
 
 
 def _now_iso() -> str:
@@ -72,6 +79,127 @@ def put_workset(context: dict | None, workset: dict[str, Any]) -> dict[str, Any]
         "goal": dict(workset["goal"]) if isinstance(workset.get("goal"), dict) else None,
     }
     return ctx
+
+
+INTAKE_KEY = "asset_intake"
+INTAKE_MODES = frozenset({"ask", "enroll_group"})
+ADOPT_ACTORS = frozenset({"user", "goal_mechanical", "system", "intake_policy"})
+
+
+def normalize_asset_intake(raw: object) -> dict[str, Any]:
+    """Case user policy for discovery → Owner Host.
+
+    Default ``ask``: Workset stays pending until user (or Goal t_surface valve) adopts.
+    ``enroll_group``: eligible t_host rows enroll into the named Group and this Case Scope.
+    Platform does not infer the mode from free-text; Agent/UI writes this structured field.
+    """
+    src = raw if isinstance(raw, dict) else {}
+    mode = str(src.get("mode") or "ask").strip().lower()
+    if mode not in INTAKE_MODES:
+        mode = "ask"
+    group_id = str(src.get("group_id") or "").strip()
+    group_name = str(src.get("group_name") or src.get("group") or "").strip()
+    if mode == "enroll_group" and not group_id and not group_name:
+        mode = "ask"
+    into_scope = src.get("into_scope")
+    if into_scope is None:
+        into_scope = True
+    return {
+        "mode": mode,
+        "group_id": group_id or None,
+        "group_name": group_name or None,
+        "into_scope": bool(into_scope),
+        "set_by": str(src.get("set_by") or "").strip()[:40] or None,
+        "updated_at": str(src.get("updated_at") or "").strip() or None,
+    }
+
+
+def get_asset_intake(context: object) -> dict[str, Any]:
+    ctx = context if isinstance(context, dict) else {}
+    return normalize_asset_intake(ctx.get(INTAKE_KEY))
+
+
+def put_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    normalized = normalize_asset_intake(policy)
+    if not normalized.get("updated_at"):
+        normalized["updated_at"] = _now_iso()
+    ctx[INTAKE_KEY] = normalized
+    return ctx
+
+
+def same_intake_group(a: object, b: object) -> bool:
+    left, right = normalize_asset_intake(a), normalize_asset_intake(b)
+    gid_a = str(left.get("group_id") or "").strip()
+    gid_b = str(right.get("group_id") or "").strip()
+    if gid_a and gid_b:
+        return gid_a == gid_b
+    name_a = str(left.get("group_name") or "").strip().lower()
+    name_b = str(right.get("group_name") or "").strip().lower()
+    return bool(name_a and name_b and name_a == name_b)
+
+
+def agent_intake_set_by(prior: object, incoming: object) -> str:
+    """Agent restating the same enroll_group must not demote owner confirm."""
+    nxt = normalize_asset_intake(incoming)
+    if (
+        intake_policy_user_committed(prior)
+        and nxt["mode"] == "enroll_group"
+        and same_intake_group(prior, nxt)
+    ):
+        return "user"
+    return "agent"
+
+
+def put_agent_asset_intake(context: dict | None, policy: object) -> dict[str, Any]:
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    incoming = dict(policy) if isinstance(policy, dict) else {}
+    incoming["set_by"] = agent_intake_set_by(get_asset_intake(ctx), incoming)
+    return put_asset_intake(ctx, incoming)
+
+
+def intake_policy_user_committed(policy: object) -> bool:
+    """True only after the owner confirmed enroll_group (not agent-recorded intent)."""
+    pol = normalize_asset_intake(policy)
+    return pol["mode"] == "enroll_group" and str(pol.get("set_by") or "") == "user"
+
+
+def intake_enroll_eligible(item: dict[str, Any], policy: object) -> bool:
+    """Eligible t_host for Case enroll_group policy. Exceptions stay proposed."""
+    pol = normalize_asset_intake(policy)
+    if pol["mode"] != "enroll_group":
+        return False
+    if not pol.get("group_id") and not pol.get("group_name"):
+        return False
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("status") or "proposed") != "proposed":
+        return False
+    if str(item.get("family") or "") != "t_host":
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    host = _host_from_payload(payload, "t_host") or str(payload.get("host") or "").strip().lower()
+    if not host or not is_valid_ledger_address(host):
+        return False
+    decision = str(payload.get("scope_decision") or "").strip().lower()
+    if decision in {"out_of_scope", "needs_authorization"}:
+        return False
+    confidence = str(payload.get("confidence") or "").strip().lower()
+    if confidence == "low":
+        return False
+    return True
+
+
+def apply_intake_enroll_to_context(
+    context: dict | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Enrollment is committed only after Owner Host create succeeds.
+
+    Sync callers (merge/settle) must not adopt or expand Scope here — that left
+    adopted rows with no Host when materialize failed.
+    """
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    return ctx, []
 
 
 def scope_hosts_from_task(task: object) -> set[str]:
@@ -200,12 +328,29 @@ def mechanical_gate(
     }
 
 
+def is_passive_exposure_item(item: dict[str, Any]) -> bool:
+    """Spec #532: CT/DNS/Shodan-class candidates stay proposed until the user adopts."""
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    if payload.get("passive") is True:
+        return True
+    decision = str(payload.get("scope_decision") or "").strip().lower()
+    if decision in {"pending", "needs_authorization"}:
+        return True
+    if str(payload.get("intel_source") or "").strip():
+        return True
+    src = str(item.get("source") or "").strip().lower()
+    return src.startswith("passive") or src.startswith("exposure")
+
+
 def auto_check_safe(item: dict[str, Any], scope_hosts: set[str]) -> bool:
     """Whether Goal may auto-adopt this item (mechanical only).
 
     Spec #311: host-checkable in-scope only. Path-only t_surface (no host) is
     not auto-eligible when scope_hosts is non-empty (or empty — not checkable).
+    Spec #532: passive exposure never auto-adopts (not Host / active test).
     """
+    if is_passive_exposure_item(item):
+        return False
     family = str(item.get("family") or "")
     if family != "t_surface":
         return False
@@ -316,6 +461,25 @@ def normalize_candidate(
         kind = str(raw.get("kind") or "").strip()
         if kind:
             payload["kind"] = kind[:64]
+
+    intel_source = str(raw.get("intel_source") or payload.get("intel_source") or "").strip()[:64]
+    if intel_source:
+        payload["intel_source"] = intel_source
+    attribution = str(raw.get("attribution") or payload.get("attribution") or "").strip()
+    if attribution:
+        payload["attribution"] = _clip(attribution, 800)
+    confidence = str(raw.get("confidence") or payload.get("confidence") or "").strip().lower()
+    if confidence in CONFIDENCES:
+        payload["confidence"] = confidence
+    scope_decision = str(
+        raw.get("scope_decision") or payload.get("scope_decision") or ""
+    ).strip().lower()
+    if scope_decision in SCOPE_DECISIONS:
+        payload["scope_decision"] = scope_decision
+    if raw.get("passive") is True or payload.get("passive") is True or intel_source:
+        payload["passive"] = True
+        if "scope_decision" not in payload:
+            payload["scope_decision"] = "pending"
 
     now = _now_iso()
     item_id = str(raw.get("id") or "").strip() or f"ws_{uuid.uuid4().hex[:16]}"
@@ -429,11 +593,11 @@ def update_item_status(
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
     """Host-gated status transition. Returns (workset, item, error).
 
-    Agent cannot self-approve adopted — actor must be user|goal_mechanical|system.
+    Agent cannot self-approve adopted — actor must be user|goal_mechanical|system|intake_policy.
     """
     if status not in STATUSES:
         return workset, None, "invalid_status"
-    if status == "adopted" and actor not in {"user", "goal_mechanical", "system"}:
+    if status == "adopted" and actor not in ADOPT_ACTORS:
         return workset, None, "agent_cannot_self_adopt"
     ws = {
         "version": int(workset.get("version") or 1),
@@ -466,7 +630,7 @@ def adopt_item(
     require_auto_eligible: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
     """Adopt a proposed item with optional mechanical gate for Goal."""
-    if actor not in {"user", "goal_mechanical", "system"}:
+    if actor not in ADOPT_ACTORS:
         return workset, None, "agent_cannot_self_adopt"
     items = workset.get("items") if isinstance(workset.get("items"), list) else []
     target = next((i for i in items if isinstance(i, dict) and str(i.get("id")) == item_id), None)
@@ -787,8 +951,9 @@ def expand_task_scope_for_host(
     host: str,
     port: str | None = None,
     urls: list | None = None,
+    asset_id: str | None = None,
 ) -> tuple[dict[str, Any], str | None]:
-    """Extend task Scope.allow with a confirmed host (t_host adopt / next-scope spirit).
+    """Extend task Scope.allow (and optional Host id) with a confirmed host.
 
     Does not wipe prior allow entries. Returns (task, error).
     """
@@ -814,6 +979,16 @@ def expand_task_scope_for_host(
         if entry and entry not in allow:
             allow.append(entry)
     scope["allow"] = allow
+    aid = str(asset_id or "").strip()
+    if aid:
+        try:
+            uuid.UUID(aid)
+            ids = list(scope.get("asset_ids") or []) if isinstance(scope.get("asset_ids"), list) else []
+            if aid not in ids:
+                ids.append(aid)
+            scope["asset_ids"] = ids
+        except ValueError:
+            pass
     if "deny" not in scope:
         scope["deny"] = list(scope.get("deny") or []) if isinstance(scope.get("deny"), list) else []
     out["scope"] = scope
@@ -1033,6 +1208,108 @@ def project_workset_for_api(
     return out
 
 
+def list_workset_for_agent(
+    workset: dict[str, Any],
+    *,
+    family: str | None = None,
+    status: str | None = None,
+    needle: str | None = None,
+    cap: int = AGENT_WORKSET_LIST_CAP,
+    item_id: str | None = None,
+) -> dict[str, Any]:
+    """Filtered, capped Case Workset index for Agent tools (Spec #540)."""
+    try:
+        cap_n = int(cap or AGENT_WORKSET_LIST_CAP)
+    except (TypeError, ValueError):
+        cap_n = AGENT_WORKSET_LIST_CAP
+    cap_n = max(1, min(cap_n, AGENT_WORKSET_LIST_CAP_MAX))
+    items = [dict(i) for i in (workset.get("items") or []) if isinstance(i, dict)]
+    want_id = str(item_id or "").strip()
+    fam = str(family or "").strip().lower()
+    st = str(status or "").strip().lower()
+    q = str(needle or "").strip().lower()
+    matched: list[dict[str, Any]] = []
+    for item in items:
+        if want_id:
+            if str(item.get("id") or "") != want_id:
+                continue
+        else:
+            cur_st = str(item.get("status") or "").strip().lower()
+            if st:
+                if cur_st != st:
+                    continue
+            elif cur_st not in OPEN_STATUSES:
+                continue
+            if fam and str(item.get("family") or "").strip().lower() != fam:
+                continue
+            if q:
+                payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                blob = " ".join(
+                    [
+                        str(item.get("id") or ""),
+                        str(item.get("title") or ""),
+                        str(item.get("summary") or ""),
+                        str(payload.get("host") or ""),
+                        str(payload.get("location") or ""),
+                        str(payload.get("attribution") or ""),
+                    ]
+                ).lower()
+                if q not in blob:
+                    continue
+        matched.append(item)
+        if want_id:
+            break
+    total = len(matched)
+    shown = matched[:cap_n]
+    agent_items: list[dict[str, Any]] = []
+    for i in shown:
+        payload = i.get("payload") if isinstance(i.get("payload"), dict) else {}
+        agent_items.append({
+            "id": i.get("id"),
+            "family": i.get("family"),
+            "status": i.get("status"),
+            "title": i.get("title"),
+            "summary": i.get("summary"),
+            "host": payload.get("host"),
+            "location": payload.get("location"),
+            "intel_source": payload.get("intel_source"),
+            "attribution": payload.get("attribution"),
+            "confidence": payload.get("confidence"),
+            "scope_decision": payload.get("scope_decision"),
+            "passive": payload.get("passive"),
+            "source": i.get("source"),
+        })
+    return {
+        "ok": True,
+        "items": agent_items,
+        "count": len(agent_items),
+        "total": total,
+        "omitted": max(0, total - len(agent_items)),
+        "cap": cap_n,
+        "note": (
+            "Case Workset is pending admission — not Host, not Surface coverage, not Intel. "
+            "Adopt is a user action unless Case asset-intake enroll_group applies. "
+            "Parked hosts must not be probed or hung as Intel until adopt or enroll."
+        ),
+    }
+
+
+def merge_proposed_into_context(
+    context: dict | None,
+    candidates: list[dict[str, Any]],
+    *,
+    source: str = "workset_propose",
+) -> dict[str, Any]:
+    """Mid-run Agent propose (Spec #532). Merge only — no Goal valve, no baton clear."""
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
+    ws = get_workset(ctx)
+    ws = merge_proposed_items(ws, candidates, source=source, scope_hosts=scope_hosts)
+    ctx = put_workset(ctx, ws)
+    return ctx
+
+
 def thin_handoff_brief(
     workset: dict[str, Any],
     *,
@@ -1044,11 +1321,20 @@ def thin_handoff_brief(
     open_items = proj.get("items") or []
     slim = []
     for item in open_items[:max_items]:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        family = str(item.get("family") or "")
+        host = (
+            item.get("host")
+            or payload.get("host")
+            or _host_from_payload(payload, family)
+            or None
+        )
         slim.append({
             "id": item.get("id"),
             "family": item.get("family"),
             "title": item.get("title"),
             "status": item.get("status"),
+            "host": host,
             "auto_eligible": bool(item.get("auto_eligible")),
             "suggested_expert": item.get("suggested_expert"),
         })
@@ -1111,6 +1397,11 @@ def apply_settle_to_context(
 
     # Settle always clears in-progress baton annotation (baton ends with this burst).
     ws = clear_in_progress(ws)
+
+    ctx = put_workset(ctx, ws)
+    ws = get_workset(ctx)
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
 
     stop_goal = bool(user_stopped or goal_explicit_off)
 
@@ -1178,4 +1469,176 @@ def apply_settle_to_context(
             if str(item.get("status") or "") == "proposed":
                 item["auto_eligible"] = auto_check_safe(item, scope_hosts)
 
-    return put_workset(ctx, ws)
+    ctx = put_workset(ctx, ws)
+    # Spec #540: legacy arrays are merge inputs only. Snapshot/API truth is Workset.
+    ctx.pop("next_scope_candidates", None)
+    ctx.pop("attack_surface_candidates", None)
+    ctx.pop("next_scope_suggested", None)
+    return ctx
+
+
+def _first_host_asset_id(result: object) -> str | None:
+    """Host id from create_hosts_for_user (created or merged into the intake Group)."""
+    if not isinstance(result, dict):
+        return None
+    rows: list[Any] = []
+    for key in ("assets", "created", "merged"):
+        val = result.get(key)
+        if isinstance(val, list):
+            rows.extend(val)
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id") or "").strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        try:
+            uuid.UUID(aid)
+        except ValueError:
+            continue
+        return aid
+    return None
+
+
+def commit_intake_enrollment(
+    context: dict | None,
+    item_id: str,
+    *,
+    asset_id: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
+    """Adopt + Scope after a successful Owner Host create (id required)."""
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    aid = str(asset_id or "").strip()
+    try:
+        uuid.UUID(aid)
+    except ValueError:
+        return ctx, None, "invalid_asset_id"
+    ws = get_workset(ctx)
+    item = next(
+        (i for i in (ws.get("items") or []) if isinstance(i, dict) and str(i.get("id")) == str(item_id)),
+        None,
+    )
+    if not item:
+        return ctx, None, "not_found"
+    policy = get_asset_intake(ctx)
+    fields = host_expand_fields_from_item(item)
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    if policy.get("into_scope") is not False and fields:
+        expanded, expand_err = expand_task_scope_for_host(
+            task,
+            host=fields["host"],
+            port=fields.get("port"),
+            urls=fields.get("urls"),
+            asset_id=aid,
+        )
+        if expand_err:
+            return ctx, None, expand_err
+        ctx["task"] = expanded
+    if str(item.get("status") or "") == "proposed":
+        ws2, found, err = adopt_item(ws, str(item_id), actor="intake_policy")
+        if err or not found:
+            return ctx, None, err or "adopt_failed"
+        ws = ws2
+        item = found
+    payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
+    payload["intake_materialized"] = True
+    payload["intake_asset_id"] = aid
+    item["payload"] = payload
+    ctx = put_workset(ctx, ws)
+    return ctx, dict(item), None
+
+
+async def materialize_user_committed_intake(
+    db: Any,
+    *,
+    user_id: Any,
+    conversation_id: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """WS/agent paths: enroll only when the owner already confirmed this Case policy."""
+    if not intake_policy_user_committed(get_asset_intake(context)):
+        return context
+    return await materialize_intake_hosts(
+        db,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        context=context,
+    )
+
+
+async def materialize_intake_hosts(
+    db: Any,
+    *,
+    user_id: Any,
+    conversation_id: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Create Owner Hosts first; adopt and expand Scope only after a Host id exists."""
+    policy = get_asset_intake(context)
+    if policy["mode"] != "enroll_group":
+        return context
+    from app.services.node_ledger import NodeLedgerError, create_hosts_for_user
+
+    ctx = dict(context)
+    ws = get_workset(ctx)
+    item_ids = [
+        str(i.get("id"))
+        for i in (ws.get("items") or [])
+        if isinstance(i, dict) and i.get("id")
+    ]
+    for item_id in item_ids:
+        ws = get_workset(ctx)
+        item = next(
+            (i for i in (ws.get("items") or []) if isinstance(i, dict) and str(i.get("id")) == item_id),
+            None,
+        )
+        if not item:
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if payload.get("intake_materialized"):
+            continue
+        eligible = intake_enroll_eligible(item, policy)
+        legacy = (
+            str(item.get("status") or "") == "adopted"
+            and str(item.get("status_actor") or "") == "intake_policy"
+        )
+        if not eligible and not legacy:
+            continue
+        fields = host_expand_fields_from_item(item)
+        if not fields:
+            continue
+        try:
+            created = await create_hosts_for_user(
+                db,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                address=fields["host"],
+                ports=[fields["port"]] if fields.get("port") else None,
+                reason="Case asset-intake policy (user-delegated enroll_group)",
+                group_id=policy.get("group_id"),
+                group_name=policy.get("group_name"),
+            )
+            asset_id = _first_host_asset_id(created)
+            if not asset_id:
+                raise NodeLedgerError("create_hosts_for_user returned no Host id", status_code=500)
+        except NodeLedgerError as e:
+            print(f"[intake] materialize skip {fields.get('host')}: {e}")
+            if legacy:
+                item["status"] = "proposed"
+                item.pop("status_actor", None)
+                ctx = put_workset(ctx, ws)
+            continue
+        except Exception as e:
+            print(f"[intake] materialize error {fields.get('host')}: {e}")
+            if legacy:
+                item["status"] = "proposed"
+                item.pop("status_actor", None)
+                ctx = put_workset(ctx, ws)
+            continue
+        ctx, _, err = commit_intake_enrollment(ctx, item_id, asset_id=asset_id)
+        if err:
+            print(f"[intake] commit skip {fields.get('host')}: {err}")
+            continue
+    return ctx

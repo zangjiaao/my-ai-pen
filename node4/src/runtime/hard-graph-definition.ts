@@ -570,8 +570,10 @@ export function isContinueInEnvelopeExecution(input: {
 }
 
 /**
- * Product work-path decision after resolveHardGraph (#76 Soft retire / #78 C1 / #282).
- * - chatOnly / ledger assist → free (no Expert Graph execution)
+ * Product work-path decision after resolveHardGraph (#76 Soft retire / #78 C1 / #282 / #284).
+ * - ledger assist → free (built-in seats never Expert Graph)
+ * - chatOnly **without** Graph intent → free (ledger-assist greeting)
+ * - chatOnly **with** Graph intent → Hard or fail-closed unavailable (never silent Free OMP)
  * - continue-in-envelope (C1 post-complete only) → free OMP under sticky Graph RoE/template
  * - hard resolved (including incomplete resume) → Expert Graph runner
  * - structured Graph intent but no hard Graph → fail-closed (never silent free)
@@ -591,7 +593,11 @@ export function resolveExpertWorkPath(input: {
    */
   continueInEnvelope?: boolean;
 }): { path: "hard" } | { path: "free" } | { path: "unavailable"; graphId: string } {
-  if (input.chatOnly || input.ledgerAssistSeat) {
+  if (input.ledgerAssistSeat) {
+    return { path: "free" };
+  }
+  // Spec #284 B2/G5: chatOnly (ledger seat) is not permission to demote a selected product Graph.
+  if (input.chatOnly && !input.graphIntent) {
     return { path: "free" };
   }
   // C1 before hard path: sticky Graph template must not re-fire stages on post-complete chat.

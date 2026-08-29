@@ -160,4 +160,18 @@ assert.ok(miss?.path === "single_free" || miss?.path === "fuzzy", `got ${miss?.p
 assert.equal(miss?.requested_node_id, "todo-does-not-exist");
 assert.ok(miss?.hint && /not found/i.test(miss.hint));
 
+{
+  const mixed = new TodoStore();
+  mixed.apply({
+    op: "init",
+    list: [{ phase: "攻击面", items: ["REST/API", "组件核验"] }],
+  });
+  mixed.apply({ op: "done", task: "REST/API" });
+  const recon = mixed.toPlanNodes().find((n) => n.level === "phase");
+  assert.equal(recon?.status, "partial", "one child done → parent partial, not pending");
+  mixed.apply({ op: "done", task: "组件核验" });
+  const donePhase = mixed.toPlanNodes().find((n) => n.level === "phase");
+  assert.equal(donePhase?.status, "done", "all children done → parent done without extra todo.done on phase");
+}
+
 console.log("todo-worker-bind.test.ts: ok");

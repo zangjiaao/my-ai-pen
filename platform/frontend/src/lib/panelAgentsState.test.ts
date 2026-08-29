@@ -6,6 +6,7 @@ import {
   formatAgentWorkModeBadge,
   isLegacySyntheticPhasePlan,
   markPanelWorkerReleased,
+  mergeAgentsKeepingReleased,
   mergeLivePanelAgents,
   mergePlanTreeByOwner,
   mergeSnapshotAgentsPreserveHarness,
@@ -299,10 +300,11 @@ const liveMainOnly: StrixAgentStatus[] = [
     [main, sub1, { ...sub1, id: "role-expert:e2-sub_10", name: "Worker 10", status: "idle" }],
     "sub_1",
   );
-  assert(marked.length === 2, "released worker dropped from collab tree");
-  assert(marked.every((a) => a.id !== sub1.id && !a.id.endsWith("-sub_1")), "sub_1 gone");
-  assert(marked.some((a) => a.id === "role-expert:e2-sub_10"), "sub_10 untouched");
-  console.log("ok: markPanelWorkerReleased suffix");
+  const released = marked.find((a) => a.id === sub1.id);
+  assert(released?.status === "released", "released worker stays on collab tree");
+  assert(released?.name === "Worker 1", "name preserved");
+  assert(marked.some((a) => a.id === "role-expert:e2-sub_10" && a.status === "idle"), "sub_10 untouched");
+  console.log("ok: markPanelWorkerReleased greys suffix match");
 }
 
 {
@@ -327,6 +329,47 @@ const liveMainOnly: StrixAgentStatus[] = [
   const doneKeep = mergePlanTreeByOwner([ping4], [{ ...ping4, status: "done" }]);
   assert(doneKeep[0]?.status === "done", "done republish replaces running");
   console.log("ok: mergePlanTreeByOwner empty is authoritative");
+}
+
+{
+  const snapMainOnly = [main];
+  const kept = mergeAgentsKeepingReleased([main, sub1], snapMainOnly, ["sub_1"]);
+  assert(kept.some((a) => a.id === sub1.id && a.status === "released"), "thin snapshot keeps released Worker");
+  const cleared = mergeAgentsKeepingReleased([main, sub1], [], ["sub_1"]);
+  assert(cleared.length === 0, "empty snapshot still clears (Session Delete)");
+  console.log("ok: mergeAgentsKeepingReleased");
+}
+
+{
+  const liveFb: StrixAgentStatus = {
+    id: "role-expert:e2-feedback",
+    name: "Feedback",
+    status: "running",
+    parent_id: "role-expert:e2",
+    task: "评审 init → surface",
+    skills: ["feedback"],
+    pending_count: 0,
+    role: "subagent",
+    current_action: "running",
+    current_detail: "评审 init → surface",
+  };
+  const staleSnap: StrixAgentStatus[] = [
+    { ...main, status: "running" },
+    {
+      id: "feedback",
+      name: "Feedback",
+      status: "completed",
+      parent_id: "node4-main",
+      task: "评审 init → surface",
+      skills: ["feedback"],
+      pending_count: 0,
+      role: "subagent",
+    },
+  ];
+  const merged = mergeSnapshotAgentsPreserveHarness([main, liveFb], staleSnap);
+  const fb = merged.find((a) => String(a.name || "").toLowerCase() === "feedback");
+  assert(fb?.status === "running", "stale completed snapshot must not paint live Feedback green");
+  console.log("ok: mergeSnapshotAgentsPreserveHarness keeps live Feedback running");
 }
 
 console.log("panelAgentsState.test.ts: all passed");

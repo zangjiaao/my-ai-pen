@@ -43,7 +43,8 @@ export function l1MaxStageRefine(): number {
 
 /**
  * Minimal heuristic Critic over Product state (no answer keys).
- * Used when no LLM Critic is injected — still fail-closed on empty Product state gaps.
+ * Used when no LLM Critic is injected — tests / lab only.
+ * Production Graph L1 is `runHardGraphFeedbackAgent`, not this heuristic.
  * Under-severity is refine judgment only (not host auto-score).
  */
 export function mechanicalProductStateCritic(input: L1CriticInput): L1CriticOutput {

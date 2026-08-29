@@ -25,6 +25,7 @@ import {
 import { createRequestUserDecisionTool } from "./decision.js";
 import { createTrafficListTool } from "./traffic.js";
 import { createSurfaceTool } from "./surface.js";
+import { createWorksetTool } from "./workset.js";
 import { createYieldTool } from "./yield.js";
 
 /** Full registry of tool factories (role packs select a subset). */
@@ -42,6 +43,7 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   finding: createFindingTool,
   fact: createFactTool,
   surface: createSurfaceTool,
+  workset: createWorksetTool,
   yield: createYieldTool,
   subagent: createSubagentTool,
   goal: createGoalTool,

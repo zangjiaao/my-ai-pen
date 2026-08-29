@@ -25,6 +25,7 @@ import {
   validateHypothesisWorkModeForGraph,
 } from "./hard-graph-definition.js";
 import { loadPackFromDirSync } from "../experts/load-pack.js";
+import { GRAPH_STAGE_CITIZEN_INVENTORY_TOOLS } from "../roles/platform-citizen.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -138,6 +139,32 @@ assert.deepEqual(
   }),
   ["todo"],
 );
+assert.deepEqual(
+  applyHardGraphToolProfile(
+    ["todo", "shell", "platform_list_assets", "platform_create_asset"],
+    { allow: ["todo"] },
+  ),
+  ["todo"],
+  "filter is the JSON allowlist; runner does not sneak tools back",
+);
+
+// Pack graph JSON is the stage tool surface (inventory reads listed there).
+for (const id of await listHardGraphIds(repoExperts)) {
+  const g = await loadHardGraphFile(repoExperts, id);
+  assert.ok(g);
+  for (const st of g!.stages) {
+    for (const t of GRAPH_STAGE_CITIZEN_INVENTORY_TOOLS) {
+      assert.ok(
+        st.tools?.allow?.includes(t),
+        `${id}/${st.id} tools.allow includes ${t}`,
+      );
+    }
+    assert.ok(
+      !st.tools?.allow?.includes("platform_create_asset"),
+      `${id}/${st.id} does not allow silent host create`,
+    );
+  }
+}
 
 // Spec #125: write is optional — not a result.json handoff prerequisite
 assert.equal(
@@ -197,12 +224,30 @@ assert.deepEqual(
 );
 assert.deepEqual(
   resolveExpertWorkPath({
+    hardMode: "not_hard",
+    graphIntent: null,
+    chatOnly: true,
+  }),
+  { path: "free" },
+  "chat-only greeting without Graph intent stays Free",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
     hardMode: "hard",
     graphIntent: "app_assessment",
     chatOnly: true,
   }),
-  { path: "free" },
-  "chat-only never enters Expert Graph runner",
+  { path: "hard" },
+  "Spec #284 B2: chatOnly must not silent-Free a selected product Graph",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "not_hard",
+    graphIntent: "app_assessment",
+    chatOnly: true,
+  }),
+  { path: "unavailable", graphId: "app_assessment" },
+  "Spec #284 G5: Graph intent without hard Graph stays fail-closed when chatOnly",
 );
 assert.deepEqual(
   resolveExpertWorkPath({

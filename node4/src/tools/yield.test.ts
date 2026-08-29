@@ -76,6 +76,8 @@ function runtime(depth: number): ToolRuntime {
 
 assert.equal(typeof ALL_NODE4_TOOL_FACTORIES.yield, "function");
 assert.ok(SUBAGENT_CHILD_TOOL_NAMES.includes("yield"));
+assert.ok(SUBAGENT_CHILD_TOOL_NAMES.includes("finding"));
+assert.ok(SUBAGENT_CHILD_TOOL_NAMES.includes("platform_list_intel"));
 assert.ok(!(NODE4_TOOL_NAMES as readonly string[]).includes("yield"), "Main bare pack has no yield");
 assert.ok(!DEFAULT_SEAT_PACK.toolNames.includes("yield"), "Default seat has no yield");
 assert.ok(!PENTEST_ROLE_PACK.toolNames.includes("yield"), "Main pentest pack has no yield");

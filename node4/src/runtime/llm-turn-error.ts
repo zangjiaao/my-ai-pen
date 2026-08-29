@@ -138,6 +138,9 @@ export function assistantTurnErrorMessage(message: AssistantTurnSnapshot | Recor
 /** Short user-facing Chinese/English hybrid message; keep provider detail. */
 export function formatLlmErrorForUser(raw: string): string {
   const t = String(raw || "").trim() || "Model request failed";
+  if (isIncompleteStreamMessage(t)) {
+    return `模型调用失败：输出流未正常结束（${t}）`;
+  }
   // Keep provider text — operators need 403 / opt-in URLs.
   if (/模型调用失败|Model request failed/i.test(t)) {
     if (isOccupancyProviderText(t) && !/occupancy/i.test(t)) {

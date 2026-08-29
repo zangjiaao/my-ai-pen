@@ -23,7 +23,7 @@ import {
   proofGroundedInRecentWork,
   textResult,
 } from "./common.js";
-import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import { ingestPackageCandidatesToStore, type FindingStore } from "../runtime/finding-store.js";
 import { parseHostPort } from "../runtime/attack-surface.js";
 export { parseHostPort } from "../runtime/attack-surface.js";
 import { resolveBookSeverity } from "../runtime/finding-severity.js";
@@ -347,20 +347,25 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
       }
 
       if (action === "list") {
-        // Prefer Store snapshot when available (captain-visible feedback_ok ids).
-        if (store) {
-          const rows = store.snapshot();
-          return jsonResult({
-            findings: rows,
-            feedback_ok_ids: rows.filter((r) => r.status === "feedback_ok").map((r) => r.id),
-            booked_n: rows.filter((r) => r.status === "booked").length,
-          });
-        }
-        const rows = await loadFindings(runtime.findingsDir);
-        return jsonResult({ findings: rows });
+        const cap = (runtime.lifecycle.subagentDepth || 0) >= 1 ? 40 : undefined;
+        const board = await loadBlackboardFindings(runtime, store);
+        const shown = cap != null ? board.findings.slice(0, cap) : board.findings;
+        return jsonResult({
+          findings: shown,
+          omitted: cap != null ? Math.max(0, board.findings.length - shown.length) : 0,
+          feedback_ok_ids: board.feedbackOkIds,
+          booked_n: board.bookedN,
+        });
+      }
+      if (action === "get") {
+        const id = String(params.finding_id || params.id || "").trim();
+        if (!id) return textResult("error: finding(get) requires finding_id", { isError: true });
+        const row = await getBlackboardFinding(runtime, store, id);
+        if (!row) return textResult("error: finding not in this Case store", { isError: true });
+        return jsonResult({ finding: row });
       }
       if (action !== "confirm") {
-        return textResult("error: action must be confirm, list, or upsert");
+        return textResult("error: action must be confirm, list, get, or upsert");
       }
 
       // Spec #116 I0.13: Sub never confirms
@@ -736,7 +741,8 @@ export function looksLikePlatformUuid(value: string): boolean {
 
 /**
  * Host/port for platform ledger linking.
- * Prefer full URL in location; else task.target / scope.allow (authorized Scope).
+ * Prefer full URL in location; else user-authorized scope.allow.
+ * Envelope task.target is not a product object — do not fall back to it.
  */
 export function resolveAffectedHostPort(
   location: string,
@@ -744,15 +750,6 @@ export function resolveAffectedHostPort(
 ): { host: string; port?: string; source: string } {
   const fromLoc = parseHostPort(location);
   if (fromLoc.host) return { ...fromLoc, source: "location" };
-  const target = task.target && typeof task.target === "object" ? task.target : {};
-  const tval = String(
-    (target as { value?: unknown }).value
-      ?? (target as { url?: unknown }).url
-      ?? (target as { host?: unknown }).host
-      ?? "",
-  ).trim();
-  const fromTarget = parseHostPort(tval);
-  if (fromTarget.host) return { ...fromTarget, source: "task_target" };
   const allow = task.scope && typeof task.scope === "object"
     ? (task.scope as { allow?: unknown }).allow
     : undefined;
@@ -859,9 +856,28 @@ async function finalizeFinding(
     related_prior_id: input.relatedPriorId || undefined,
   });
 
-  // Spec #116 I0.15 path: successful confirm marks Store booked (platform-visible via vuln_found).
-  if (input.storeFindingId && runtime.lifecycle.processQuality?.findingStore) {
-    runtime.lifecycle.processQuality.findingStore.markBooked(input.storeFindingId, id);
+  // Mirror Case-file confirm into the run Store so Worker list/get and PDCA overlay see it.
+  // Store-first Graph confirm still markBooked(storeFindingId); Free confirm often has none.
+  const fstore = runtime.lifecycle.processQuality?.findingStore;
+  if (fstore) {
+    try {
+      if (input.storeFindingId) {
+        fstore.markBooked(input.storeFindingId, id);
+      } else {
+        const up = fstore.upsert({
+          id,
+          title: input.title,
+          location: input.location,
+          severity: input.severity,
+          proof_excerpt: input.proofText.slice(0, 4000) || undefined,
+          description: input.description,
+          source: "confirm",
+        });
+        fstore.markBooked(up.id, id);
+      }
+    } catch {
+      /* file + vuln_found already committed */
+    }
   }
 
   const chainQuality = assessBookingChainQuality({
@@ -913,6 +929,49 @@ export async function loadConfirmedFindings(
     ),
   ];
   return { titles, evidenceIds, count: titles.length };
+}
+
+function fileFindingId(row: Record<string, unknown>): string {
+  return String(row.id || row.finding_id || "").trim();
+}
+
+/** Store snapshot plus Case-file confirms Main booked without a Store id (Spec #528). */
+async function loadBlackboardFindings(
+  runtime: ToolRuntime,
+  store: FindingStore | undefined,
+): Promise<{ findings: unknown[]; feedbackOkIds: string[]; bookedN: number }> {
+  const fromStore = store ? store.snapshot() : [];
+  const seen = new Set(fromStore.map((r) => r.id));
+  const extras: Array<Record<string, unknown>> = [];
+  for (const row of await loadFindings(runtime.findingsDir)) {
+    const id = fileFindingId(row);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    extras.push({
+      id,
+      title: String(row.title || ""),
+      location: String(row.location || row.url || ""),
+      status: "booked",
+      severity: row.severity,
+      source: "case_file",
+    });
+  }
+  const findings = [...fromStore, ...extras];
+  const feedbackOkIds = fromStore.filter((r) => r.status === "feedback_ok").map((r) => r.id);
+  const bookedN =
+    fromStore.filter((r) => r.status === "booked").length + extras.length;
+  return { findings, feedbackOkIds, bookedN };
+}
+
+async function getBlackboardFinding(
+  runtime: ToolRuntime,
+  store: FindingStore | undefined,
+  id: string,
+): Promise<unknown | undefined> {
+  const fromStore = store?.get(id);
+  if (fromStore) return fromStore;
+  const rows = await loadFindings(runtime.findingsDir);
+  return rows.find((r) => fileFindingId(r) === id);
 }
 
 export async function loadFindings(dir: string): Promise<Array<Record<string, unknown>>> {

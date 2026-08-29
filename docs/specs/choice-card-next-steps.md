@@ -35,7 +35,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 4. User confirm → **structured `user_decision`** (`selected_option_ids` + full `text` including option title/body + optional supplement) + visible “已选择…” summary; demand is **FIFO Session queue** same as user text (#277 / #313).  
 5. Card **stays in history**; after user continues the conversation without using the card (or after answering), **controls become read-only**.  
 6. **Retire** right-panel Next and mechanical `WorksetChoiceBar` / `WorksetNextList` as user-facing choice UIs.  
-7. Case **Workset remains SoT** for deepen/OOS inventory, Goal outer, and option binding—not a second choice chrome.  
+7. Case **Workset remains SoT** for pending admission (deepen / OOS / passive exposure), Goal outer, and option binding—not a second choice chrome. Legacy `next_scope_candidates` arrays are merge inputs only ([#540](https://github.com/zangjiaao/my-ai-pen/issues/540)).  
 8. **Soft gate** when settle/continue should have offered next_steps but did not (prompt retry once; no platform-fake option card).
 
 ---
@@ -107,7 +107,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 - **Platform WS / conversation:** persist choice messages; accept user_decision for next_steps; project to FE; optional soft-gate inject on assign/continue.  
 - **Platform Case Workset:** remains inventory SoT; options may reference item ids; no requirement that UI list every item.  
 - **FE conversation:** unified ChoiceCard shell; authorize preset + next_steps multi-select; retire WorksetChoiceBar mount and right-panel Next; freeze card on free-text continue (parity with confirm answered).  
-- **case_context / Node parse:** carry next_work / choice-related thin refs so Agent can see open Workset when curating (fix earlier gap: platform `next_work` dropped by Node parse).
+- **case_context / Node parse:** carry next_work / choice-related thin refs (including Workset `id` + `host`) so Agent and PDCA overlay can see open Workset without collapsing host-blind `t_host` rows (fix earlier gap: platform `next_work` dropped by Node parse).
 
 ### Message / decision shape (normative intent)
 

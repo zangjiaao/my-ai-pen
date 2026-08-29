@@ -71,6 +71,7 @@ const actTools = [
   "todo",
   "read",
   "fact",
+  "surface",
   "skill",
   "write",
   "shell",
@@ -80,6 +81,11 @@ const actTools = [
   "script",
   "subagent",
   "hypothesis", // Spec #274 optional hypothesis queue on probe/deep stages
+  "platform_list_assets",
+  "platform_get_asset",
+  "platform_list_groups",
+  "request_user_decision",
+  "workset",
 ];
 for (const id of ["chain", "postex", "lateral"]) {
   const st = deep!.stages.find((s) => s.id === id)!;

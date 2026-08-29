@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import {
   clearAllApprovals,
+  hasOpenApproval,
   isStructuredApprovalResponse,
   normalizeApprovalResponse,
   registerApprovalWait,
@@ -86,6 +87,14 @@ assert.equal((await waitAnswered).decision, "answered");
 
 // Unknown request id
 assert.equal(resolveApproval("missing", "authorize"), false);
+
+{
+  void registerApprovalWait("req-open", "conv-open");
+  assert.equal(hasOpenApproval("conv-open"), true);
+  assert.equal(hasOpenApproval("other"), false);
+  assert.equal(resolveApproval("req-open", "cancel"), true);
+  assert.equal(hasOpenApproval("conv-open"), false);
+}
 
 clearAllApprovals();
 console.log("approvals.test.ts: ok");

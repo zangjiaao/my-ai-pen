@@ -41,6 +41,9 @@ export function packageStatusDotClass(
   ) {
     return "animate-pulse bg-status-running";
   }
+  if (s === "released") {
+    return "bg-ink-muted";
+  }
   // red: latest package error / cancel / abort
   if (
     s === "failed" ||
@@ -78,16 +81,10 @@ export function packageStatusTitle(
     .trim()
     .toLowerCase();
   // paused / authorize wait (title must match yellow light even if working)
-  if (
-    s === "paused" ||
-    s === "pause" ||
-    s === "waiting" ||
-    s === "waiting_user" ||
-    s === "pending"
-  ) {
+  if (s === "incomplete") return "等待/暂停";
+  if (s === "paused" || s === "pause" || s === "waiting" || s === "waiting_user" || s === "pending") {
     return "等待授权";
   }
-  if (s === "incomplete") return "等待/暂停";
   if (working === true || s === "running") return "运行中";
   if (
     s === "tool_running" ||
@@ -99,6 +96,7 @@ export function packageStatusTitle(
   ) {
     return "运行中";
   }
+  if (s === "released") return "已释放";
   // Spec #455 / #354: package segment light — not Case death.
   if (s === "failed") return "本段错误";
   if (s === "canceled" || s === "cancelled" || s === "stopped" || s === "aborted") {
@@ -169,6 +167,9 @@ export function resolvePackageLightStatus(input: {
   }
   if (a === "incomplete") {
     return "incomplete";
+  }
+  if (a === "released") {
+    return "released";
   }
   if (
     a === "failed" ||

@@ -77,7 +77,8 @@ export const FINDING_TOOL_DESCRIPTION = [
   "Optional candidate_index indexes last subagent candidates / acceptance.ready_to_book.",
   "Case evidence is created automatically from proof — do not look up or pass evidence_ids.",
   "Prefer quoting response body / reflection / proving stdout. One strong proof is enough to trust and reproduce.",
-  "action=list lists booked findings. Booking does NOT end the engagement.",
+  "action=list lists Store/booked findings (index). action=get reads one id. Booking does NOT end the engagement.",
+  "Workers may list/get the Case blackboard; they must not confirm or upsert — Main books.",
   "Chat prose is never product truth.",
 ].join(" ");
 

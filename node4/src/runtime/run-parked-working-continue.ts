@@ -10,6 +10,17 @@ import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import type { PlatformSink, TaskEnvelope } from "../types.js";
 import { GoalStore } from "../stores/goal.js";
+import {
+  formatLiveStateHarness,
+  lastDeltaFromRuntime,
+  mapPdcaVerdictToHarnessStatus,
+  pdcaSettleEnabled,
+  persistPdcaOnRuntime,
+  projectOverlayFromRuntime,
+  settleParticipantTurn,
+  type ParticipantTurnSettlement,
+} from "./pdca-settlement.js";
+import { joinHarnessPrefixes } from "./harness-channel.js";
 import { registerActiveSession } from "./active-session-registry.js";
 import {
   attachNode4SessionObservability,
@@ -94,7 +105,7 @@ export async function runParkedWorkingContinue(options: {
   const workMode = parked.workMode;
   const startedAt = new Date().toISOString();
   let reparked = false;
-  let harnessStatus: "completed" | "incomplete" = "incomplete";
+  let harnessStatus: "completed" | "incomplete" | "blocked" = "incomplete";
 
   // Rebind live task/platform onto stored runtime when present.
   if (parked.runtime) {
@@ -176,19 +187,6 @@ export async function runParkedWorkingContinue(options: {
     stage_id: parked.stageId,
   } as any);
 
-  // Machine-oriented status only (not agent narration / chat bubble copy).
-  await platform.send({
-    type: "status_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    message: `parked_continue mode=${workMode} stage=${parked.stageId || "-"} graph=${parked.graphId || "-"}`,
-    agent_phase: "parked_continue",
-    status: "running",
-    work_mode: workMode === "graph" ? `hard_graph:${parked.graphId || "graph"}:parked` : "free",
-    parked_continue: true,
-    session_continue: true,
-  } as any);
-
   await reemitParkedTodos(platform, task, parked);
 
   const session = parked.session;
@@ -234,6 +232,8 @@ export async function runParkedWorkingContinue(options: {
   }
 
   let stop: "aborted" | "completed" | "error" = "completed";
+  let pdcaPreviousOverlay: Awaited<ReturnType<typeof projectOverlayFromRuntime>> | undefined;
+  let pdcaLast: ParticipantTurnSettlement | undefined;
   try {
     if (cancelled()) {
       stop = "aborted";
@@ -246,8 +246,16 @@ export async function runParkedWorkingContinue(options: {
         selfExpertName: task.expertName,
         thisTurnText: userTurn,
       });
+      if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
+        pdcaPreviousOverlay = await projectOverlayFromRuntime(parked.runtime).catch(() => undefined);
+      }
       await session.prompt(userTurn, {
-        prefixHarness: formatCaseSpeechHarness(speech.lines) || undefined,
+        prefixHarness: joinHarnessPrefixes(
+          formatCaseSpeechHarness(speech.lines),
+          pdcaSettleEnabled() && workMode === "free" && pdcaPreviousOverlay
+            ? formatLiveStateHarness(pdcaPreviousOverlay, lastDeltaFromRuntime(parked.runtime!))
+            : undefined,
+        ),
       });
       parked.speechCursor = speech.cursorAfter || parked.speechCursor;
       if (cancelled()) {
@@ -297,6 +305,23 @@ export async function runParkedWorkingContinue(options: {
       workMode,
       openTodoCount,
     });
+    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
+      try {
+        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
+        const pdca = settleParticipantTurn({
+          overlay: overlayNow,
+          previousOverlay: pdcaPreviousOverlay,
+          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
+          aborted,
+        });
+        persistPdcaOnRuntime(parked.runtime, pdca);
+        pdcaLast = pdca;
+        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
+      } catch {
+        // Overlay read failed: do not complete from empty Todo / missing snapshot.
+        if (harnessStatus === "completed") harnessStatus = "incomplete";
+      }
+    }
     const decision = decideCaptainEndDisposition({
       aborted,
     });
@@ -370,10 +395,20 @@ export async function runParkedWorkingContinue(options: {
     started_at: startedAt,
     attack_surface_candidates: settlePkg.attackSurfaceCandidates,
     next_scope_candidates: settlePkg.nextScopeCandidates,
-    workset_candidates: settlePkg.worksetCandidates,
+    workset_candidates: [
+      ...settlePkg.worksetCandidates,
+      ...(parked.runtime?.lifecycle.worksetProposed || []),
+    ],
     workset_source: settlePkg.worksetSource,
     goal_mode: goalModeOn,
     goal_objective: task.goalObjective || undefined,
+    ...(pdcaLast
+      ? {
+          pdca_verdict: pdcaLast.verdict,
+          pdca_unresolved: pdcaLast.unresolved,
+          pdca_reason: pdcaLast.reason,
+        }
+      : {}),
   } as any);
 
   return {

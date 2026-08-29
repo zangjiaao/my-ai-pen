@@ -39,7 +39,7 @@ async def fake_node_flow() -> None:
             msg = json.loads(await ws.recv())
             if msg.get("type") == "task_assign":
                 conv_id = msg["conversation_id"]
-                await ws.send(json.dumps({"type": "status_update", "conversation_id": conv_id, "phase": "recon", "iteration": 1, "active_tool": "curl"}))
+                await ws.send(json.dumps({"type": "work_status", "conversation_id": conv_id, "working": True, "reason": "task_start"}))
                 markdown_table = "## Browser smoke markdown\n\n| Endpoint | Status | Notes |\n|---|---:|---|\n| /headers | 200 | **ok** |\n| /admin | 403 | blocked |"
                 await ws.send(json.dumps({"type": "text", "conversation_id": conv_id, "content": {"text": markdown_table}}))
                 long_output = "HTTP/1.1 200 OK\n" + "\n".join([f"line-{i:03d} " + ("x" * 120) for i in range(80)])

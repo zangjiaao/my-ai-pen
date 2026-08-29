@@ -1,9 +1,9 @@
 /**
  * Spec #353 — single surface path for LLM-turn terminal failures (S2).
- * Free + Graph runners call this instead of copy-pasted emit/status/throw blocks.
+ * Free + Graph runners call this instead of copy-pasted emit/throw blocks.
  */
 
-import type { PlatformMessage, PlatformSink } from "../types.js";
+import type { PlatformSink } from "../types.js";
 import type { LlmStreamHealth, StreamDiagnosis } from "./llm-stream-health.js";
 import { streamIdleTimeoutMessage } from "./llm-stream-health.js";
 import {
@@ -42,10 +42,10 @@ export type SurfaceLlmTurnFailureInput = {
   error?: LlmTurnError;
   /** Raw provider / extract message when error is not yet built. */
   providerMessage?: string;
-  /** Optional llm_usage snapshot for status_update. */
+  /** Optional llm_usage snapshot for task_error (callers attach on settle). */
   llmUsage?: Record<string, unknown>;
   /**
-   * When false, only build the error (no status / chat). Used after tick already
+   * When false, only build the error (no chat). Used after tick already
    * aborted the session and a prior surface already published — rare; default true.
    */
   publish?: boolean;
@@ -66,19 +66,6 @@ export async function surfaceLlmTurnFailure(
   } catch {
     /* best-effort chat bubble */
   }
-
-  await input.platform
-    .send({
-      type: "status_update",
-      conversation_id: input.conversationId,
-      task_id: input.taskId,
-      message: err.userMessage,
-      agent_phase: "error",
-      status: "failed",
-      stream_diagnosis: streamDiagnosisPayload(err.diagnosis),
-      ...(input.llmUsage ? { llm_usage: input.llmUsage } : {}),
-    } as PlatformMessage)
-    .catch(() => {});
 
   return err;
 }

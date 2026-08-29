@@ -220,18 +220,8 @@ def merge_panel_agents(
     prev_list = [dict(a) for a in (prev or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
     inc_list = [dict(a) for a in (incoming or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
     if released_ids:
-        prev_list = [
-            a
-            for a in prev_list
-            if (not str(a.get("parent_id") or "").strip())
-            or not _worker_id_is_released(a.get("id"), released_ids)
-        ]
-        inc_list = [
-            a
-            for a in inc_list
-            if (not str(a.get("parent_id") or "").strip())
-            or not _worker_id_is_released(a.get("id"), released_ids)
-        ]
+        prev_list = _stamp_released_panel_rows(prev_list, released_ids)
+        inc_list = _stamp_released_panel_rows(inc_list, released_ids)
     if not inc_list:
         return prev_list
     if not prev_list:
@@ -297,7 +287,7 @@ def merge_panel_agents(
                 continue
             out.append(row)
             seen_kids.add(aid)
-    return out
+    return _stamp_released_panel_rows(out, released_ids)
 
 
 def participants_map(context: dict | None) -> dict[str, dict[str, Any]]:
@@ -388,6 +378,19 @@ def _panel_row_matches_worker(row: dict[str, Any], agent_id: str) -> bool:
     return rid.endswith(f"-{agent_id}") or agent_id.endswith(f"-{rid}")
 
 
+def _stamp_released_panel_rows(rows: list[dict[str, Any]], released_ids: object) -> list[dict[str, Any]]:
+    if not released_ids:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        if str(item.get("parent_id") or "").strip() and _worker_id_is_released(item.get("id"), released_ids):
+            item["status"] = "released"
+            item["current_action"] = "released"
+        out.append(item)
+    return out
+
+
 def _worker_id_is_released(agent_id: object, released: object) -> bool:
     aid = str(agent_id or "").strip()
     if not aid:
@@ -445,7 +448,7 @@ def case_has_child_worker(context: dict | None, *, agent_id: object) -> bool:
 
 
 def mark_panel_worker_released(context: dict | None, *, agent_id: object) -> dict[str, Any]:
-    """End Worker: drop the collab-tree child and remember the id so later bursts cannot resurrect it."""
+    """End Worker: keep the collab-tree child as released (grey) so Tasks chips still match."""
     aid = str(agent_id or "").strip()
     ctx = dict(context or {})
     if not aid:
@@ -466,8 +469,10 @@ def mark_panel_worker_released(context: dict | None, *, agent_id: object) -> dic
                 continue
             row = dict(item)
             if str(row.get("parent_id") or "").strip() and _panel_row_matches_worker(row, aid):
-                changed = True
-                continue
+                if str(row.get("status") or "") != "released":
+                    row["status"] = "released"
+                    row["current_action"] = "released"
+                    changed = True
             out.append(row)
         return out if changed else None
 
@@ -1234,7 +1239,8 @@ def agents_from_participants(
                 if child_usage.get("model"):
                     child["model"] = child_usage["model"]
             if _worker_id_is_released(item_id, released) or _worker_id_is_released(child["id"], released):
-                continue
+                child["status"] = "released"
+                child["current_action"] = "released"
             children.append(child)
         out.append(root)
         out.extend(children)

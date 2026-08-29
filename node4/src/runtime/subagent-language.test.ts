@@ -128,12 +128,12 @@ assert.match(unset, /node policy: auto/);
     "worker Runtime embeds skill body text",
   );
   assert.ok(
-    layers.task.includes("Target envelope:"),
-    "worker Task owns child target",
+    layers.task.includes("Scope envelope:"),
+    "worker Task owns child authorized Scope",
   );
   assert.ok(
-    layers.task.includes("Scope envelope:"),
-    "worker Task owns child scope",
+    !layers.task.includes("Target envelope:"),
+    "worker Task does not echo envelope Target",
   );
   assert.ok(
     !layers.profession.includes("Tools:"),
@@ -189,19 +189,19 @@ assert.match(unset, /node policy: auto/);
     "worker Profession: invent/scope honesty + deadend/rotate",
   );
 
-  // Order: Standing → profession mission → tools/return → target
+  // Order: Standing → profession mission → tools/return → Scope
   const standingIdx = assembled.indexOf(STANDING_HEADING);
   const missionIdx = assembled.indexOf("You are a package worker.");
   const toolsIdx = assembled.indexOf("Tools:");
   const returnIdx = assembled.indexOf("## Return contract");
   const skillIdx = assembled.indexOf("## Loaded skill");
-  const targetIdx = assembled.indexOf("Target envelope:");
+  const scopeIdx = assembled.indexOf("Scope envelope:");
   assert.ok(standingIdx === 0, "Standing at absolute start");
   assert.ok(missionIdx > standingIdx, "profession mission after Base Standing");
   assert.ok(toolsIdx > missionIdx, "tools after profession");
   assert.ok(returnIdx > toolsIdx, "return contract after tools (Runtime)");
   assert.ok(skillIdx > returnIdx, "loaded skill after return contract (Runtime)");
-  assert.ok(targetIdx > skillIdx, "Task target after Runtime");
+  assert.ok(scopeIdx > skillIdx, "Task Scope after Runtime");
   // Return contract remains on assembled prompt (Standing-first already checked)
   assert.match(assembled, /## Return contract/, "assembled worker has return contract");
   assert.ok(assembled.startsWith(STANDING_HEADING), "assembled Standing-first");

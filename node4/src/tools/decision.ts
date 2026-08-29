@@ -52,6 +52,9 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
     description:
       "Show ONE choice/authorization card and wait for user feedback (button OR free-text reply). " +
       "Click and type are the same path — the tool unblocks with the user's response. " +
+      "When legal entity, Host identity, Group member set, active-testing authorization, or Scope is insufficient, ask here and wait — do not invent Scope or Target. " +
+      "Group / Hosts: pass asset_ids (and/or options[].asset_id = Host id from platform_list_groups / platform_list_assets). " +
+      "After the user allows, the platform writes those Hosts as Case Scope; continue the user's original task — do not invent a scan workflow. " +
       "For multi-agent handoff to any listed colleague (default/assistant, pentest, CTF, …): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
       "Do not write method, RoE, playbook, or ledger-dump instructions in proposed_action — those live in Profession/Runtime. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
@@ -95,6 +98,14 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       ),
       handoff_expert_id: Type.Optional(Type.String()),
       handoff_expert_name: Type.Optional(Type.String()),
+      asset_ids: Type.Optional(
+        Type.Array(
+          Type.String({
+            description:
+              "Host ids to authorize as Case Scope (confirm = all listed). From platform_list_groups members / platform_list_assets. Not a Target.",
+          }),
+        ),
+      ),
       /** Spec #312: curated next_steps options (2–5). */
       options: Type.Optional(
         Type.Array(
@@ -104,6 +115,9 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
             body: Type.String({ description: "Why / what / success shape (required)" }),
             workset_item_ids: Type.Optional(
               Type.Array(Type.String(), { description: "Optional Case Workset item id binds" }),
+            ),
+            asset_id: Type.Optional(
+              Type.String({ description: "Owner Host id when this option authorizes that Host as Case Scope" }),
             ),
             kind: Type.Optional(Type.String()),
           }),
@@ -138,6 +152,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
                   title: Type.String(),
                   body: Type.Optional(Type.String()),
                   workset_item_ids: Type.Optional(Type.Array(Type.String())),
+                  asset_id: Type.Optional(Type.String()),
                 }),
               ),
             ),
@@ -183,6 +198,8 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
             const wids = r.workset_item_ids.map((x) => String(x || "").trim()).filter(Boolean);
             if (wids.length) opt.workset_item_ids = wids;
           }
+          const assetId = String(r.asset_id || "").trim();
+          if (assetId) opt.asset_id = assetId;
           if (r.kind) opt.kind = String(r.kind);
           cleaned.push(opt);
         }
@@ -282,6 +299,9 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         if (handoffExpertId) payload.handoff_expert_id = handoffExpertId;
         if (handoffExpertName) payload.handoff_expert_name = handoffExpertName;
       }
+      const rawAssetIds = Array.isArray(params.asset_ids) ? params.asset_ids : [];
+      const assetIds = rawAssetIds.map((x: unknown) => String(x || "").trim()).filter(Boolean);
+      if (assetIds.length) payload.asset_ids = assetIds;
       if (GRAPH_MODE_KINDS.has(kind)) {
         payload.kind = kind;
         if (graphId) {
@@ -330,10 +350,14 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
 
       let approvalResult: ApprovalResult;
       try {
+        runtime.lifecycle.pendingUserDecision = true;
         approvalResult = abort
           ? await Promise.race([waitPromise, abortPromise])
           : await waitPromise;
       } finally {
+        // Interrupt during the wait: leave the flag so settle can emit paused.
+        // Authorize/cancel: clear so a following abort is a normal incomplete.
+        if (!abort?.aborted) runtime.lifecycle.pendingUserDecision = false;
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
       const decision = approvalResult.decision;
@@ -386,18 +410,30 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         ? approvalResult.selected_option_ids.map((x) => String(x || "").trim()).filter(Boolean)
         : [];
       const selectedOpts = (nextStepsOptions || []).filter((o) => selectedIds.includes(String(o.id || "")));
+      const selectedHostIds = selectedOpts
+        .map((o) => String(o.asset_id || "").trim())
+        .filter(Boolean);
+      const authorizedHosts =
+        selectedHostIds.length > 0 ||
+        (decision === "authorize" && assetIds.length > 0);
       const selectedBits = selectedOpts
         .map((o) => `${o.id}: ${String(o.title || "").trim()}`)
         .filter((s) => s.length > 2)
         .join("; ");
       const customText = String(approvalResult.custom_text || "").trim();
+      const hostScopeMsg =
+        "User authorized those Hosts as this Case Scope. Continue the user's original task; do not invent a scan workflow; do not re-show the card.";
       const nextStepsMsg =
         decision === "confirm_options"
-          ? selectedBits
+          ? authorizedHosts
+            ? hostScopeMsg
+            : selectedBits
             ? `User confirmed next_steps. Selected: ${selectedBits}. Honor those option bodies; do not start unselected work; do not re-show the same card.`
             : customText
               ? `User confirmed next_steps with a custom answer: ${customText}. Honor that answer; do not re-show the same card.`
               : "User confirmed next_steps. Honor the selected option bodies; do not start unselected work; do not re-show the same card."
+          : decision === "authorize" && authorizedHosts
+            ? hostScopeMsg
           : decision === "authorize" && kind === "next_steps"
             ? "User replied on the next_steps card. Honor their reply; do not re-show the same card."
             : decision === "answered"

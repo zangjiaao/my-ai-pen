@@ -28,8 +28,9 @@ import {
   assert.equal(packageStatusTitle("failed"), "本段错误");
   assert.equal(packageStatusTitle("canceled"), "本段已中止");
   assert.equal(
-    resolvePackageLightStatus({ packageStatus: "paused", working: true }),
+    resolvePackageLightStatus({ agentStatus: "paused" }),
     "paused",
+    "Graph Feedback pause on Main is yellow wait",
   );
   assert.equal(
     resolvePackageLightStatus({ packageStatus: "running", working: true }),
@@ -45,6 +46,15 @@ import {
     "incomplete+working → High yellow",
   );
   assert.equal(packageStatusTitle("incomplete", true), "等待/暂停");
+  assert.ok(
+    packageStatusDotClass("released").includes("ink-muted"),
+    "released Worker light is grey",
+  );
+  assert.equal(packageStatusTitle("released"), "已释放");
+  assert.equal(
+    resolvePackageLightStatus({ agentStatus: "released" }),
+    "released",
+  );
   console.log("ok: paused yellow over working");
 }
 

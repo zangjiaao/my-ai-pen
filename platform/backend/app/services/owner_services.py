@@ -15,7 +15,7 @@ from app.models.asset import Asset
 from app.models.owner_ledger import AssetService, AssetServicePath
 from app.services.asset_ledger import (
     admit_owner_path,
-    extract_aliases,
+    identity_query_key,
     identity_values,
     merge_official_service,
     normalize_owner_path,
@@ -24,7 +24,6 @@ from app.services.asset_ledger import (
     owner_target_from_location,
     owner_target_from_surface_row,
     service_source_admits,
-    split_host_port,
 )
 
 
@@ -68,26 +67,32 @@ async def load_official_services(
     return out
 
 
+async def list_assets_by_identity(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    address: str,
+) -> list[Asset]:
+    """Every owner Host whose primary or aliases equal this address. Order is not a winner."""
+    key = identity_query_key(address)
+    if not key:
+        return []
+    result = await db.execute(select(Asset).where(Asset.user_id == user_id))
+    return [
+        asset
+        for asset in result.scalars().all()
+        if key in identity_values(asset.address, asset.properties or {})
+    ]
+
+
 async def find_asset_by_address_or_alias(
     db: AsyncSession,
     user_id: uuid.UUID,
     address: str,
 ) -> Asset | None:
-    host, _ = split_host_port(address)
-    if not host:
-        return None
-    exact = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.address == host))
-    found = exact.scalar_one_or_none()
-    if found:
-        return found
-    result = await db.execute(select(Asset).where(Asset.user_id == user_id))
-    for asset in result.scalars().all():
-        keys = identity_values(asset.address, asset.properties or {})
-        if host in keys:
-            return asset
-        aliases = extract_aliases(asset.properties or {}, asset.address)
-        if host in aliases:
-            return asset
+    """Unique identity hit only. Ambiguous (2+) and none → None (never first-match)."""
+    hits = await list_assets_by_identity(db, user_id, address)
+    if len(hits) == 1:
+        return hits[0]
     return None
 
 

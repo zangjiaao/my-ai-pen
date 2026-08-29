@@ -54,6 +54,14 @@ assert.deepEqual(
   authQuestions[0].options.map((o) => o.id),
   [AUTHORIZE_OPTION_YES, AUTHORIZE_OPTION_NO],
 );
+const authHostPrompt = parseWizardQuestions({
+  kind: "confirm",
+  question: "这 2 台要开测吗",
+  host_labels: ["app.example.com", "10.0.0.2"],
+});
+assert.match(authHostPrompt[0].prompt, /将纳入本 Case Scope/);
+assert.match(authHostPrompt[0].prompt, /app\.example\.com/);
+assert.match(authHostPrompt[0].prompt, /10\.0\.0\.2/);
 assert.equal(mapAuthorizeDecision(["authorize"]), "authorize");
 assert.equal(mapAuthorizeDecision(["cancel"]), "cancel");
 assert.equal(mapAuthorizeDecision([], "先扫 login"), "authorize");

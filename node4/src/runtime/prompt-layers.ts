@@ -174,13 +174,10 @@ function chatOnlyRuntimeLine(packId: string, task: TaskEnvelope): string {
   const named = hasNamedEngagement(task);
   if (isLedgerPackId(packId)) {
     return named
-      ? "This seat does not execute engagements. Target/Scope in This turn are for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
+      ? "This seat does not execute engagements. Scope in This turn is for handoff and ledger context only — do not start recon, booking, or todo engagement maps."
       : "This seat does not execute engagements. Ledger Q&A and handoff only.";
   }
-  if (named) {
-    return "This turn is chat-only (no execution burst). Do not start recon, booking, or todo engagement maps.";
-  }
-  return "This turn has **no authorized engagement target/scope** — do not start recon, booking, or todo engagement maps. Ledger Q&A only until the user names an authorized host/URL.";
+  return "This turn is chat-only (no execution burst). Do not start recon, booking, or todo engagement maps.";
 }
 
 /** Convenience: build vars from full task + pack (Free / Stage captains). */
@@ -376,6 +373,11 @@ export function buildPromptLayers(
       "Attack surface (surface tool): summary|list|get; coverage via mark/unmark/skip (not purpose=test); ledger from Traffic settle + TARGET seed; disclose remaining untested; upsert optional (cannot write coverage).",
     );
   }
+  if (pack.toolNames.includes("workset")) {
+    runtimeParts.push(
+      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped). set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake or adopts. No Host means no Intel hang. A missing optional intel source is not a failure.",
+    );
+  }
   if (pack.recipeDir) {
     const root = pack.packRoot;
     const recipePath = root ? `${root}/${pack.recipeDir}` : `experts/<pack>/${pack.recipeDir}`;
@@ -405,10 +407,7 @@ export function buildPromptLayers(
   if (caseBlock) taskParts.push(caseBlock);
   const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
   if (factBlock) taskParts.push(factBlock);
-  taskParts.push(
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
-  );
+  taskParts.push(`Scope: ${JSON.stringify(task.scope)}`);
   if (task.accounts !== undefined) {
     taskParts.push(`Accounts: ${JSON.stringify(task.accounts)}`);
   }
@@ -545,7 +544,6 @@ export function buildStagePromptLayers(
 
   // Task: this-turn envelope + handoff / prior seed facts (no hyp dual-home)
   const taskLayer = joinNonEmptyPromptParts([
-    `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
@@ -625,9 +623,8 @@ export function buildSubagentPromptLayers(
     skillSection,
   ]);
 
-  // Task: child target/scope envelope only.
+  // Task: child authorized Scope only (envelope Target is not a product object).
   const taskLayer = joinNonEmptyPromptParts([
-    `Target envelope: ${JSON.stringify(childTask.target)}`,
     `Scope envelope: ${JSON.stringify(childTask.scope)}`,
   ]);
 

@@ -359,5 +359,105 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
   await rm(taskDir, { recursive: true, force: true });
 }
 
+// --- #531: Graph stage session gets the same Case live index as Free (harness) ---
+{
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-pdca-overlay-"));
+  const plan = new HardGraphPlanStore(graph!);
+  const runUsage = createUsageLedgerFromEnv();
+  const panel = new PanelAgentTracker("pdca-overlay", "Expert");
+  const pq = createProcessQualityState();
+  const parentRuntime = {
+    task: {
+      taskId: "pdca-overlay-task",
+      conversationId: "pdca-overlay-conv",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    piDir: taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: new ProcessFactStore(join(taskDir, "facts")),
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: { plan, usage: runUsage, panel, stageId: "init" },
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+    },
+  } as unknown as ToolRuntime;
+
+  const prevFlag = process.env.NODE4_PDCA_SETTLE;
+  process.env.NODE4_PDCA_SETTLE = "1";
+  let capturedPrefix: string | undefined;
+  try {
+    const executor = createHardGraphStageExecutor({
+      config: {
+        workspaceDir: taskDir,
+        piAgentDir: join(taskDir, "pi"),
+        modelId: "test",
+        modelProvider: "openai",
+      } as any,
+      parentRuntime,
+      pack: {
+        id: "pentest",
+        label: "Pentest",
+        missionLines: [],
+        workLines: [],
+        toolNames: ["todo", "fact", "write"],
+        bookingMode: "finding",
+        settlementNote: "test",
+      } as any,
+      boundSessionFactory: async () => ({
+        session: {
+          async prompt(_text: string, opts?: { prefixHarness?: string }) {
+            capturedPrefix = opts?.prefixHarness;
+          },
+          async abort() {},
+          async dispose() {},
+          subscribe() {
+            return () => {};
+          },
+          steer() {},
+          followUp() {},
+          messages: [],
+        } as any,
+      }),
+    });
+    await executor({
+      graphId: graph!.id,
+      stage: initStage!,
+      stageIndex: 0,
+      attempt: 1,
+      tools: ["todo", "fact", "write"],
+      toolProfile: {},
+      handoff: {
+        summary: "",
+        surfaces: [],
+        candidates: [],
+        facts: [],
+        deadends: [],
+        completed_stages: [],
+      },
+    });
+    assert.match(
+      String(capturedPrefix || ""),
+      /### Case live index/,
+      "#531: stage prompt harness carries the same overlay heading as Free",
+    );
+  } finally {
+    if (prevFlag === undefined) delete process.env.NODE4_PDCA_SETTLE;
+    else process.env.NODE4_PDCA_SETTLE = prevFlag;
+    await rm(taskDir, { recursive: true, force: true });
+  }
+}
+
 await rm(workDir, { recursive: true, force: true });
 console.log("hard-graph-stage-executor.test.ts: ok");

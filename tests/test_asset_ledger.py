@@ -16,6 +16,7 @@ from app.services.asset_ledger import (  # noqa: E402
     compute_security_changes,
     conversation_target_blobs,
     enrich_properties_ports,
+    extract_aliases,
     extract_api_endpoints,
     extract_ports,
     extract_ports_for_host,
@@ -29,6 +30,7 @@ from app.services.asset_ledger import (  # noqa: E402
     normalize_tags,
     ports_summary,
     render_remediation_markdown,
+    replace_properties_aliases,
     risk_summary_from_vulns,
     service_hints_for_host,
     split_host_port,
@@ -60,6 +62,53 @@ class AssetLedgerNormalizeTests(unittest.TestCase):
         self.assertEqual(normalize_port("80/tcp"), "80")
         self.assertIsNone(normalize_port("0"))
         self.assertIsNone(normalize_port("99999"))
+
+    def test_aliases_ignore_note_and_drop_primary(self):
+        props = {
+            "note": "127.0.0.1, localhost",
+            "aliases": ["localhost", "host.docker.internal", "host.docker.internal"],
+        }
+        self.assertEqual(
+            extract_aliases(props, "host.docker.internal"),
+            ["localhost"],
+        )
+        # Note is not identity.
+        self.assertEqual(extract_aliases({"note": "127.0.0.1, localhost"}, "host.docker.internal"), [])
+
+    def test_identity_lookup_none_unique_ambiguous(self):
+        from app.services.asset_ledger import identity_match_kind, identity_query_key, identity_values
+
+        self.assertEqual(identity_query_key("localhost"), "localhost")
+        self.assertEqual(identity_query_key("JuiceShop"), "")
+        docker = {
+            "address": "host.docker.internal",
+            "properties": {"aliases": ["localhost", "127.0.0.1"], "note": "JuiceShop"},
+        }
+        extra = {"address": "localhost", "properties": {"note": "another card"}}
+        self.assertIn("localhost", identity_values(docker["address"], docker["properties"]))
+        self.assertNotIn("localhost", identity_values("host.docker.internal", {"note": "localhost"}))
+        hits = [
+            h
+            for h in (docker, extra)
+            if identity_query_key("localhost") in identity_values(h["address"], h["properties"])
+        ]
+        self.assertEqual(identity_match_kind(len(hits)), "ambiguous")
+        self.assertEqual(identity_match_kind(1), "unique")
+        self.assertEqual(identity_match_kind(0), "none")
+
+    def test_replace_aliases_lets_deletes_stick(self):
+        props = replace_properties_aliases(
+            {"aliases": ["localhost", "127.0.0.1"], "note": "JuiceShop"},
+            ["localhost"],
+            "host.docker.internal",
+        )
+        self.assertEqual(props["aliases"], ["localhost"])
+        self.assertEqual(props["note"], "JuiceShop")
+        cleared = replace_properties_aliases(props, [], "host.docker.internal")
+        self.assertEqual(cleared["aliases"], [])
+        self.assertFalse(
+            any(i.get("value") == "localhost" for i in (cleared.get("identities") or [])),
+        )
 
     def test_extract_ports_from_task_target_url(self):
         """CTF targets often use high ports only present in task URL, not open_ports."""

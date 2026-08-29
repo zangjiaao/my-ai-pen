@@ -47,6 +47,7 @@ export type CaseNextWorkItem = {
   family?: string;
   title?: string;
   status?: string;
+  host?: string;
   auto_eligible?: boolean;
   suggested_expert?: string;
 };
@@ -56,6 +57,12 @@ export type CaseNextWork = {
   workset_open?: CaseNextWorkItem[];
   workset_open_count?: number;
   note?: string;
+  asset_intake?: {
+    mode?: string;
+    group_id?: string | null;
+    group_name?: string | null;
+    set_by?: string | null;
+  };
   goal?: {
     status?: string;
     terminal?: string;
@@ -184,6 +191,7 @@ function parseNextWork(raw: unknown): CaseNextWork | undefined {
     if (r.family != null) item.family = String(r.family);
     if (r.title != null) item.title = String(r.title);
     if (r.status != null) item.status = String(r.status);
+    if (r.host != null) item.host = String(r.host);
     if (r.auto_eligible != null) item.auto_eligible = Boolean(r.auto_eligible);
     if (r.suggested_expert != null) item.suggested_expert = String(r.suggested_expert);
     workset_open.push(item);
@@ -198,6 +206,15 @@ function parseNextWork(raw: unknown): CaseNextWork | undefined {
   };
   if (o.boundary != null) next.boundary = String(o.boundary);
   if (o.note != null) next.note = String(o.note);
+  if (o.asset_intake && typeof o.asset_intake === "object" && !Array.isArray(o.asset_intake)) {
+    const a = o.asset_intake as Record<string, unknown>;
+    next.asset_intake = {
+      mode: a.mode != null ? String(a.mode) : undefined,
+      group_id: a.group_id != null ? String(a.group_id) : null,
+      group_name: a.group_name != null ? String(a.group_name) : null,
+      set_by: a.set_by != null ? String(a.set_by) : null,
+    };
+  }
   if (o.goal && typeof o.goal === "object" && !Array.isArray(o.goal)) {
     const g = o.goal as Record<string, unknown>;
     next.goal = {
@@ -439,15 +456,33 @@ export function formatCaseContextInjection(
 
   // Spec #312 S5: retain next_work refs so Agent can bind next_steps options honestly.
   const nextWork = ctx.next_work;
-  if (nextWork && (nextWork.workset_open_count || (nextWork.workset_open || []).length)) {
+  const intakeOn = String(nextWork?.asset_intake?.mode || "") === "enroll_group";
+  if (nextWork && (nextWork.workset_open_count || (nextWork.workset_open || []).length || intakeOn)) {
     const open = (nextWork.workset_open || []).slice(0, 12);
     const count =
       typeof nextWork.workset_open_count === "number"
         ? nextWork.workset_open_count
         : open.length;
-    lines.push("", "### Case Next / Workset (open)");
+    lines.push("", "### Case Workset (pending admission)");
+    if (intakeOn) {
+      const g =
+        nextWork.asset_intake?.group_name ||
+        nextWork.asset_intake?.group_id ||
+        "named Group";
+      const userCommitted = String(nextWork.asset_intake?.set_by || "") === "user";
+      lines.push(
+        userCommitted
+          ? `Asset-intake policy: enroll_group → ${g} (user-confirmed). Eligible new hosts enroll into that Group and this Case Scope. Out-of-scope / low-confidence / needs_authorization stay parked.`
+          : `Asset-intake policy recorded: enroll_group → ${g}. Not user-confirmed yet — keep hosts on Workset. User confirm or adopt enrolls.`,
+      );
+    }
     lines.push(
       `Open Workset items: ${count} (refs only — inventory SoT, not a user choice UI).`,
+    );
+    lines.push(
+      intakeOn && String(nextWork.asset_intake?.set_by || "") === "user"
+        ? "Parked rows are exceptions. Enrolled hosts are Owner Hosts — Intel may hang. Do not probe out-of-scope names."
+        : "Parked hosts are not Case Surface coverage and are not Owner Hosts. No Host means no Intel hang. Do not probe until the user adopts or confirms Case intake.",
     );
     lines.push(
       "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body; optional workset_item_ids). Do not only say 等待指示 or free-text A/B/C/D.",

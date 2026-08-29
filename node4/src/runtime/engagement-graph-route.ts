@@ -670,6 +670,8 @@ export function buildRouteStructuredFromProcessFacts(
       if (bag.exploit_failed == null) bag.exploit_failed = summary;
     } else if (compact === "needmoresignal") {
       if (bag.need_more_signal == null) bag.need_more_signal = summary;
+    } else if (compact === "stageadvance" || compact.endsWith("stageadvance")) {
+      if (bag.stage_advance == null) bag.stage_advance = summary.slice(0, 64);
     }
   }
   return Object.keys(bag).length ? bag : null;

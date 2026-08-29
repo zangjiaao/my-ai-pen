@@ -75,17 +75,15 @@ import {
   mergeLivePanelAgents,
   mergeSnapshotAgentsPreserveHarness,
   markPanelWorkerReleased,
-  patchMainAgentActivity,
   preferRicherPlanTree,
   mergePlanTreeByOwner,
   upsertWorkerAgent,
-  omitReleasedWorkers,
+  mergeAgentsKeepingReleased,
 } from "../lib/panelAgentsState";
 import {
   isLegacyTaskPipelinePhase,
   projectStreamWithDaySeparators,
   shouldRenderStatusNotice,
-  snapshotAgentPhase,
 } from "../lib/chatStreamChrome";
 import {
   buildPendingSendSuccessEvent,
@@ -96,6 +94,7 @@ import {
   mergeMessagesWithLiveStreams,
   messageListKey,
   pendingChromeSpeakerContent,
+  pendingLabelFromHardGraphWorkMode,
   pruneLiveCatchUp,
   reducePendingChrome,
   listTailWorkingVisible,
@@ -903,7 +902,11 @@ export default function ConversationPage() {
       ? snapshot.strix_agents
       : fallback?.strix_agents || [];
     setStrixAgents((prev) =>
-      omitReleasedWorkers(mergeSnapshotAgentsPreserveHarness(prev, nextAgents), released),
+      mergeAgentsKeepingReleased(
+        prev,
+        mergeSnapshotAgentsPreserveHarness(prev, nextAgents),
+        released,
+      ),
     );
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).
@@ -1129,6 +1132,14 @@ export default function ConversationPage() {
     if (working) {
       launchOptimisticRef.current = false;
       setInterrupting(Boolean(interruptingFlag));
+      const stageLabel = pendingLabelFromHardGraphWorkMode(String(msg.work_mode || ""));
+      if (stageLabel) {
+        setPendingChrome((cur) => {
+          if (cur && cur.conversationId === convId) return { ...cur, label: stageLabel };
+          if (!cur) return { conversationId: convId, label: stageLabel };
+          return cur;
+        });
+      }
     } else {
       launchOptimisticRef.current = false;
       // Turn idle: hide list-tail Working (whole-turn chrome ends with work, not first stream).
@@ -1324,6 +1335,19 @@ export default function ConversationPage() {
       // (tool_output does not clear chrome). Spec #308: Worker tools must not drive Main chrome.
       if (!workerScoped) {
         setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
+        const toolNameLive = String(m.tool_name || "").trim();
+        if (toolNameLive === "graph_feedback") {
+          const hopLabel = String(m.display_title || m.summary || "").trim();
+          const hopStatus = String(m.status || "").trim().toLowerCase();
+          if (hopLabel && hopStatus === "running") {
+            setPendingChrome((cur) => (
+              cur && cur.conversationId === convId ? { ...cur, label: hopLabel } : cur
+            ));
+          }
+          // Hop done/error: keep the hop label until stage_start work_status
+          // (`进入 ${stageId}`) or task_complete. Resetting to 「工作中...」 left
+          // a ticking empty timer while the next captain booted.
+        }
         markMessageAutoScroll();
       }
       const workerStamp: Record<string, unknown> = {};
@@ -1638,11 +1662,15 @@ export default function ConversationPage() {
               : "Session continue paused - "
             : status === "blocked"
               ? "Package blocked - "
-              : "Package incomplete - ") + String(m.summary || ""),
+              : "Package incomplete - ") + String(m.summary || "")
+          + (m.pdca_verdict ? ` · pdca ${String(m.pdca_verdict)}${m.pdca_reason ? `/${String(m.pdca_reason)}` : ""}` : ""),
         status: status === "blocked" ? "blocked" : "incomplete",
         audit: m.audit,
         summary: m.summary,
         parked_continue: sessionContinue || undefined,
+        pdca_verdict: m.pdca_verdict,
+        pdca_reason: m.pdca_reason,
+        pdca_unresolved: m.pdca_unresolved,
         message_id: m.message_id,
       }));
       void fetchAll();
@@ -1698,6 +1726,23 @@ export default function ConversationPage() {
         // Checkpoint without panel_agents still updates pi Session id on current Main.
         setStrixAgents((prev) => stampPiSessionId(prev));
       }
+      const feedbackHop = String(checkpoint.agent_phase || "").trim().toLowerCase() === "feedback";
+      if (feedbackHop) {
+        const panelRows = Array.isArray(checkpoint.panel_agents)
+          ? checkpoint.panel_agents.filter(isStrixAgentStatus)
+          : [];
+        const fb = panelRows.find((a) => {
+          const id = String(a.id || "").toLowerCase();
+          return id === "feedback" || id.endsWith("-feedback") || String(a.name || "").trim().toLowerCase() === "feedback";
+        });
+        const st = String(fb?.status || "").toLowerCase();
+        const hopLabel = String(fb?.current_detail || "").trim();
+        if (hopLabel && (st === "running" || st === "llm_waiting" || st === "tool_running" || st === "working")) {
+          setPendingChrome((cur) => (
+            cur && cur.conversationId === convId ? { ...cur, label: hopLabel } : cur
+          ));
+        }
+      }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);
         if (todoPlan.length) setPlanTree(todoPlan);
@@ -1742,7 +1787,11 @@ export default function ConversationPage() {
       // Spec #280 Wave1: do not merge Strix/checkpoint shadow vulnerabilities into Case Findings.
       // Ledger + vuln_found (post-persist) remain the only panel sources; chat cards still render.
       clearPendingAgentMessage(convId);
-      void refreshConversationState(convId);
+      // Feedback hop already applied live panel_agents; a 2s snapshot poll can
+      // still race, but skip this immediate refresh so the row is not painted green.
+      if (String(checkpoint.agent_phase || "").trim().toLowerCase() !== "feedback") {
+        void refreshConversationState(convId);
+      }
     },
     // Live Node2 worker lifecycle — do not wait for the next throttled checkpoint.
     worker_started: (msg) => {
@@ -1806,81 +1855,6 @@ export default function ConversationPage() {
       if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
-    },
-    // thinking / reasoning / agent_thinking: streamed via upsertStreamedAgentText (handlers below).
-    status_update: (msg) => {
-      const m = msg as Record<string, unknown>;
-      const convId = messageConversationId(msg, activeId);
-      // Prefer agent_phase from Node4; legacy used phase.
-      const rawPhase = typeof m.agent_phase === "string"
-        ? m.agent_phase
-        : typeof m.phase === "string"
-          ? m.phase
-          : undefined;
-      const phase = rawPhase && !isLegacyTaskPipelinePhase(rawPhase) ? rawPhase : undefined;
-      const activeTool = m.active_tool != null ? String(m.active_tool) : undefined;
-      const currentDetail = typeof m.current_detail === "string" ? m.current_detail : undefined;
-      setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
-      if (isProgress(m.progress)) setProgress(m.progress);
-      if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
-      setRunning(true);
-      // Live-patch active role activity without wiping other Case participants.
-      if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
-        const next = m.panel_agents.filter(isStrixAgentStatus);
-        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
-          expert_id: readString(m.expert_id),
-          expert_name: readString(m.expert_name),
-          released_ids: releasedWorkerIdsRef.current,
-        }));
-      } else if (phase || activeTool || currentDetail) {
-        setStrixAgents((prev) =>
-          patchMainAgentActivity(prev, {
-            phase,
-            activeTool: activeTool || "",
-            currentDetail,
-            running: true,
-            expert_id: readString(m.expert_id),
-            expert_name: readString(m.expert_name),
-          }),
-        );
-      }
-      // Spec #278: hard_graph work_mode on status can stamp Graph badge when panel lags.
-      const wm = String(m.work_mode || "").trim();
-      if (wm === "free" || wm === "graph" || wm.startsWith("hard_graph")) {
-        const gid =
-          readString(m.graph_id) ||
-          (wm.startsWith("hard_graph:") ? wm.split(":")[1] || "" : "");
-        setStrixAgents((prev) =>
-          prev.map((a) => {
-            if (a.parent_id) return a;
-            return {
-              ...a,
-              work_mode: wm === "free" ? "free" : "graph",
-              graph_id: wm === "free" ? undefined : gid || a.graph_id,
-              graph_label:
-                wm === "free"
-                  ? undefined
-                  : readString(m.graph_label) || a.graph_label,
-            };
-          }),
-        );
-      }
-      // Internal harness ticks (model turn / tool running) update right-panel state only —
-      // never inject as agent chat bubbles (that was showing "model turn" under 测试节点).
-      const statusMessage = readString(m.message);
-      if (statusMessage && isUserVisibleStatusMessage(statusMessage)) {
-        addMessageToConversation(
-          convId,
-          makeMessage(convId, "system", "status", {
-            ...agentAttribution(m),
-            text: statusMessage,
-            phase,
-            active_tool: m.active_tool,
-            status: m.status,
-            message_id: m.message_id,
-          }),
-        );
-      }
     },
     engagement_closeout: (msg) => {
       // Same msg_type as platform persist path (engagement_closeout) — not a live-only status disguise.
@@ -1953,11 +1927,15 @@ export default function ConversationPage() {
             : "Package incomplete - "
           : "Package complete - ";
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: settleLabel + summaryText,
+        text: settleLabel + summaryText
+          + (m.pdca_verdict ? ` · pdca ${String(m.pdca_verdict)}${m.pdca_reason ? `/${String(m.pdca_reason)}` : ""}` : ""),
         status: incomplete ? status : "completed",
         summary: m.summary || {},
         audit: m.audit,
         parked_continue: sessionContinue || undefined,
+        pdca_verdict: m.pdca_verdict,
+        pdca_reason: m.pdca_reason,
+        pdca_unresolved: m.pdca_unresolved,
         message_id: m.message_id,
       }));
       void fetchAll();
@@ -2765,7 +2743,23 @@ export default function ConversationPage() {
       (resolvedMention?.kind === "expert" ? String(resolvedMention.expertId || "").trim() : "");
     const expertPayload = expertId ? { expert_id: expertId } : {};
 
-    const targetValue = opts.target?.value || extractTarget(text);
+    // Structured target/scope only from user-authorized actions (assets / pendingAsset).
+    // Never regex-invent a Task Target from the utterance.
+    const structuredTargetValue = String(opts.target?.value || "").trim();
+    const structuredTarget = structuredTargetValue
+      ? opts.target || {
+          type: structuredTargetValue.startsWith("http") ? "url" : "host",
+          value: structuredTargetValue,
+        }
+      : undefined;
+    const structuredScopeAllow = Array.isArray(opts.scope?.allow)
+      ? opts.scope.allow.filter((item) => String(item || "").trim())
+      : [];
+    const structuredScope = structuredScopeAllow.length
+      ? opts.scope
+      : structuredTarget
+        ? { allow: [structuredTarget.value], deny: [] as string[] }
+        : undefined;
     const restartRequested = isRestartRequest(text);
     const completedConversation = isConversationComplete(activeId, conversations, planTree);
     const explicitConv = Boolean(opts.conversationId);
@@ -2939,42 +2933,25 @@ export default function ConversationPage() {
       return;
     }
 
-    // No authorized target yet (e.g. "你好"): room chat only — still show Working/pending
-    // until Node settles. Do not open recon work-surface (no target).
-    if (!targetValue) {
-      launchOptimisticRef.current = true;
-      setRunning(true);
-      setInterrupting(false);
-      if (convId) patchConversation(convId, { working: true });
-      send({
-        type: "user_message",
-        conversation_id: convId,
-        text,
-        display_text: displayText,
-        client_message_id: clientMessageId,
-        ...commonPayload,
-      });
-      return;
-    }
-
+    const openWorkSurface = !isBuiltinAssistant || Boolean(structuredTarget || structuredScope);
     launchOptimisticRef.current = true;
     setRunning(true);
     setInterrupting(false);
-    if (convId) patchConversation(convId, { working: true, status: "running" });
-    setPendingWorkflowKind("pentest");
-    setAgentState({});
-    setProgress(undefined);
-    setKanban(undefined);
-    const target =
-      opts.target ||
-      ({ type: targetValue.startsWith("http") ? "url" : "host", value: targetValue } as const);
-    const scope = opts.scope || { allow: [target.value], deny: [] };
+    if (convId) {
+      patchConversation(convId, openWorkSurface ? { working: true, status: "running" } : { working: true });
+    }
+    if (openWorkSurface) {
+      setPendingWorkflowKind("pentest");
+      setAgentState({});
+      setProgress(undefined);
+      setKanban(undefined);
+    }
     send({
       type: "user_message",
       conversation_id: convId,
       text,
-      target,
-      scope,
+      ...(structuredTarget ? { target: structuredTarget } : {}),
+      ...(structuredScope ? { scope: structuredScope } : {}),
       display_text: displayText,
       client_message_id: clientMessageId,
       ...commonPayload,
@@ -3269,12 +3246,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
   if (node.type === "pentest") return "pentest";
   return undefined;
 }
-  function extractTarget(t: string): string | null {
-    const url = t.match(/https?:\/\/\S+/);
-    if (url) return url[0];
-    const ip = t.match(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/);
-    return ip ? ip[0] : null;
-  }
 
   const fetchOlderMessages = useCallback(() => {
     const el = messageScrollerRef.current;
@@ -3354,7 +3325,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
                     <h2 className="text-xl font-semibold">Start a new pentest</h2>
-                    <p className="mt-2 text-sm text-ink-secondary">Enter a target below and the Agent will start working.</p>
+                    <p className="mt-2 text-sm text-ink-secondary">Describe the work below and the Agent will start.</p>
                     <div className="mt-5 flex items-center justify-center gap-3">
                       <input
                         ref={importFileInputRef}
@@ -3716,11 +3687,8 @@ function removeMessageRecords(data: MessagesInfiniteData, predicate: (record: Me
 
 function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
   const normalizedStatus = String(status || "created") as Conversation["status"];
-  const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
-  const lastStatus = last(statusMessages)?.content || {};
-  const phase = snapshotAgentPhase(lastStatus);
   const lastTool = last(messages.filter(m => m.msg_type === "tool_call" && readString(m.content.tool_name)));
-  const activeTool = readString(lastStatus.active_tool) || readString(lastTool?.content.tool_name);
+  const activeTool = readString(lastTool?.content.tool_name);
   const decisions = new Set(messages.filter(m => m.msg_type === "decision").map(m => readString(m.content.request_id)).filter(Boolean));
   const pending = messages
     .filter(
@@ -3739,11 +3707,12 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   return {
     conversation: { id: messages[0]?.conversation_id || "", title: "", node_id: null, status: normalizedStatus, created_at: "", last_active_at: "" },
     agent_state: {
-      phase,
-      iteration: lastStatus.iteration,
+      // Agent tree / panel_agents live on checkpoint_update, not a chat ledger.
+      phase: undefined,
+      iteration: undefined,
       activeTool,
-      intakeResult: lastStatus.intake_result,
-      intakeStatus: lastStatus.status,
+      intakeResult: undefined,
+      intakeStatus: undefined,
     },
     // Do not invent 6-phase progress from status.phase — kanban/work totals are SoT.
     plan_tree: [],
@@ -3874,19 +3843,6 @@ function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIde
   return out;
 }
 
-/** Harness-only status lines that must not appear as chat from the expert. */
-function isUserVisibleStatusMessage(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  if (!t) return false;
-  if (t === "model turn" || t === "llm_waiting" || t === "llm_stalled" || t === "tool_running") return false;
-  if (/^[\w.-]+\s+running$/i.test(t)) return false; // "todo running", "shell running"
-  if (t.startsWith("phase:") && t.includes("(iter")) return false;
-  if (t.startsWith("node4 starting") || t.includes(" starting pack=")) return false;
-  // Spec #455: machine parked_continue ticks are not product chat.
-  if (t.startsWith("parked_continue")) return false;
-  // Keep interrupt / error / handoff style notes.
-  return true;
-}
 function messageConversationId(msg: Record<string, unknown>, fallback: string | null): string | null {
   return msg.conversation_id ? String(msg.conversation_id) : fallback;
 }

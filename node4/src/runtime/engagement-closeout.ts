@@ -125,7 +125,9 @@ export function buildEngagementCloseout(input: {
     [
       input.terminal === "blocked"
         ? "Graph process incomplete (terminal=blocked) — do not treat as full coverage success"
-        : "",
+        : input.terminal === "paused"
+          ? "Graph paused after stage Feedback — later stages not opened"
+          : "",
       still_open_priors > 0 ? `${still_open_priors} prior(s) still open without re-verify booking` : "",
       feedback_ok_unbooked.length
         ? `${feedback_ok_unbooked.length} feedback_ok unbooked`

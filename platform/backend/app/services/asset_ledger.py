@@ -315,6 +315,24 @@ def identity_values(primary_address: object, properties: object) -> set[str]:
     return {k for k in keys if k}
 
 
+def identity_query_key(query: object) -> str:
+    """Normalized host key when query is a ledger address; else empty (not identity lookup)."""
+    raw = str(query or "").strip()
+    if not is_valid_ledger_address(raw):
+        return ""
+    return normalize_address(raw) or ""
+
+
+def identity_match_kind(hit_count: int) -> str:
+    """none | unique | ambiguous — never first-match when ambiguous."""
+    n = int(hit_count or 0)
+    if n <= 0:
+        return "none"
+    if n == 1:
+        return "unique"
+    return "ambiguous"
+
+
 def extract_aliases(properties: object, primary_address: object = None) -> list[str]:
     """Extra addresses (IP/domain) beyond primary — low-friction multi-homing."""
     props = properties if isinstance(properties, dict) else {}
@@ -391,6 +409,18 @@ def ensure_properties_aliases(properties: object, primary_address: object) -> di
         idents.append({"value": a, "scope": "unknown"})
     props["identities"] = extract_identities({"identities": idents}, primary)
     return props
+
+
+def replace_properties_aliases(
+    properties: object,
+    incoming: object,
+    primary_address: object,
+) -> dict[str, Any]:
+    """Overwrite aliases[]. Does not parse note. Identities compat is rebuilt so deletions stick."""
+    props = dict(properties) if isinstance(properties, dict) else {}
+    props.pop("identities", None)
+    props["aliases"] = incoming if isinstance(incoming, list) else []
+    return ensure_properties_aliases(props, primary_address)
 
 
 def parse_import_lines(text: object) -> list[dict[str, str]]:

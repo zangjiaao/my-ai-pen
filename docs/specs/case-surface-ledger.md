@@ -136,7 +136,7 @@ Surface Spec owns **settle + manage**; full “recon pipeline” skills may live
 |-------|----------------------------|--------------------|
 | Who creates rows | Agent `surface` upsert primary | **Runtime settle from Traffic** (+ TARGET seed) |
 | Traffic | Raw material only; no auto insert | **Primary feed into Surface** |
-| TARGET seed | Forbidden | **Required** on engagement start |
+| TARGET seed | Forbidden | **User-authorized `scope.allow` web roots** at task start (not envelope `task.target`) |
 | Completion | booked via finding; Agent upsert open | **booked only via finding confirm**; **no complete without traffic** |
 | Agent `surface` tool | Primary deposit | **Read/list/get primary**; optional note; upsert not required for normal path |
 | Empty mid-run with heavy traffic | “Honest empty” if no deposit | **Bug / incomplete settle** — not acceptable product outcome |
@@ -264,9 +264,10 @@ On successful Case booking:
 
 **Known bug to fix under this Spec:** `location` like `PUT /api/Products/...` without scheme must not yield silent `unparseable` when `location_key` + host + port exist.
 
-### D8 — TARGET seed (v2)
+### D8 — Scope seed (v2)
 
-- Engagement target and in-scope allows **are** seeded into Surface at task start (origin + web root when applicable).
+- User-authorized `scope.allow` web origins **are** seeded into Surface at task start (origin + web root when applicable).
+- Envelope `task.target` is **not** a product object and **must not** be mined into Surface.
 - Seeds are `seen` until traffic advances them.
 
 ### D9 — Document shape
@@ -401,7 +402,7 @@ Unchanged layer split: Case Surface vs owner ledger vs Traffic. v2 changes **how
 | Node store | SQLite + surface tool + gates; status vocab seen/touched/booked (#379) | — |
 | Dual-write | #374 async surface_upsert | Unchanged topology |
 | Traffic→Surface | **#380:** on exchange complete/fail, HTTP(S) settle → SQLite + dual-write; static denylist; first→seen later→touched | — |
-| TARGET seed | **#381:** task start seeds TARGET + scope.allow web roots as `seen` (`source=target_seed`) | Traffic settle advances seed rows to touched |
+| TARGET seed | **#381:** task start seeds user-authorized `scope.allow` web roots as `seen` (`source=target_seed`); **not** envelope `task.target` | Traffic settle advances seed rows to touched |
 | Finding→booked | **#382:** resolve absolute URL → host+port+location_key → proof URL; create-on-book with strong identity; soft-fail unparseable (finding never fails) | — |
 | FE | Case ledger only | Label/status display if vocab changes |
 | Agent summary | **#383:** `surface(op=summary)` counts + samples; list/get primary; upsert non-primary; prompts tool-first (no every-turn inject) | — |

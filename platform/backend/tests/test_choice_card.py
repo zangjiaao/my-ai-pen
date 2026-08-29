@@ -8,8 +8,13 @@ from app.services.choice_card import (
     apply_soft_gate_note,
     build_confirm_continue_message,
     build_confirm_options_text,
+    collect_authorized_asset_ids,
     expand_selected_options,
+    filter_owned_card_hosts,
+    apply_owned_host_stamp,
     format_selected_summary,
+    merge_authorized_host_scope,
+    sync_task_asset_id_from_scope,
     is_next_steps_choice,
     is_question_answer_valid,
     map_authorize_decision,
@@ -44,6 +49,31 @@ def test_s1_authorize_without_options():
     assert map_authorize_decision(["authorize"]) == "authorize"
     assert map_authorize_decision(["cancel"]) == "cancel"
     assert map_authorize_decision([], "同意，限制在 lab") == "authorize"
+    host_q = parse_wizard_questions(
+        {
+            "kind": "confirm",
+            "question": "这 2 台要开测吗",
+            "host_labels": ["app.example.com", "10.0.0.2"],
+        }
+    )
+    assert "将纳入本 Case Scope" in host_q[0]["prompt"]
+    assert "app.example.com" in host_q[0]["prompt"]
+    ids, labels = filter_owned_card_hosts(
+        ["keep", "skip", "keep"],
+        {"keep": "app.example.com"},
+    )
+    assert ids == ["keep"]
+    assert labels == ["app.example.com"]
+    aid = "11111111-1111-1111-1111-111111111111"
+    keep = {"asset_ids": [aid], "kind": "confirm", "question": "开测?"}
+    apply_owned_host_stamp(keep, None)
+    assert keep["asset_ids"] == [aid]
+    assert "host_labels" not in keep
+    apply_owned_host_stamp(keep, {aid: "app.example.com"})
+    assert keep["host_labels"] == ["app.example.com"]
+    apply_owned_host_stamp(keep, {})
+    assert keep["asset_ids"] == []
+    assert keep["host_labels"] == []
     reduced = reduce_choice_decision(
         {"kind": "confirm", "question": "Authorize?"},
         custom_text="同意，限制在 lab",
@@ -122,6 +152,61 @@ def test_s2_expand_selected_options():
     assert exp["workset_item_ids"] == ["w1", "w2"]
     assert exp["summary_titles"] == ["加深", "报告"]
     assert format_selected_summary(exp["summary_titles"]) == "已选择：加深、报告"
+    assert exp["asset_ids"] == []
+
+
+def test_expand_and_collect_host_scope_ids():
+    a = "11111111-1111-4111-8111-111111111111"
+    b = "22222222-2222-4222-8222-222222222222"
+    card = {
+        "kind": "next_steps",
+        "options": [
+            {"id": a, "title": "本机", "body": "b", "asset_id": a},
+            {"id": b, "title": "旁路", "body": "b", "asset_id": b},
+        ],
+    }
+    exp = expand_selected_options(card, [a])
+    assert exp["asset_ids"] == [a]
+    assert collect_authorized_asset_ids(
+        decision="confirm_options", card=card, selected_option_ids=[a]
+    ) == [a]
+    assert collect_authorized_asset_ids(
+        decision="authorize",
+        card={"kind": "confirm", "asset_ids": [a, b], "question": "这 2 台要开测吗"},
+    ) == [a, b]
+    assert collect_authorized_asset_ids(
+        decision="authorize",
+        card={"kind": "handoff", "asset_ids": [a], "question": "移交"},
+    ) == []
+    assert collect_authorized_asset_ids(
+        decision="cancel", card=card, selected_option_ids=[a]
+    ) == []
+    parsed = validate_choice_card_payload(card)
+    assert parsed["ok"] is True
+    assert parsed["value"]["options"][0]["asset_id"] == a
+    uuid_only = {
+        "kind": "next_steps",
+        "options": [{"id": a, "title": "本机", "body": "b"}],
+    }
+    assert expand_selected_options(uuid_only, [a])["asset_ids"] == []
+    assert collect_authorized_asset_ids(
+        decision="authorize", card=uuid_only, selected_option_ids=[a]
+    ) == []
+    merged = merge_authorized_host_scope(
+        {"allow": ["keep.example"], "deny": ["evil.example", "new.example"], "asset_ids": ["old"]},
+        allow=["new.example"],
+        asset_ids=[a],
+    )
+    assert "keep.example" in merged["allow"]
+    assert "new.example" in merged["allow"]
+    assert merged["deny"] == ["evil.example"]
+    assert "old" in merged["asset_ids"] and a in merged["asset_ids"]
+    task = {"asset_id": "old", "scope": merged}
+    sync_task_asset_id_from_scope(task)
+    assert "asset_id" not in task
+    one = {"asset_id": "stale", "scope": {"asset_ids": [a]}}
+    sync_task_asset_id_from_scope(one)
+    assert one["asset_id"] == a
 
 
 def test_s3_confirm_text_custom_is_peer_option():

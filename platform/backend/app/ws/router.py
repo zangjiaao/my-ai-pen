@@ -10,7 +10,6 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.services.conversation_state import ConversationStatusError, transition_conversation
-from app.services.agent_router import extract_target, extract_targets
 from app.services.agent_orchestrator import AgentCapability, OrchestrationContext, OrchestrationError, route_with_platform_agent
 from app.services.platform_agent import (
     answer_clarification,
@@ -18,7 +17,7 @@ from app.services.platform_agent import (
     answer_platform_chat,
     answer_snapshot_qa,
 )
-from app.services.conversation_snapshot import build_conversation_snapshot, is_legacy_task_pipeline_phase
+from app.services.conversation_snapshot import build_conversation_snapshot
 from app.services.expert_offers import (
     ACTION_USAGE,
     dispatch_gate_error,
@@ -1339,6 +1338,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             )
         return
 
+    if conv_id and str(msg.get("type") or "") == "request_decision":
+        await _stamp_owned_host_labels_on_decision(msg, conv_id)
+
     if conv_id:
         msg["agent_node_id"] = client_id
         sticky_eng = await _conversation_task_engagement(conv_id)
@@ -1615,6 +1617,14 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         else:
             # Fail closed: do not broadcast unpersisted / invalid surface frames.
             return
+    elif msg.get("type") == "workset_propose" and conv_id:
+        # Spec #532: mid-run passive candidates → Case Workset (no Goal auto-adopt).
+        persisted_ws = await _persist_workset_propose(msg, conv_id, client_id)
+        if persisted_ws:
+            msg.clear()
+            msg.update(persisted_ws)
+        else:
+            return
     elif msg.get("type") == "tool_output":
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
@@ -1636,6 +1646,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         msg_type not in {
             "intake_update",
             "work_status",
+            # Retired live ticks — never a chat ledger.
+            "status_update",
+            "phase_changed",
             "checkpoint_update",
             # Spec #309: traffic lives in conversation.context store, not chat message log.
             "traffic_exchange",
@@ -1648,7 +1661,6 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "worker_released",
             "worker_release_ack",
         }
-        and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
     )
 
@@ -1675,7 +1687,10 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     else:
         if should_save:
             await _save_message(msg, "agent")
-        if conv_id and msg_type not in {"intake_update", "work_status"}:
+        if conv_id and msg_type not in {
+            "status_update",
+            "phase_changed",
+        }:
             await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
 
     if msg.get("type") == "request_decision":
@@ -1757,6 +1772,7 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             # Requesting Session persona (for graph_mode_apply settle on same expert).
             "expert_id": str(msg.get("expert_id") or "").strip() or None,
             "expert_name": str(msg.get("expert_name") or "").strip() or None,
+            "asset_ids": _request_decision_asset_ids(msg),
         }
         # Spec #313 L10: keep option snapshot after pending_approvals is consumed/frozen.
         if pending_options is not None or pending_questions is not None or pending_kind:
@@ -1768,6 +1784,7 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 "presentation": pending_presentation,
                 "allow_custom": msg.get("allow_custom"),
                 "selection": pending_selection,
+                "asset_ids": _request_decision_asset_ids(msg),
             }
         # Spec #325 H1: authorize wait is not busy — pause work-burst accrual.
         if conv_id:
@@ -2396,14 +2413,6 @@ def _plan_tree_dedupe_key(content: dict) -> str:
     return f"plan_tree:{digest}"
 
 
-def _is_pentest_runtime_status(msg: dict) -> bool:
-    if msg.get("type") not in {"status_update", "phase_changed"}:
-        return False
-    kanban = msg.get("kanban") if isinstance(msg.get("kanban"), dict) else {}
-    return msg.get("workflow_kind") == "pentest" or kanban.get("workflow_kind") == "pentest"
-
-
-
 def _proof_properties_from_summary(summary: object) -> dict:
     if not isinstance(summary, str) or not summary.strip().startswith(("{", "[")):
         return {}
@@ -2600,6 +2609,9 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 
         original_type = msg.get("type", "text")
         msg_type = original_type
+        # Retired ticks: never persist. task_complete still persists as msg_type=status.
+        if role != "user" and original_type in {"status_update", "phase_changed"}:
+            return None
         if role == "user":
             target_agent = _agent_target(msg)
             target_node_id = _agent_node_id(msg)
@@ -2771,32 +2783,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content["settlement"] = msg.get("settlement")
             _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("status_update", "phase_changed"):
-            msg_type = "status"
-            # Prefer Node4 message / agent_phase over leftover Task-era phase ticks.
-            human = str(msg.get("message") or msg.get("text") or "").strip()
-            phase = msg.get("agent_phase") or msg.get("phase")
-            active_tool = msg.get("active_tool")
-            if human and human.lower() not in {"model turn", "llm_waiting", "tool_running"}:
-                text = human
-            elif active_tool:
-                text = f"{active_tool}"
-            elif phase and not is_legacy_task_pipeline_phase(phase):
-                text = str(phase)
-            else:
-                return None
-            # Skip persisting pure harness ticks that flood the transcript.
-            if human.lower() in {"model turn"} or (
-                human.lower().endswith(" running") and human.lower() not in {"still running"}
-            ):
-                return None
-            content = {
-                "text": text,
-                "phase": phase,
-                "iteration": msg.get("iteration"),
-                "active_tool": active_tool,
-                "status": msg.get("status"),
-                "intake_result": msg.get("intake_result"),
-            }
+            return None
         elif msg_type == "request_decision":
             msg_type = "confirm_card"
             kind = str(msg.get("kind") or "confirm").strip().lower() or "confirm"
@@ -2888,6 +2875,10 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             for key in ("handoff_pack_id", "handoff_expert_id", "handoff_expert_name", "pack_id"):
                 if msg.get(key) is not None and str(msg.get(key) or "").strip():
                     content[key] = str(msg.get(key)).strip()
+            if isinstance(msg.get("asset_ids"), list) and msg.get("asset_ids"):
+                content["asset_ids"] = [str(x) for x in msg["asset_ids"] if str(x or "").strip()]
+            if isinstance(msg.get("host_labels"), list) and msg.get("host_labels"):
+                content["host_labels"] = [str(x) for x in msg["host_labels"] if str(x or "").strip()]
         elif msg_type == "completion_blocked":
             msg_type = "status"
             content = {
@@ -4036,10 +4027,18 @@ async def _remember_conversation_task(
             context = dict(c.context or {})
             prev_task = context.get("task") if isinstance(context.get("task"), dict) else {}
             task_blob: dict = {
-                "target": target or {},
-                "scope": scope or {},
                 "instruction": instruction or "",
             }
+            remembered_target = _structured_target_dict(target) or _structured_target_dict(
+                prev_task.get("target")
+            )
+            if remembered_target:
+                task_blob["target"] = remembered_target
+            remembered_scope = _structured_scope_dict(scope) or _structured_scope_dict(
+                prev_task.get("scope")
+            )
+            if remembered_scope:
+                task_blob["scope"] = remembered_scope
             aid = str(asset_id or prev_task.get("asset_id") or "").strip()
             if aid:
                 task_blob["asset_id"] = aid
@@ -4260,6 +4259,143 @@ def _choice_card_snap_for_request(request_id: str | None) -> dict | None:
     return snap if isinstance(snap, dict) else None
 
 
+def _request_decision_asset_ids(msg: dict | None) -> list[str]:
+    from app.services.choice_card import parse_card_asset_ids
+
+    return parse_card_asset_ids(msg if isinstance(msg, dict) else None)
+
+
+async def _stamp_owned_host_labels_on_decision(msg: dict, conv_id: str) -> None:
+    """Show owned Hosts on authorize. Lookup/query failure must not wipe asset_ids."""
+    from app.services.choice_card import apply_owned_host_stamp, parse_card_asset_ids
+
+    raw_ids = parse_card_asset_ids(msg)
+    if not raw_ids:
+        return
+    try:
+        owner_id, _ = await _conversation_owner(conv_id)
+        if not owner_id:
+            return
+        ids: list[uuid.UUID] = []
+        seen: set[uuid.UUID] = set()
+        for raw in raw_ids:
+            try:
+                guid = uuid.UUID(str(raw))
+            except ValueError:
+                continue
+            if guid in seen:
+                continue
+            seen.add(guid)
+            ids.append(guid)
+        if not ids:
+            return
+        from app.db.base import async_session
+        from app.models.asset import Asset
+
+        async with async_session() as db:
+            rows = list(
+                (
+                    await db.execute(
+                        select(Asset).where(Asset.user_id == owner_id, Asset.id.in_(ids))
+                    )
+                ).scalars().all()
+            )
+        owned = {str(a.id): str(a.address or a.name or a.id) for a in rows}
+        apply_owned_host_stamp(msg, owned)
+    except Exception as e:
+        print(f"[WS] stamp host_labels error: {e}")
+
+
+async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]) -> None:
+    """Write user-allowed Host ids as Case Scope. Does not invent task.target."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.db.base import async_session
+    from app.models.asset import Asset
+    from app.models.conversation import Conversation
+    from app.services.asset_ledger import build_scope_allow
+
+    ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in asset_ids:
+        try:
+            guid = uuid.UUID(str(raw))
+        except ValueError:
+            continue
+        if guid in seen:
+            continue
+        seen.add(guid)
+        ids.append(guid)
+    if not ids:
+        return
+    owner_id, _ = await _conversation_owner(conv_id)
+    if not owner_id:
+        return
+    try:
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            assets = list(
+                (
+                    await db.execute(
+                        select(Asset).where(Asset.user_id == owner_id, Asset.id.in_(ids))
+                    )
+                ).scalars().all()
+            )
+            if not assets:
+                return
+            by_id = {a.id: a for a in assets}
+            ordered = [by_id[i] for i in ids if i in by_id]
+            allow = build_scope_allow(
+                [
+                    {"address": a.address, "properties": a.properties or {}}
+                    for a in ordered
+                ]
+            )
+            found_ids = [str(a.id) for a in ordered]
+            context = dict(c.context or {}) if isinstance(c.context, dict) else {}
+            task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
+            from app.services.choice_card import merge_authorized_host_scope, sync_task_asset_id_from_scope
+
+            task["scope"] = merge_authorized_host_scope(
+                task.get("scope") if isinstance(task.get("scope"), dict) else {},
+                allow=allow,
+                asset_ids=found_ids,
+            )
+            sync_task_asset_id_from_scope(task)
+            context["task"] = task
+            c.context = context
+            flag_modified(c, "context")
+            await db.commit()
+            print(
+                f"[WS] authorized host scope conv={conv_id[:8]} "
+                f"hosts={len(found_ids)} allow={len(allow)}"
+            )
+    except Exception as e:
+        print(f"[WS] authorized host scope error: {e}")
+
+
+async def _maybe_persist_authorized_host_scope(
+    conv_id: str,
+    *,
+    decision: str,
+    card: dict | None,
+    selected_option_ids: list | None,
+) -> list[str]:
+    from app.services.choice_card import collect_authorized_asset_ids
+
+    ids = collect_authorized_asset_ids(
+        decision=decision,
+        card=card,
+        selected_option_ids=selected_option_ids,
+    )
+    if ids:
+        await _patch_conversation_task_host_scope(conv_id, ids)
+    return ids
+
+
 async def _latest_persisted_confirm_matches(conv_id: str, request_id: object) -> bool:
     """Legacy fallback for paused bursts created before request ids were ledger-bound."""
     cid = str(conv_id or "").strip()
@@ -4407,10 +4543,20 @@ async def _continue_after_orphaned_confirm_options(
     """When next_steps confirm has no live pending wait, start a new continue turn.
 
     Spec #312 US9 / #313 L10: structured selection must drive work with sticky
-    target/scope/expert — not empty-target conversation-only chat.
+    scope/expert — not a ledger-assist chat-only seat.
     Typical case: user interrupted while the card was open (wait cancelled), then clicked 按所选继续.
     """
     from app.services.choice_card import build_confirm_continue_message
+
+    try:
+        await _maybe_persist_authorized_host_scope(
+            conv_id,
+            decision="confirm_options",
+            card=_choice_card_snap_for_request(str(msg.get("request_id") or "")) or {},
+            selected_option_ids=selected_option_ids if isinstance(selected_option_ids, list) else [],
+        )
+    except Exception as e:
+        print(f"[WS] orphaned confirm host scope: {e}")
 
     resume_context = await _conversation_snapshot(conv_id, client_id)
     task_context = _task_context_from_snapshot(resume_context or {})
@@ -4431,28 +4577,9 @@ async def _continue_after_orphaned_confirm_options(
     if _has_resumable_task(resume_context or {}):
         resumed, ok = _resume_message_from_context(continue_msg, resume_context or {})
         if ok and resumed:
-            # Keep confirm text as the user continuation; resume injects target/scope.
+            # Keep confirm text as the user continuation; resume injects sticky scope/expert.
             continue_msg = resumed
     continue_msg = await _hydrate_sticky_expert_on_message(conv_id, continue_msg)
-    # Spec #313 L10: forbid empty-target chat-only when prior engagement had a target.
-    if _has_resumable_task(resume_context or {}) and not _message_has_task_target(continue_msg):
-        await _persist_and_broadcast(
-            conv_id,
-            {
-                "type": "task_error",
-                "conversation_id": conv_id,
-                "message": (
-                    "Cannot continue next_steps without sticky target from prior engagement. "
-                    "Re-open the Case with the original target or send a message that includes the target."
-                ),
-                "agent_source": "platform",
-            },
-            "agent",
-        )
-        print(
-            f"[WS] orphaned confirm_options blocked empty-target continue conv={conv_id[:8]}"
-        )
-        return
     conversation_status = await _conversation_status(conv_id)
     _, bound_node = await _conversation_owner(conv_id)
     bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
@@ -5285,21 +5412,18 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
     if not eid:
         print(f"[WS] handoff: no enabled product expert for pack={pack}")
         try:
-            await _broadcast_to_conversation(
+            await _persist_and_broadcast(
                 conv_id,
-                json.dumps(
-                    {
-                        "type": "status_update",
-                        "conversation_id": conv_id,
-                        "status": "handoff_failed",
-                        "message": (
-                            f"移交失败：没有可用的产品专家（pack={pack}）。"
-                            "请在「专家管理」创建并绑定对应专家后再试。"
-                        ),
-                        "agent_phase": "finished",
-                    },
-                    ensure_ascii=False,
-                ),
+                {
+                    "type": "task_error",
+                    "conversation_id": conv_id,
+                    "message": (
+                        f"移交失败：没有可用的产品专家（pack={pack}）。"
+                        "请在「专家管理」创建并绑定对应专家后再试。"
+                    ),
+                    "agent_source": "platform",
+                },
+                "agent",
             )
         except Exception as pe:
             print(f"[WS] handoff failure notice error: {pe}")
@@ -5312,7 +5436,8 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
         engagement=pack,
     )
 
-    # Persist target/scope from the authorization card when present.
+    # Persist structured target/scope from the authorization card only.
+    # Do not regex-invent a Task Target from proposed_action / question prose.
     target_raw = approval.get("target")
     target: dict = {}
     if isinstance(target_raw, dict) and str(target_raw.get("value") or "").strip():
@@ -5321,15 +5446,6 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
         val = target_raw.strip()
         ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
         target = {"type": ttype, "value": val}
-    else:
-        # Best-effort: first URL/host in proposed_action (structured card body, not free NLP invent).
-        from app.services.agent_router import extract_targets
-
-        found = extract_targets(str(approval.get("proposed_action") or approval.get("question") or ""))
-        if found:
-            val = found[0]
-            ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
-            target = {"type": ttype, "value": val}
 
     proposed = str(approval.get("proposed_action") or "").strip()
     question = str(approval.get("question") or "").strip()
@@ -5798,6 +5914,56 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
         print(f"[WS] participant plan_tree error: {e}")
 
 
+async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None = None) -> dict | None:
+    """Spec #532: merge Agent workset(propose) into Case Workset without Goal valve."""
+    cands = msg.get("workset_candidates")
+    if not conv_id or not isinstance(cands, list) or not cands:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_workset import (
+            get_asset_intake,
+            get_workset,
+            materialize_user_committed_intake,
+            merge_proposed_into_context,
+            project_workset_for_api,
+        )
+        from app.services.node_ledger import conversation_bound_to_node_id
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            if not conversation_bound_to_node_id(c.node_id, node_id):
+                print("[WS] workset_propose rejected: conversation not bound to this node")
+                return None
+            source = str(msg.get("workset_source") or "workset_propose").strip() or "workset_propose"
+            context = merge_proposed_into_context(
+                dict(c.context or {}),
+                [row for row in cands if isinstance(row, dict)],
+                source=source,
+            )
+            context = await materialize_user_committed_intake(
+                db,
+                user_id=c.user_id,
+                conversation_id=str(c.id),
+                context=context,
+            )
+            c.context = context
+            await db.commit()
+            return {
+                "type": "workset_updated",
+                "conversation_id": conv_id,
+                "workset": project_workset_for_api(get_workset(context)),
+                "asset_intake": get_asset_intake(context),
+            }
+    except Exception as e:
+        print(f"[WS] workset_propose persist error: {e}")
+        return None
+
+
 async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
     """Persist out-of-scope hosts after execution settle for next-Scope UI.
 
@@ -5924,6 +6090,14 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 except Exception as fe:
                     print(f"[WS] goal free session land error: {fe}")
 
+            from app.services.case_workset import materialize_user_committed_intake
+
+            context = await materialize_user_committed_intake(
+                db,
+                user_id=c.user_id,
+                conversation_id=str(c.id),
+                context=context,
+            )
             c.context = context
             await db.commit()
 
@@ -6033,11 +6207,23 @@ async def _clear_active_task_id(conv_id: str | None, task_id: object) -> None:
         print(f"[WS] clear active_task_id error: {e}")
 
 def _message_target_value(msg: dict) -> str:
+    """Authorized host from structured target/scope only — never utterance regex."""
+    if not isinstance(msg, dict):
+        return ""
     target = msg.get("target") or {}
-    if isinstance(target, dict) and target.get("value"):
+    if isinstance(target, dict) and str(target.get("value") or "").strip():
         return str(target.get("value") or "").strip()
-    text = str(msg.get("text") or msg.get("initial_instruction") or "")
-    return extract_target(text)
+    if isinstance(target, str) and target.strip():
+        return target.strip()
+    scope = msg.get("scope")
+    if isinstance(scope, dict):
+        allow = scope.get("allow")
+        if isinstance(allow, list):
+            for item in allow:
+                val = str(item or "").strip()
+                if val:
+                    return val
+    return ""
 
 
 def _completed_pentest_followup_requested(msg: dict, target_value: str) -> bool:
@@ -6076,34 +6262,68 @@ def _task_context_from_snapshot(resume_context: dict) -> dict:
 
 
 def _has_resumable_task(resume_context: dict) -> bool:
+    """True when a prior Session work envelope exists (not gated on a unique Target)."""
     task = _task_context_from_snapshot(resume_context)
+    if not task:
+        return False
     target = task.get("target")
     if isinstance(target, dict) and str(target.get("value") or "").strip():
         return True
     if isinstance(target, str) and target.strip():
         return True
-    return False
-
-
-def _message_has_task_target(msg: dict) -> bool:
-    """True only when this user message carries an authorized execution target.
-
-    Structured product fields (target/scope) or explicit URL/IP in text — not
-    free-text intent guessing. Greetings like "你好" must return False.
-    """
-    if not isinstance(msg, dict):
-        return False
-    target = msg.get("target")
-    if isinstance(target, dict) and str(target.get("value") or "").strip():
-        return True
-    if isinstance(target, str) and target.strip():
-        return True
-    scope = msg.get("scope")
+    scope = task.get("scope")
     if isinstance(scope, dict):
         allow = scope.get("allow")
         if isinstance(allow, list) and any(str(item or "").strip() for item in allow):
             return True
-    if extract_targets(str(msg.get("text") or "")):
+    if str(task.get("instruction") or task.get("initial_instruction") or "").strip():
+        return True
+    checkpoint = resume_context.get("checkpoint") if isinstance(resume_context, dict) else None
+    if isinstance(checkpoint, dict) and checkpoint:
+        return True
+    return False
+
+
+def _structured_target_dict(raw: object) -> dict | None:
+    """Non-empty authorized target object, or None (do not persist `{}`)."""
+    if isinstance(raw, dict):
+        if str(raw.get("value") or raw.get("url") or raw.get("host") or "").strip():
+            return dict(raw)
+        return None
+    if isinstance(raw, str) and raw.strip():
+        val = raw.strip()
+        ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
+        return {"type": ttype, "value": val}
+    return None
+
+
+def _structured_scope_dict(raw: object) -> dict | None:
+    """Scope with allow/deny Hosts or explicit asset_ids. Do not persist empty Scope."""
+    if not isinstance(raw, dict):
+        return None
+    allow = raw.get("allow")
+    deny = raw.get("deny")
+    asset_ids = raw.get("asset_ids")
+    has_allow = isinstance(allow, list) and any(str(item or "").strip() for item in allow)
+    has_deny = isinstance(deny, list) and any(str(item or "").strip() for item in deny)
+    has_ids = isinstance(asset_ids, list) and any(str(item or "").strip() for item in asset_ids)
+    if not has_allow and not has_deny and not has_ids:
+        return None
+    return dict(raw)
+
+
+def _message_has_task_target(msg: dict) -> bool:
+    """True only when this message carries user-authorized Scope / structured target.
+
+    Structured product fields only — never URL/IP regex over the utterance.
+    Greetings like "你好" and "测一下 http://example.com" without structured
+    fields must return False.
+    """
+    if not isinstance(msg, dict):
+        return False
+    if _structured_target_dict(msg.get("target")):
+        return True
+    if _structured_scope_dict(msg.get("scope")):
         return True
     return False
 
@@ -6172,6 +6392,7 @@ def _package_settle_status_content(msg: dict) -> dict:
         if session_cont:
             out["parked_continue"] = True
             out["session_continue"] = True
+        _copy_pdca_settle_fields(msg, out)
         return out
     text = "Session continue settled" if session_cont else "Package complete"
     out = {"text": text, "status": "completed", "summary": summary}
@@ -6180,7 +6401,21 @@ def _package_settle_status_content(msg: dict) -> dict:
     if session_cont:
         out["parked_continue"] = True
         out["session_continue"] = True
+    _copy_pdca_settle_fields(msg, out)
     return out
+
+
+def _copy_pdca_settle_fields(msg: dict, out: dict) -> None:
+    """Keep host PDCA verdict on the persisted status row (Spec #529)."""
+    for key in ("pdca_verdict", "pdca_reason", "pdca_unresolved"):
+        if key in msg and msg.get(key) is not None:
+            out[key] = msg[key]
+    verdict = str(out.get("pdca_verdict") or "").strip()
+    reason = str(out.get("pdca_reason") or "").strip()
+    if verdict:
+        suffix = f"pdca {verdict}" + (f"/{reason}" if reason else "")
+        text = str(out.get("text") or "").strip()
+        out["text"] = f"{text} · {suffix}" if text else suffix
 
 
 def _package_error_status_content(msg: dict) -> dict:
@@ -6196,26 +6431,31 @@ def _package_error_status_content(msg: dict) -> dict:
 
 
 def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
-    """Restore sticky target/scope/goal for same-Session continue (Spec #455 S1).
+    """Restore sticky scope/goal for same-Session continue (Spec #455 S1).
 
     Dialogue turn text is the operator utterance only. Do **not** rewrap sticky
     prior instruction as an engagement book (`User continuation:` glue).
+    Envelope Target is optional leftover — resume does not require it.
     """
     task_context = _task_context_from_snapshot(resume_context)
-    if not task_context.get("target"):
+    if not task_context:
         return None, False
 
     # Spec #455 L1/L2: model-visible turn = operator utterance (or ChoiceCard confirm text).
     continue_instruction = str(msg.get("text") or "").strip()
     out = {
         **msg,
-        "target": task_context.get("target") or {},
-        "scope": task_context.get("scope") or {},
         "text": continue_instruction,
         "initial_instruction": continue_instruction,
         # Spec #455: Task package is accounting; Session is dialogue owner.
         "session_continue": True,
     }
+    sticky_target = _structured_target_dict(task_context.get("target"))
+    sticky_scope = _structured_scope_dict(task_context.get("scope"))
+    if sticky_target and not _structured_target_dict(msg.get("target")):
+        out["target"] = sticky_target
+    if sticky_scope and not _structured_scope_dict(msg.get("scope")):
+        out["scope"] = sticky_scope
     # Preserve prior structured goal seed on resume unless the new message overrides.
     prior_goal = str(task_context.get("goal_objective") or "").strip()
     resolved_goal = _goal_objective_from_message(msg, fallback=prior_goal)
@@ -6239,8 +6479,8 @@ def _should_session_continue_sticky(
 ) -> bool:
     """True when this turn is same-Session continue with sticky engagement (Spec #455).
 
-    Uses conversation status + durable sticky target — not free-text intent NLP to invent
-    engagement. Short continue phrases and missing-target steers both restore structure.
+    Uses conversation status + durable sticky Session — not free-text intent NLP to invent
+    engagement. Short continue phrases restore structure without requiring a Task Target.
     """
     if is_default or not has_resume_task:
         return False
@@ -6256,8 +6496,7 @@ def _should_session_continue_sticky(
         "completed",
     }:
         return False
-    # Durable sticky target exists (caller already checked has_resume_task).
-    # Operator utterance may or may not carry a new target; either way this is Session dialogue.
+    # Durable sticky Session exists (caller already checked has_resume_task).
     return True
 
 
@@ -6346,28 +6585,6 @@ def _strip_expert_fields(msg: dict) -> None:
     if isinstance(content, dict):
         content.pop("expert_id", None)
         content.pop("expert_name", None)
-
-
-def _ensure_target_from_text(msg: dict) -> dict:
-    """If structured target missing, copy first URL/IP from text (no NLP invent)."""
-    target = msg.get("target") if isinstance(msg, dict) else None
-    if isinstance(target, dict) and str(target.get("value") or "").strip():
-        return msg
-    if isinstance(target, str) and target.strip():
-        return msg
-    from app.services.agent_router import extract_targets
-
-    found = extract_targets(str(msg.get("text") or ""))
-    if not found:
-        return msg
-    value = found[0]
-    # Strip trailing path noise already handled by extract_targets regex.
-    ttype = "url" if value.lower().startswith(("http://", "https://")) else "host"
-    out = dict(msg)
-    out["target"] = {"type": ttype, "value": value}
-    if not out.get("scope"):
-        out["scope"] = {"allow": [value], "deny": []}
-    return out
 
 
 def _dispatch_no_node_error_message(*, preferred: str | None) -> str:
@@ -6565,19 +6782,28 @@ async def _dispatch_task_assign_to_node(
 
 
 def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
-    task_target = msg.get("target") or {}
-    task_scope = msg.get("scope") or {"allow": [task_target.get("value")] if task_target else []}
+    task_target = _structured_target_dict(msg.get("target"))
+    incoming_scope = _structured_scope_dict(msg.get("scope"))
+    if incoming_scope is not None:
+        task_scope = incoming_scope
+    elif task_target:
+        val = str(task_target.get("value") or "").strip()
+        task_scope = {"allow": [val], "deny": []} if val else None
+    else:
+        task_scope = None
     # Prefer explicit initial_instruction when present (already utterance-only after #455 S1).
     turn_text = str(msg.get("initial_instruction") or msg.get("text") or "")
     out = {
         "type": "task_assign",
         "conversation_id": conv_id,
         "task_id": task_id,
-        "target": task_target,
-        "scope": task_scope,
         "initial_instruction": turn_text,
         "snapshot": msg.get("snapshot") or {},
     }
+    if task_target:
+        out["target"] = task_target
+    if task_scope:
+        out["scope"] = task_scope
     if msg.get("session_continue") is True:
         out["session_continue"] = True
     goal_objective = _goal_objective_from_message(msg)
@@ -7357,7 +7583,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
                     capabilities = await _available_agent_capabilities()
                     requested_node_id, msg = await _resolve_mention_route(msg, capabilities)
-                    msg = _ensure_target_from_text(msg)
 
                     # Spec #277 §3.3 14a: pending authorization card — any typed reply is
                     # feedback to the current Session (same path as Authorize/Cancel click).
@@ -7537,6 +7762,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     if isinstance(card_source, dict) and card_source
                                     else None
                                 ),
+                                "asset_ids": (
+                                    card_source.get("asset_ids")
+                                    if isinstance(card_source, dict) and card_source
+                                    else None
+                                ),
                             }
                             expanded = expand_selected_options(
                                 card_snap,
@@ -7545,6 +7775,17 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             workset_item_ids = list(expanded.get("workset_item_ids") or [])
                         except Exception:
                             workset_item_ids = []
+                    try:
+                        await _maybe_persist_authorized_host_scope(
+                            conv_id,
+                            decision=str(decision or ""),
+                            card=card_source if isinstance(card_source, dict) else {},
+                            selected_option_ids=(
+                                selected_option_ids if isinstance(selected_option_ids, list) else []
+                            ),
+                        )
+                    except Exception as e:
+                        print(f"[WS] persist authorized host scope: {e}")
                     # Spec #313 L3: structured replace permission only (not free-text NLP).
                     replace_perm = _is_todo_replace_user_permission(msg, selected_option_ids)
                     node_msg = {

@@ -1,8 +1,9 @@
 /**
- * Spec #368 D8 / issue #381 — TARGET + scope.allow seed at task start.
+ * Spec #368 D8 / issue #381 — scope.allow seed at task start.
  *
- * Seeds web origins (and path `/`) into Surface SQLite as status **seen**,
- * source=target_seed, without Agent upsert or prior traffic.
+ * Seeds user-authorized web origins (and path `/`) into Surface SQLite as
+ * status **seen**, source=target_seed, without Agent upsert or prior traffic.
+ * Does **not** invent rows from envelope `task.target` (not a product object).
  * Online: dual-write via existing surface_upsert path (#374).
  */
 
@@ -71,7 +72,8 @@ export function tryParseWebSeedLocation(
 }
 
 /**
- * Collect distinct web origin seeds from task.target + scope.allow.
+ * Collect distinct web origin seeds from user-authorized scope.allow.
+ * Envelope `task.target` is ignored (not a product object).
  * Pure — no I/O.
  */
 export function collectTargetSeedLocations(task: {
@@ -85,23 +87,6 @@ export function collectTargetSeedLocations(task: {
     if (!loc) return;
     byOrigin.set(loc.origin_key, loc);
   };
-
-  const target = task.target && typeof task.target === "object" ? task.target : {};
-  const tval = String(
-    (target as { value?: unknown }).value
-      ?? (target as { url?: unknown }).url
-      ?? (target as { host?: unknown }).host
-      ?? "",
-  ).trim();
-  if (tval) {
-    const type = String((target as { type?: unknown }).type ?? "")
-      .toLowerCase()
-      .trim();
-    // Coerce bare host for url/web targets and when type omitted (common envelope).
-    const coerceBare =
-      !type || type === "url" || type === "web" || type === "http" || type === "https";
-    add(tval, coerceBare);
-  }
 
   const allow =
     task.scope && typeof task.scope === "object"
@@ -118,7 +103,7 @@ export function collectTargetSeedLocations(task: {
 }
 
 /**
- * Host task-start seed: upsert TARGET / scope.allow web roots as seen.
+ * Host task-start seed: upsert scope.allow web roots as seen.
  * Idempotent (never downgrades; re-seed on continue is a no-op advance).
  * Failures must not block task start — callers may catch.
  */

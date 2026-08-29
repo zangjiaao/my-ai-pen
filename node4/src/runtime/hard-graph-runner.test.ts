@@ -233,4 +233,116 @@ assert.equal(
   assert.equal(runEnd!.terminal, "blocked");
 }
 
+assert.equal(hardGraphToHarnessStatus("paused"), "incomplete");
+
+// Captain pause vote: must not open later stages
+{
+  const pauseEvents: string[] = [];
+  const pauseExec: StageExecutor = async (input) => {
+    if (input.stage.id === "init") {
+      return {
+        structured: { ok: true, summary: "init ok", surfaces: [], candidates: [], stage_advance: "continue" },
+      };
+    }
+    if (input.stage.id === "surface") {
+      return {
+        structured: {
+          ok: true,
+          summary: "surfaces mapped",
+          surfaces: [{ location: "http://t/" }],
+          candidates: [],
+          stage_advance: "pause",
+        },
+      };
+    }
+    return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+  };
+  const paused = await runHardGraph({
+    graph: graph!,
+    executeStage: pauseExec,
+    availableTools: ["todo", "read", "fact", "skill", "write", "shell", "http", "finding"],
+    instruction: "JuiceShop from init. Stop after surface. If you would enter class_probe, ask first.",
+    onEvent: (e) => {
+      if (e.type === "stage_start") pauseEvents.push(`start:${e.stageId}`);
+      if (e.type === "run_end") pauseEvents.push(`run:${e.terminal}`);
+    },
+  });
+  assert.equal(paused.terminal, "paused");
+  assert.equal(paused.advance?.decision, "pause");
+  assert.equal(paused.advance?.stageId, "surface");
+  assert.ok(paused.advance?.nextStageId);
+  assert.ok(!pauseEvents.some((x) => x.includes("auth_session") || x.includes("class_probe")));
+  assert.ok(pauseEvents.includes("run:paused"));
+  assert.ok(!paused.stages.some((s) => s.stageId === "class_probe" || s.stageId === "auth_session"));
+}
+
+// Missing vote + non-empty instruction → continue (Feedback Agent omitted vote)
+{
+  const starts: string[] = [];
+  const miss = await runHardGraph({
+    graph: graph!,
+    instruction: "bounded surface only",
+    executeStage: async (input) => {
+      starts.push(input.stage.id);
+      if (input.stage.id === "surface") {
+        return {
+          structured: {
+            ok: true,
+            summary: "surf",
+            surfaces: [{ location: "http://t/" }],
+            candidates: [],
+          },
+        };
+      }
+      return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+    },
+    availableTools: ["todo", "read", "shell", "http", "finding"],
+  });
+  assert.equal(miss.terminal, "completed");
+  assert.ok(starts.includes("init"));
+  assert.ok(starts.includes("surface") || starts.length > 1);
+}
+
+// Empty instruction still runs full graph (lab / fake executor)
+{
+  const starts: string[] = [];
+  const full = await runHardGraph({
+    graph: graph!,
+    executeStage: async (input) => {
+      starts.push(input.stage.id);
+      if (input.stage.id === "surface") {
+        return {
+          structured: {
+            ok: true,
+            summary: "surf",
+            surfaces: [{ location: "http://t/" }],
+            candidates: [],
+          },
+        };
+      }
+      return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+    },
+    availableTools: ["todo", "read", "shell", "http", "finding"],
+  });
+  assert.equal(full.terminal, "completed");
+  assert.deepEqual(starts, graph!.stages.map((s) => s.id));
+}
+
+// Spec #282: resume after pause starts at declared next stage id
+{
+  const starts: string[] = [];
+  const resumed = await runHardGraph({
+    graph: graph!,
+    startStageId: "class_probe",
+    executeStage: async (input) => {
+      starts.push(input.stage.id);
+      return { structured: { ok: true, summary: input.stage.id, surfaces: [], candidates: [] } };
+    },
+    availableTools: ["todo", "read", "finding"],
+  });
+  assert.equal(resumed.terminal, "completed");
+  assert.ok(!starts.includes("init") && !starts.includes("surface"));
+  assert.equal(starts[0], "class_probe");
+}
+
 console.log("hard-graph-runner.test.ts: ok");

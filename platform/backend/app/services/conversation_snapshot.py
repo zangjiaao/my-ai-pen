@@ -18,7 +18,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
 import uuid
 
 from sqlalchemy import select
@@ -489,6 +488,11 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         ),
         # Spec #311: Case Workset («下一步») — durable multi-discovery parking lot
         "workset": _workset_projection(context),
+        "asset_intake": (
+            context.get("asset_intake")
+            if isinstance(context.get("asset_intake"), dict)
+            else {"mode": "ask"}
+        ),
         "goal_outer": (
             context.get("goal_outer")
             if isinstance(context.get("goal_outer"), dict)
@@ -1312,7 +1316,19 @@ def compact_message_content(msg_type: str, content: dict, stats: dict) -> dict:
                 result["omitted_tool_items"] = omitted_items
         return {key: value for key, value in result.items() if value not in (None, "", [])}
     if msg_type == "status":
-        keys = ("text", "phase", "iteration", "active_tool", "status", "summary", "agent_source", "agent_node_id")
+        keys = (
+            "text",
+            "phase",
+            "iteration",
+            "active_tool",
+            "status",
+            "summary",
+            "agent_source",
+            "agent_node_id",
+            "pdca_verdict",
+            "pdca_reason",
+            "pdca_unresolved",
+        )
         return {key: compact_value(content.get(key), stats) for key in keys if key in content and content.get(key) is not None}
     if msg_type in {"text", "thinking", "reasoning", "agent_thinking"}:
         keys = ("text", "agent_source", "agent_node_id", "agent_mode", "agent_target", "client_message_id")
@@ -1417,34 +1433,26 @@ def agent_state_from_checkpoint(checkpoint: dict, status: str = "running") -> di
 
 
 def agent_state_from_messages(messages: list[Message], evidence: list[Evidence], _status: str) -> dict:
-    phase = None
-    iteration = None
+    """Fallback when no checkpoint exists.
+
+    Do not scrape msg_type=status for phase/tool — those rows are package
+    settlement (task_complete), not a live harness ledger. Tool cards remain
+    a last-known-tool hint only.
+    """
     active_tool = None
-    intake_result = None
-    intake_status = None
     for m in reversed(messages):
-        if m.msg_type == "status" and isinstance(m.content, dict):
-            phase = _display_agent_phase(
-                m.content.get("phase") or parse_phase(str(m.content.get("text", "")))
-            )
-            iteration = m.content.get("iteration")
-            active_tool = m.content.get("active_tool")
-            intake_result = m.content.get("intake_result")
-            intake_status = m.content.get("status")
+        if m.msg_type == "tool_call" and isinstance(m.content, dict) and m.content.get("tool_name"):
+            active_tool = m.content.get("tool_name")
             break
-    if not active_tool:
-        for m in reversed(messages):
-            if m.msg_type == "tool_call" and isinstance(m.content, dict) and m.content.get("tool_name"):
-                active_tool = m.content.get("tool_name")
-                break
     if not active_tool and evidence:
         active_tool = evidence[0].source_tool or evidence[0].type
-    return {"phase": phase, "iteration": iteration, "activeTool": active_tool, "intakeResult": intake_result, "intakeStatus": intake_status}
-
-
-def parse_phase(text: str) -> str | None:
-    match = re.search(r"Phase:\s*([^\s(]+)", text)
-    return match.group(1) if match else None
+    return {
+        "phase": None,
+        "iteration": None,
+        "activeTool": active_tool,
+        "intakeResult": None,
+        "intakeStatus": None,
+    }
 
 
 def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], _phase: str | None, status: str, elapsed_seconds: int) -> dict:

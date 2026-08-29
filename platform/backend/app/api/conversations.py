@@ -619,8 +619,8 @@ async def release_worker(
     ack = result.get("ack") if isinstance(result.get("ack"), dict) else {}
     acked = bool(ack.get("released"))
     ctx_in = c.context if isinstance(c.context, dict) else {}
-    # Persist + WS drop together. Broadcasting without released_worker_ids lets
-    # a later snapshot wipe the local End ref and resurrect the row.
+    # Persist + WS together. Remember released_worker_ids so later snapshots
+    # cannot resurrect the row as running (collab row stays grey).
     persist_chrome = acked or case_has_child_worker(ctx_in, agent_id=aid)
     if persist_chrome:
         ctx = mark_panel_worker_released(ctx_in, agent_id=aid)
@@ -707,6 +707,76 @@ async def get_workset_api(
     c = await _get_conv(conv_id, current_user, db)
     ctx = c.context if isinstance(c.context, dict) else {}
     return project_workset_for_api(get_workset(ctx))
+
+
+@router.put("/{conv_id}/asset-intake")
+async def put_conversation_asset_intake(
+    conv_id: str,
+    body: dict | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner-gated Case intake. enroll_group creates Hosts and expands this Case Scope."""
+    from app.services import node_ledger as ledger
+    from app.services.case_workset import (
+        get_asset_intake,
+        get_workset,
+        materialize_intake_hosts,
+        project_workset_for_api,
+        put_asset_intake,
+    )
+
+    c = await _get_conv(conv_id, current_user, db)
+    payload = body if isinstance(body, dict) else {}
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in {"enroll_group", "ask"}:
+        raise HTTPException(400, "mode must be enroll_group or ask")
+    group_id = str(payload.get("group_id") or "").strip()
+    group_name = str(payload.get("group_name") or payload.get("group") or "").strip()
+    if mode == "enroll_group" and not group_id and not group_name:
+        raise HTTPException(400, "enroll_group requires group_id or group_name")
+    if mode == "enroll_group" and not group_id and group_name:
+        try:
+            group = await ledger.resolve_group(
+                db, user_id=c.user_id, group_id=None, group_name=group_name
+            )
+            group_id = str(group.id)
+            group_name = str(group.name or group_name)
+        except ledger.NodeLedgerError as e:
+            raise HTTPException(e.status_code, e.message) from e
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    ctx = put_asset_intake(
+        ctx,
+        {
+            "mode": mode,
+            "group_id": group_id or None,
+            "group_name": group_name or None,
+            "set_by": "user",
+        },
+    )
+    if mode == "enroll_group":
+        ctx = await materialize_intake_hosts(
+            db,
+            user_id=c.user_id,
+            conversation_id=str(c.id),
+            context=ctx,
+        )
+    c.context = ctx
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.asset_intake",
+        "conversation",
+        c.id,
+        c.id,
+        {"mode": mode, "group_id": group_id or None, "group_name": group_name or None},
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "asset_intake": get_asset_intake(ctx),
+        "workset": project_workset_for_api(get_workset(ctx)),
+    }
 
 
 @router.patch("/{conv_id}/workset/{item_id}")

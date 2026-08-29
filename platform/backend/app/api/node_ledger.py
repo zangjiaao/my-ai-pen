@@ -42,6 +42,12 @@ async def _user_for_conversation(db: AsyncSession, conversation_id: str | None) 
     return await ledger.conversation_user_id(db, conversation_id)
 
 
+def require_conversation_bound_to_node(conv: Conversation, node: Node) -> None:
+    """Workset / asset-intake mutate Case Scope — only the bound Node may call them."""
+    if not ledger.conversation_bound_to_node_id(conv.node_id, str(node.id)):
+        raise HTTPException(403, "conversation not bound to this node")
+
+
 @router.get("/assets")
 async def list_assets(
     conversation_id: str | None = Query(default=None),
@@ -55,10 +61,10 @@ async def list_assets(
     _ = node
     cid = conversation_id or x_conversation_id
     user_id = await _user_for_conversation(db, cid)
-    items, total = await ledger.list_assets(
+    items, total, meta = await ledger.list_assets_with_identity(
         db, user_id=user_id, conversation_id=cid, q=q, limit=limit, offset=offset
     )
-    return {
+    out = {
         "ok": True,
         "assets": items,
         "count": len(items),
@@ -67,6 +73,9 @@ async def list_assets(
         "offset": offset,
         "has_more": offset + len(items) < total,
     }
+    if meta:
+        out.update(meta)
+    return out
 
 
 @router.get("/assets/{asset_id}")
@@ -376,6 +385,99 @@ async def conversation_snapshot(
     except ledger.NodeLedgerError as e:
         raise HTTPException(e.status_code, e.message) from e
     return {"ok": True, "snapshot": snap}
+
+
+@router.get("/conversations/{conversation_id}/workset")
+async def conversation_workset_node(
+    conversation_id: str,
+    family: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    id: str | None = Query(default=None),
+    limit: int = Query(default=24, ge=1, le=40),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Spec #540 — Case Workset SoT for Agent workset(list|get). Capped index."""
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    result = await db.execute(select(Conversation).where(Conversation.id == cid))
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    require_conversation_bound_to_node(conv, node)
+    from app.services.case_workset import get_asset_intake, get_workset, list_workset_for_agent
+
+    ctx = conv.context if isinstance(conv.context, dict) else {}
+    out = list_workset_for_agent(
+        get_workset(ctx),
+        family=family,
+        status=status,
+        needle=q,
+        cap=limit,
+        item_id=id,
+    )
+    out["asset_intake"] = get_asset_intake(ctx)
+    return out
+
+
+@router.put("/conversations/{conversation_id}/asset-intake")
+async def conversation_asset_intake_node(
+    conversation_id: str,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Record Case intake policy. Does not create Hosts or expand Scope.
+
+    Agent writes this when the user asked. Hosts enroll after the owner confirms
+    (user PUT / Workset adopt). Platform does not infer from free text.
+    """
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    result = await db.execute(select(Conversation).where(Conversation.id == cid))
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    require_conversation_bound_to_node(conv, node)
+    payload = body if isinstance(body, dict) else {}
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in {"enroll_group", "ask"}:
+        raise HTTPException(400, "mode must be enroll_group or ask")
+    group_id = str(payload.get("group_id") or "").strip()
+    group_name = str(payload.get("group_name") or payload.get("group") or "").strip()
+    if mode == "enroll_group" and not group_id and not group_name:
+        raise HTTPException(400, "enroll_group requires group_id or group_name")
+    from app.services.case_workset import (
+        get_asset_intake,
+        put_agent_asset_intake,
+    )
+
+    if mode == "enroll_group" and not group_id and group_name:
+        try:
+            group = await ledger.resolve_group(
+                db, user_id=conv.user_id, group_id=None, group_name=group_name
+            )
+            group_id = str(group.id)
+            group_name = str(group.name or group_name)
+        except ledger.NodeLedgerError as e:
+            raise HTTPException(e.status_code, e.message) from e
+    ctx = dict(conv.context or {}) if isinstance(conv.context, dict) else {}
+    ctx = put_agent_asset_intake(
+        ctx,
+        {
+            "mode": mode,
+            "group_id": group_id or None,
+            "group_name": group_name or None,
+        },
+    )
+    conv.context = ctx
+    await db.commit()
+    return {"ok": True, "asset_intake": get_asset_intake(ctx)}
 
 
 @router.get("/conversations/{conversation_id}/reports")

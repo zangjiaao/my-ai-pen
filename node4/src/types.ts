@@ -85,7 +85,7 @@ export type TaskEnvelope = {
   expertId?: string;
   /**
    * Current Case/session title from the platform (e.g. default "新会话").
-   * Spec #457 / #482: Main Task layer auto-names when still a placeholder + structured target.
+   * Spec #457 / #482: Main Task layer auto-names when still a placeholder + authorized Scope.
    */
   conversationTitle?: string;
   /**
@@ -263,6 +263,25 @@ export type ToolRuntime = {
        * prior seed, L1 refine accounting, unbookable rows, close-out snapshot.
        */
       graphQuality?: import("./runtime/graph-run-quality.js").GraphRunQualityState;
+      /**
+       * One Feedback Agent for the Graph run (same pi session + panel row).
+       * Host prompts it again after each stage L0 — does not mint a new instance.
+       */
+      feedbackHandle?: {
+        session: import("./runtime/run-node4-agent.js").Node4AgentSession;
+        processFacts: import("./stores/process-fact.js").ProcessFactStore;
+        workDir: string;
+        runtime: ToolRuntime;
+      };
+      /**
+       * One Graph Main captain for the run (same pi session). Later stages
+       * rebind tools/system prompt and prompt the next stage turn.
+       */
+      captainHandle?: {
+        session: import("./runtime/run-node4-agent.js").Node4AgentSession;
+        workDir: string;
+        sessionId: string;
+      };
     };
     /**
      * Spec #116 process quality (Finding Store + package honesty + attempt budgets).
@@ -275,6 +294,22 @@ export type ToolRuntime = {
      * Not gate SOT; does not store full skill bodies.
      */
     skillBodyFingerprints?: Record<string, string>;
+    /**
+     * Spec #519: true while a required user decision is outstanding
+     * (request_user_decision wait). Overlay projects this as paused.
+     */
+    pendingUserDecision?: boolean;
+    /** Spec #519: no-progress streak persisted across park. */
+    pdcaNoProgressStreak?: number;
+    /** Spec #519: last named TurnDelta entries for the next harness index. */
+    pdcaLastDeltaEntries?: Array<{
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      summary: string;
+    }>;
+    /** Spec #532: this-run Workset propose stash (settle also re-emits). */
+    worksetProposed?: import("./runtime/workset-emit.js").WorksetCandidate[];
   };
 };
 

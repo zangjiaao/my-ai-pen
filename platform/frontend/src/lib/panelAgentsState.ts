@@ -16,7 +16,7 @@ export function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
-/** Spec #491: End Worker — drop the collab-tree row (do not keep a zombie). Suffix match must not hit sub_10 for sub_1. */
+/** Spec #491: End Worker — keep the collab-tree row, stamp released (grey light). */
 export function isReleasedWorkerId(agentId: string, releasedIds: readonly string[]): boolean {
   const aid = String(agentId || "").trim();
   if (!aid) return false;
@@ -28,21 +28,60 @@ export function isReleasedWorkerId(agentId: string, releasedIds: readonly string
   return false;
 }
 
-export function omitReleasedWorkers(
+function stampReleasedRow(agent: StrixAgentStatus): StrixAgentStatus {
+  if (agent.status === "released") return agent;
+  return { ...agent, status: "released", current_action: "released" };
+}
+
+/** Keep released Workers on the tree; do not resurrect them as running. */
+export function applyReleasedWorkerStatus(
   agents: StrixAgentStatus[],
   releasedIds: readonly string[],
 ): StrixAgentStatus[] {
   if (!releasedIds.length) return agents;
-  return agents.filter((agent) => {
-    if (!agent.parent_id) return true;
-    return !isReleasedWorkerId(agent.id, releasedIds);
+  return agents.map((agent) => {
+    if (!agent.parent_id) return agent;
+    return isReleasedWorkerId(agent.id, releasedIds) ? stampReleasedRow(agent) : agent;
   });
+}
+
+/** @deprecated use applyReleasedWorkerStatus — End greys the row instead of dropping it. */
+export function omitReleasedWorkers(
+  agents: StrixAgentStatus[],
+  releasedIds: readonly string[],
+): StrixAgentStatus[] {
+  return applyReleasedWorkerStatus(agents, releasedIds);
+}
+
+/**
+ * Snapshot replace must not resurrect a released Worker as running, and must not
+ * drop a released row just because a thin snapshot omitted it.
+ * Empty `next` remains authoritative (Session Delete).
+ */
+export function mergeAgentsKeepingReleased(
+  prev: StrixAgentStatus[],
+  next: StrixAgentStatus[],
+  releasedIds: readonly string[],
+): StrixAgentStatus[] {
+  if (!next.length) return next;
+  const stamped = applyReleasedWorkerStatus(next, releasedIds);
+  if (!releasedIds.length) return stamped;
+  const extras: StrixAgentStatus[] = [];
+  for (const row of prev) {
+    if (!row.parent_id) continue;
+    if (!isReleasedWorkerId(row.id, releasedIds)) continue;
+    const already = stamped.some(
+      (a) => a.id === row.id || isReleasedWorkerId(a.id, [row.id]) || isReleasedWorkerId(row.id, [a.id]),
+    );
+    if (!already) extras.push(stampReleasedRow(row));
+  }
+  return extras.length ? [...stamped, ...extras] : stamped;
 }
 
 export function markPanelWorkerReleased(agents: StrixAgentStatus[], agentId: string): StrixAgentStatus[] {
   const id = String(agentId || "").trim();
   if (!id) return agents;
-  return omitReleasedWorkers(agents, [id]);
+  return applyReleasedWorkerStatus(agents, [id]);
 }
 
 /**
@@ -164,12 +203,61 @@ function isChildOfRoot(agent: StrixAgentStatus, rootId: string): boolean {
   return agent.parent_id === rootId || String(agent.parent_id || "") === rootId;
 }
 
-/**
- * Merge a live single-burst panel_agents payload into an existing Case roster.
- *
- * Invariant: Subagent children under the active root are upserted by id and never
- * dropped when a new burst sends main-only. Terminal settle is backend-only.
- */
+/** In-agent / hop-in-flight statuses that must pulse blue, not idle green. */
+export function isInFlightPanelStatus(status: string | undefined | null): boolean {
+  const s = String(status || "")
+    .trim()
+    .toLowerCase();
+  return (
+    s === "running" ||
+    s === "tool_running" ||
+    s === "llm_waiting" ||
+    s === "llm_stalled" ||
+    s === "working" ||
+    s === "chat" ||
+    s === "starting"
+  );
+}
+
+function isSettledPanelStatus(status: string | undefined | null): boolean {
+  const s = String(status || "")
+    .trim()
+    .toLowerCase();
+  return s === "completed" || s === "done" || s === "finished" || s === "success" || s === "idle" || !s;
+}
+
+/** Match live `role-…-feedback` against a snapshot row still keyed `feedback`. */
+function findPriorPanelChild(
+  prev: StrixAgentStatus[],
+  row: StrixAgentStatus,
+): StrixAgentStatus | null {
+  const id = String(row.id || "").trim();
+  if (!id) return null;
+  const direct = prev.find((a) => a.parent_id && a.id === id);
+  if (direct) return direct;
+  const suffixed = prev.find(
+    (a) =>
+      Boolean(a.parent_id) &&
+      (a.id.endsWith(`-${id}`) || id.endsWith(`-${a.id}`)),
+  );
+  if (suffixed) return suffixed;
+  const name = String(row.name || "")
+    .trim()
+    .toLowerCase();
+  if (name === "feedback") {
+    return (
+      prev.find(
+        (a) =>
+          Boolean(a.parent_id) &&
+          String(a.name || "")
+            .trim()
+            .toLowerCase() === "feedback",
+      ) || null
+    );
+  }
+  return null;
+}
+
 /**
  * Snapshot replace for collab tree: keep Session harness fields (work_mode / graph_* /
  * session_id) when the snapshot row is thinner than the live row.
@@ -194,10 +282,20 @@ export function mergeSnapshotAgentsPreserveHarness(
   const sidOk = (s: string) =>
     Boolean(s) && !s.startsWith("expert:") && !s.startsWith("pack:");
   return next.map((row) => {
-    const prior =
-      prevByKey.get(String(row.expert_id || "").trim()) ||
-      prevByKey.get(row.id) ||
-      null;
+    const prior = row.parent_id
+      ? findPriorPanelChild(prev, row)
+      : prevByKey.get(String(row.expert_id || "").trim()) ||
+        prevByKey.get(row.id) ||
+        null;
+    // 2s snapshot poll must not paint Feedback/Worker green while a live hop is running.
+    if (row.parent_id && prior && isInFlightPanelStatus(prior.status) && isSettledPanelStatus(row.status)) {
+      return {
+        ...row,
+        status: prior.status,
+        current_action: prior.current_action || row.current_action,
+        current_detail: prior.current_detail || row.current_detail,
+      };
+    }
     if (!prior || row.parent_id) return row;
     const liveWm = String(row.work_mode || "").trim();
     const priorWm = String(prior.work_mode || "").trim();
@@ -236,14 +334,20 @@ export function mergeSnapshotAgentsPreserveHarness(
   });
 }
 
+/**
+ * Merge a live single-burst panel_agents payload into an existing Case roster.
+ *
+ * Invariant: Subagent children under the active root are upserted by id and never
+ * dropped when a new burst sends main-only. Terminal settle is backend-only.
+ */
 export function mergeLivePanelAgents(
   prev: StrixAgentStatus[],
   panel: StrixAgentStatus[],
   meta?: { expert_id?: string; expert_name?: string; released_ids?: readonly string[] },
 ): StrixAgentStatus[] {
   const released = Array.isArray(meta?.released_ids) ? [...meta.released_ids] : [];
-  prev = omitReleasedWorkers(prev, released);
-  panel = omitReleasedWorkers(panel, released);
+  prev = applyReleasedWorkerStatus(prev, released);
+  panel = applyReleasedWorkerStatus(panel, released);
   if (!panel.length) return prev;
   if (!prev.length) return panel;
 
@@ -322,7 +426,7 @@ export function mergeLivePanelAgents(
     rootId,
     eid || nextRoot.expert_id,
   );
-  return [nextRoot, ...others, ...nextKids];
+  return applyReleasedWorkerStatus([nextRoot, ...others, ...nextKids], released);
 }
 
 /**
@@ -370,88 +474,6 @@ function mergePanelChildren(
     }
   }
   return out;
-}
-
-/** Patch active role root from live status_update (tool / LLM phase). */
-export function patchMainAgentActivity(
-  prev: StrixAgentStatus[],
-  input: {
-    phase?: string;
-    activeTool?: string;
-    currentDetail?: string;
-    running?: boolean;
-    expert_id?: string;
-    expert_name?: string;
-  },
-): StrixAgentStatus[] {
-  const phase = String(input.phase || "").trim();
-  const tool = input.activeTool != null ? String(input.activeTool) : undefined;
-  const detail = input.currentDetail != null ? String(input.currentDetail).trim() : "";
-  const eid = String(input.expert_id || "").trim();
-  const ename = String(input.expert_name || "").trim().toLowerCase();
-
-  let mainIdx = -1;
-  if (eid) {
-    mainIdx = prev.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
-  }
-  if (mainIdx < 0 && ename) {
-    mainIdx = prev.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
-  }
-  if (mainIdx < 0) {
-    mainIdx = prev.findIndex((a) => !a.parent_id && a.highlighted);
-  }
-  if (mainIdx < 0) {
-    mainIdx = prev.findIndex(
-      (a) => a.id === "node4-main" || a.id === "node2-main" || (!a.parent_id && a.role === "main"),
-    );
-  }
-  if (mainIdx < 0) {
-    mainIdx = prev.findIndex((a) => !a.parent_id);
-  }
-  const base: StrixAgentStatus =
-    mainIdx >= 0
-      ? prev[mainIdx]!
-      : {
-          id: "node4-main",
-          name: input.expert_name || "Agent",
-          status: "running",
-          parent_id: null,
-          task: "",
-          skills: [],
-          pending_count: 0,
-          role: "main",
-          expert_id: eid || undefined,
-        };
-  const lastTool =
-    tool && tool.length > 0 ? tool : String(base.last_tool || base.current_tool || "").trim();
-  const next: StrixAgentStatus = {
-    ...base,
-    status: input.running === false ? base.status : "running",
-    parent_id: null,
-    role: base.role || "main",
-    expert_id: eid || base.expert_id,
-    highlighted: true,
-    current_tool: tool !== undefined ? tool : base.current_tool,
-    current_action: phase || base.current_action || "running",
-    last_tool: lastTool || base.last_tool,
-    current_detail:
-      detail ||
-      (phase === "tool_running" && tool
-        ? `正在调用 ${tool}`
-        : phase === "llm_stalled"
-          ? "模型流无进度，仍在等待"
-          : phase === "llm_waiting"
-            ? lastTool
-              ? `分析「${lastTool}」结果，规划下一步`
-              : "等待模型思考与回复"
-            : base.current_detail),
-  };
-  if (mainIdx < 0) return [next, ...prev];
-  return prev.map((a, i) => {
-    if (i === mainIdx) return next;
-    if (!a.parent_id && a.highlighted) return { ...a, highlighted: false };
-    return a;
-  });
 }
 
 /** Expert Graph L1 stages from Hard Graph plan projection. */

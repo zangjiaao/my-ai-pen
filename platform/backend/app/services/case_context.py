@@ -750,14 +750,93 @@ def extract_scope_ports_from_task(task: dict | None) -> dict[str, list[str]]:
     return out
 
 
+def task_scope_asset_ids(task: dict | None) -> list[str]:
+    """Explicit Host ids from structured scope.asset_ids (user-authorized). Never NLP."""
+    import uuid as uuid_mod
+
+    if not isinstance(task, dict):
+        return []
+    scope = task.get("scope")
+    raw = None
+    if isinstance(scope, dict):
+        raw = scope.get("asset_ids")
+    if not isinstance(raw, list):
+        raw = task.get("asset_ids") if isinstance(task.get("asset_ids"), list) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        s = str(item or "").strip()
+        if not s or s in seen:
+            continue
+        try:
+            uuid_mod.UUID(s)
+        except ValueError:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def unique_identity_asset_ids(
+    host_keys: list[str],
+    catalog: list[tuple[str, set[str]]],
+) -> list[str]:
+    """Host keys that uniquely match one catalog Host. Ambiguous keys add no one."""
+    included: list[str] = []
+    seen: set[str] = set()
+    for key in host_keys:
+        k = str(key or "").strip()
+        if not k:
+            continue
+        hits = [aid for aid, identities in catalog if k in identities]
+        if len(hits) != 1:
+            continue
+        aid = str(hits[0])
+        if aid in seen:
+            continue
+        seen.add(aid)
+        included.append(aid)
+    return included
+
+
+def surface_origin_host_keys(conv_context: dict | None) -> list[str]:
+    """Normalized hosts from this-Case Surface origin_key (unique-match input)."""
+    from app.services.asset_ledger import normalize_address
+    from app.services.surface_inventory import host_from_origin_key
+
+    if not isinstance(conv_context, dict):
+        return []
+    sl = conv_context.get("surface_ledger")
+    surfaces = sl.get("surfaces") if isinstance(sl, dict) else None
+    if not isinstance(surfaces, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in surfaces:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("origin_key") or row.get("location") or ""
+        host = normalize_address(host_from_origin_key(str(raw or ""))) or ""
+        if not host or host in seen:
+            continue
+        seen.add(host)
+        out.append(host)
+    return out
+
+
 def case_intel_port_scope(
     assets: list[tuple[str, str]],
     task: dict | None,
+    identities: dict[str, set[str]] | None = None,
 ) -> dict[str, set[str] | None]:
     """asset_id → named Scope ports, or None when the Host is in Scope with no port.
 
     None = whole Host (include sibling Service intel).
     set = those Services plus Host-level (empty port) only.
+    identities: optional asset_id → primary∪aliases so allow=localhost hits
+    a Host whose primary is host.docker.internal.
     """
     from app.services.asset_ledger import normalize_address
 
@@ -768,8 +847,29 @@ def case_intel_port_scope(
         if not key:
             continue
         addr = normalize_address(address) or str(address or "").strip()
-        named = list(host_ports.get(addr) or [])
-        out[key] = set(named) if named else None
+        keys: set[str] = set(identities.get(key) or []) if identities else set()
+        if addr:
+            keys.add(addr)
+        if not keys:
+            out[key] = None
+            continue
+        named: set[str] = set()
+        whole_host = False
+        matched = False
+        for k in keys:
+            if k not in host_ports:
+                continue
+            matched = True
+            ports = host_ports.get(k) or []
+            if not ports:
+                whole_host = True
+            else:
+                named.update(str(p) for p in ports if p)
+        if whole_host or not matched:
+            # Authorized by Host id / unique Surface owner, or allow names Host with no port.
+            out[key] = None
+        else:
+            out[key] = named
     return out
 
 
@@ -860,6 +960,7 @@ def build_case_context_payload(
     workset: dict | None = None,
     scope_intel: dict | None = None,
     intel_summary: list[dict] | None = None,
+    asset_intake: dict | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
@@ -951,6 +1052,15 @@ def build_case_context_payload(
             payload["next_work"] = thin_handoff_brief(workset, boundary="case_assign")
         except Exception:
             pass
+    if isinstance(asset_intake, dict) and str(asset_intake.get("mode") or "") == "enroll_group":
+        nw = payload.get("next_work") if isinstance(payload.get("next_work"), dict) else {}
+        nw["asset_intake"] = {
+            "mode": "enroll_group",
+            "group_id": asset_intake.get("group_id"),
+            "group_name": asset_intake.get("group_name"),
+            "set_by": asset_intake.get("set_by"),
+        }
+        payload["next_work"] = nw
     # Spec #312: mark whether transcript already has a legal next_steps card (soft-gate input).
     try:
         from app.services.choice_card import messages_have_legal_next_steps_choice
@@ -982,6 +1092,8 @@ async def _load_scope_intel(
     conv_context: dict | None,
 ) -> dict[str, Any] | None:
     """Thin cross-Case Host memory from structured task target/scope + sticky assets."""
+    import uuid as uuid_mod
+
     from sqlalchemy import func, or_, select
 
     from app.models.asset import Asset
@@ -995,34 +1107,28 @@ async def _load_scope_intel(
             task = raw_task
     host_keys = extract_hosts_from_task(task)
 
-    # Resolve Assets: scope host match (user-wide) + this-Case sticky.
+    # Same Case Host membership as intel_summary / Findings 线索.
     assets: list = []
-    seen_ids: set = set()
     try:
-        if host_keys and uid is not None:
-            q = (
-                select(Asset)
-                .where(
-                    or_(Asset.user_id == uid, Asset.user_id.is_(None)),
-                    Asset.address.in_(host_keys),
-                )
-                .limit(SCOPE_INTEL_MAX_HOSTS)
-            )
-            for a in (await db.execute(q)).scalars().all():
-                if a.id not in seen_ids:
-                    seen_ids.add(a.id)
-                    assets.append(a)
-        sticky_q = select(Asset).where(Asset.conversation_id == cid).limit(SCOPE_INTEL_MAX_HOSTS)
-        if uid is not None:
-            sticky_q = sticky_q.where(or_(Asset.user_id == uid, Asset.user_id.is_(None)))
-        for a in (await db.execute(sticky_q)).scalars().all():
-            if a.id not in seen_ids:
-                seen_ids.add(a.id)
-                assets.append(a)
+        rows = await _scope_asset_rows(db, cid=cid, uid=uid, conv_context=conv_context)
+        ids = []
+        for aid, _addr, _idents in rows[:SCOPE_INTEL_MAX_HOSTS]:
+            try:
+                ids.append(uuid_mod.UUID(str(aid)))
+            except ValueError:
+                continue
+        if ids:
+            fetched = {
+                a.id: a
+                for a in (await db.execute(select(Asset).where(Asset.id.in_(ids)))).scalars().all()
+            }
+            for aid in ids:
+                if aid in fetched:
+                    assets.append(fetched[aid])
     except Exception:
         assets = []
 
-    if not assets and not host_keys:
+    if not assets and not host_keys and not task_scope_asset_ids(task):
         return None
 
     # Official services for ports/notes
@@ -1265,6 +1371,90 @@ async def _load_scope_intel(
     )
 
 
+async def _scope_asset_rows(
+    db,
+    *,
+    cid,
+    uid,
+    conv_context: dict | None,
+) -> list[tuple[str, str, frozenset[str]]]:
+    """Case Hosts: authorized Scope ids, unique identity match, unique Surface owner, sticky.
+
+    Ambiguous identity (2+ Hosts share a key) does not join via that key.
+    Returns (id, primary address, identity values).
+    """
+    import uuid as uuid_mod
+
+    from sqlalchemy import or_, select
+
+    from app.models.asset import Asset
+    from app.services.asset_ledger import identity_values
+
+    task = _task_from_conv_context(conv_context)
+    host_keys = extract_hosts_from_task(task)
+    explicit_ids = task_scope_asset_ids(task)
+    origin_keys = surface_origin_host_keys(conv_context)
+    rows: list[tuple[str, str, frozenset[str]]] = []
+    seen: set[str] = set()
+
+    def _add(asset) -> None:
+        s = str(asset.id)
+        if s in seen:
+            return
+        seen.add(s)
+        idents = frozenset(identity_values(asset.address, asset.properties or {}))
+        rows.append((s, str(asset.address or ""), idents))
+
+    try:
+        owner = or_(Asset.user_id == uid, Asset.user_id.is_(None)) if uid is not None else None
+        catalog: list = []
+        need_catalog = bool(host_keys or origin_keys)
+        if uid is not None and (explicit_ids or need_catalog):
+            q = select(Asset)
+            if owner is not None:
+                q = q.where(owner)
+            if explicit_ids and not need_catalog:
+                guids = []
+                for raw_id in explicit_ids:
+                    try:
+                        guids.append(uuid_mod.UUID(raw_id))
+                    except ValueError:
+                        continue
+                if guids:
+                    q = q.where(Asset.id.in_(guids))
+                    catalog = list((await db.execute(q)).scalars().all())
+            else:
+                catalog = list((await db.execute(q)).scalars().all())
+        by_id = {str(a.id): a for a in catalog}
+
+        for raw_id in explicit_ids:
+            asset = by_id.get(raw_id)
+            if asset is not None:
+                _add(asset)
+
+        ident_catalog = [
+            (str(a.id), identity_values(a.address, a.properties or {}))
+            for a in catalog
+        ]
+        for aid in unique_identity_asset_ids(host_keys, ident_catalog):
+            asset = by_id.get(aid)
+            if asset is not None:
+                _add(asset)
+        for aid in unique_identity_asset_ids(origin_keys, ident_catalog):
+            asset = by_id.get(aid)
+            if asset is not None:
+                _add(asset)
+
+        sticky_q = select(Asset).where(Asset.conversation_id == cid)
+        if owner is not None:
+            sticky_q = sticky_q.where(owner)
+        for asset in (await db.execute(sticky_q)).scalars().all():
+            _add(asset)
+    except Exception:
+        return rows
+    return rows
+
+
 async def _scope_assets(
     db,
     *,
@@ -1273,42 +1463,12 @@ async def _scope_assets(
     conv_context: dict | None,
 ) -> list[tuple[str, str]]:
     """(id, address) for Case Scope ∩ owner ledger (same match as scope_intel)."""
-    from sqlalchemy import or_, select
-
-    from app.models.asset import Asset
-
-    task = {}
-    if isinstance(conv_context, dict):
-        raw_task = conv_context.get("task")
-        if isinstance(raw_task, dict):
-            task = raw_task
-    host_keys = extract_hosts_from_task(task)
-    rows: list[tuple[str, str]] = []
-    seen: set[str] = set()
-
-    def _add(aid, address) -> None:
-        s = str(aid)
-        if s in seen:
-            return
-        seen.add(s)
-        rows.append((s, str(address or "")))
-
-    try:
-        if host_keys and uid is not None:
-            q = select(Asset.id, Asset.address).where(
-                or_(Asset.user_id == uid, Asset.user_id.is_(None)),
-                Asset.address.in_(host_keys),
-            )
-            for aid, address in (await db.execute(q)).all():
-                _add(aid, address)
-        sticky_q = select(Asset.id, Asset.address).where(Asset.conversation_id == cid)
-        if uid is not None:
-            sticky_q = sticky_q.where(or_(Asset.user_id == uid, Asset.user_id.is_(None)))
-        for aid, address in (await db.execute(sticky_q)).all():
-            _add(aid, address)
-    except Exception:
-        return rows
-    return rows
+    return [
+        (aid, addr)
+        for aid, addr, _idents in await _scope_asset_rows(
+            db, cid=cid, uid=uid, conv_context=conv_context
+        )
+    ]
 
 
 async def _scope_asset_ids(
@@ -1358,8 +1518,12 @@ async def _scope_intel_port_map(
     uid,
     conv_context: dict | None,
 ) -> dict[str, set[str] | None]:
-    assets = await _scope_assets(db, cid=cid, uid=uid, conv_context=conv_context)
-    return case_intel_port_scope(assets, _task_from_conv_context(conv_context))
+    rows = await _scope_asset_rows(db, cid=cid, uid=uid, conv_context=conv_context)
+    assets = [(aid, addr) for aid, addr, _idents in rows]
+    identities = {aid: set(idents) for aid, _addr, idents in rows}
+    return case_intel_port_scope(
+        assets, _task_from_conv_context(conv_context), identities=identities
+    )
 
 
 async def _load_living_intel_summary(
@@ -1516,13 +1680,17 @@ async def load_case_context_for_conversation(
         evidence_rows = []
 
     workset_blob = None
+    intake_blob = None
     try:
-        from app.services.case_workset import get_workset
+        from app.services.case_workset import get_asset_intake, get_workset
 
+        ctx_now = conv_context if isinstance(conv_context, dict) else {}
         if conv is not None:
-            workset_blob = get_workset(conv_context if isinstance(conv_context, dict) else {})
+            workset_blob = get_workset(ctx_now)
+            intake_blob = get_asset_intake(ctx_now)
     except Exception:
         workset_blob = None
+        intake_blob = None
 
     scope_intel = None
     try:
@@ -1551,4 +1719,5 @@ async def load_case_context_for_conversation(
         workset=workset_blob,
         scope_intel=scope_intel,
         intel_summary=intel_summary,
+        asset_intake=intake_blob,
     )

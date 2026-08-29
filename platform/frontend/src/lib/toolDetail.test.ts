@@ -546,6 +546,11 @@ import type { Message } from "./types.ts";
   assert.equal(toolFamilyFromName("subagent"), "subagent");
   assert.equal(toolFamilyFromName("platform_list_assets"), "platform");
   assert.equal(toolFamilyFromName("查询资产台账"), "platform");
+  assert.equal(toolFamilyFromName("graph_feedback"), "feedback");
+  assert.equal(toolFamilyFromName("阶段评审"), "feedback");
+  assert.equal(toolFamilyKey({ tool_name: "graph_feedback" }), "feedback");
+  assert.equal(toolFamilyFromName("workset"), "workset");
+  assert.equal(toolFamilyFromName("暴露面候选"), "workset");
   assert.equal(toolFamilyKey({ tool_name: "shell" }), "shell");
   assert.equal(toolFamilyKey({ latest_tool_name: "http" }), "http");
 }

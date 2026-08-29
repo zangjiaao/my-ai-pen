@@ -8,6 +8,7 @@ import {
   convertNode4MessagesToLlm,
   formatHarnessForLlm,
   isHarnessMessage,
+  joinHarnessPrefixes,
   makeHarnessMessage,
 } from "./harness-channel.js";
 import { composeContinuePrompt, emptyStopContinuePrompt } from "./loop-policy.js";
@@ -15,6 +16,9 @@ import { buildGoalBudgetLimitPrompt, buildGoalContinuationPrompt } from "../stor
 import { midRunTodoNudge } from "./todo-harness.js";
 import { midRunBookingNudge } from "./booking-harness.js";
 import { midRunNewUntestedSurfaceNudge } from "./surface-harness.js";
+
+assert.equal(joinHarnessPrefixes("a", "", "b"), "a\n\nb");
+assert.equal(joinHarnessPrefixes("  ", undefined), undefined);
 
 const harness = makeHarnessMessage("### Continue\nresume");
 assert.equal(harness.role, "harness");

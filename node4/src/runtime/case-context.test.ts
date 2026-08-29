@@ -87,7 +87,7 @@ assert.match(block, /Main\.java/);
 assert.match(block, /class Main/);
 assert.match(block, /source_dump/);
 // Spec #312 S5: next_work retained + formatted
-assert.match(block, /Case Next \/ Workset \(open\)/);
+assert.match(block, /Case Workset \(pending admission\)/);
 assert.match(block, /id=w1/);
 assert.match(block, /\/admin/);
 assert.match(block, /next_steps/);
@@ -99,6 +99,24 @@ const onlyNext = parseCaseContext({
 });
 assert.ok(onlyNext);
 assert.equal(onlyNext!.next_work!.workset_open?.[0]?.id, "x");
+const withHost = parseCaseContext({
+  next_work: { workset_open: [{ id: "x", family: "t_host", host: "a.example.com" }] },
+});
+assert.equal(withHost!.next_work!.workset_open?.[0]?.host, "a.example.com");
+const intakeOnly = parseCaseContext({
+  next_work: { asset_intake: { mode: "enroll_group", group_name: "example公司" } },
+});
+assert.ok(intakeOnly);
+assert.equal(intakeOnly!.next_work!.asset_intake?.mode, "enroll_group");
+assert.match(formatCaseContextInjection(intakeOnly), /enroll_group/);
+assert.match(formatCaseContextInjection(intakeOnly), /example公司/);
+assert.match(formatCaseContextInjection(intakeOnly), /Not user-confirmed/);
+assert.doesNotMatch(formatCaseContextInjection(intakeOnly), /Eligible new hosts enroll/);
+const intakeUser = parseCaseContext({
+  next_work: { asset_intake: { mode: "enroll_group", group_name: "example公司", set_by: "user" } },
+});
+assert.match(formatCaseContextInjection(intakeUser), /user-confirmed/);
+assert.match(formatCaseContextInjection(intakeUser), /Eligible new hosts enroll/);
 // scope_intel alone is enough to parse
 const onlyIntel = parseCaseContext({
   scope_intel: { hosts: [{ address: "lab.local", on_ledger: true }] },

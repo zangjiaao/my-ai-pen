@@ -16,7 +16,6 @@ def _title(v: dict[str, Any]) -> str:
 _ACTIVITY_MSG_TYPES = frozenset(
     {
         "status",
-        "status_update",
         "vuln_card",
         "vuln_found",
         "tool_call",

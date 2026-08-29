@@ -7,7 +7,7 @@
 
 **Product path:** Platform owner ledger on Node4 Graph × Pi (ADR 0001). Not a new Node kernel.
 
-**Does not reintroduce:** Soft product mode; dual-kernel; Service cluster / 分身; Host-level cluster; path-as-Service; Surface tab as inventory tree; Agent silent Host create; keyword intent routing.
+**Does not reintroduce:** Soft product mode; dual-kernel; Service cluster / 分身; Host-level cluster; path-as-Service; Surface tab as inventory tree; Agent silent Host create from recon; keyword intent routing.
 
 **Object conflicts:** Case Surface / this-Case NEW·TESTED / origin+path identity → **#368 / #410 win**. This Spec must not redefine them. Durable paths under a Service are a **later attach** on this ledger, not a second Case Surface.
 
@@ -74,13 +74,13 @@ Do **not** auto-merge a vhost into an IP Host. Do **not** invent a Service clust
 
 | # | Lock |
 |---|------|
-| **Host** | User create / authorize-register / promote, **or Agent `platform_create_asset` when the user explicitly asked** (reason required; CIDR ≤256/call). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `platform_enrich_asset` / **`platform_batch_enrich_assets`**. Never invent Hosts from recon alone. `platform_assemble_group` ports = Group **view subset** only. |
+| **Host** | User create / authorize-register / promote, **or Agent `platform_create_asset` when the user explicitly asked** (reason required; CIDR ≤256/call), **or Case asset-intake `enroll_group` after the owner confirms** (user PUT / Workset adopt; Agent `set_intake` only records policy). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `platform_enrich_asset` / **`platform_batch_enrich_assets`**. Never invent Hosts from recon alone. `platform_assemble_group` ports = Group **view subset** only. |
 | **Service row** | User adds a port on a Host, **or** book / accepted HTTP(S) settle names that `host:port` on an existing Host. nmap-sized dumps do not become Service rows. |
 | **Group** | User create / rename / delete. Agent does **not** create Groups. |
 | **Assembly** | User puts a Host into a Group and picks which Services belong there. Adding a Host to a Group does **not** imply every port. Removing the last Service from an assembly leaves a bare Host in the Group or removes the Host from the Group (UI: user chooses). |
 | **Tags** | User (and Agent, non-`sys`) on Host or Service. Editing a tag does **not** create or extend a Group. |
 | **Path onto Service 攻击面** | Book or accepted HTTP(S) settle only. Wave 2 — do not block Wave 1 tree on path persist. |
-| **Scope** | Still **host-based**. Assembly / Group membership does **not** auto-expand `scope.allow`. Honest warning if a Host has Services outside the Group being dispatched. |
+| **Scope** | Still **host-based**. Assembly / Group membership does **not** auto-expand `scope.allow` for *other* members. User-authorized Host **ids** (decision card, 资产页开测, Workset adopt, or owner-confirmed this-Case enroll_group of *that* discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
 
 ### Reads / search
 
@@ -112,7 +112,7 @@ Worked example (system Groups): filter Group=`系统2` AND tag=`数据库服务�
 1. Same page chrome as 漏洞/专家：TopBar + filter + actions. **No second sidebar.**  
 2. Groups are **page tabs**. **全部** is always first (unique Hosts, full ports). Named groups then 未分组. Click to switch the card list.  
 3. Each Host is one Expert-style card: one hairline. Left identity (primary, aliases, Host tags); right one port per row (port, Service tags). No inner frames. Filter bar **排序**: default 地址（IPv4 按 octet 数值序，避免 `10.0.0.10` 排在 `10.0.0.2` 前；域名字母序，IP 在域名前）；可选添加时间 / 端口数 / 漏洞数。  
-4. 「编辑组」opens the Group dialog. Pencil on a Host card → Host dialog（**编辑 / 端口 / 情报 / 漏洞**）。端口 tab 勾选后批量删除。Click port → Service dialog。
+4. 「编辑组」opens the Group dialog. Pencil on a Host card → Host dialog（**编辑 / 端口 / 情报 / 漏洞**）。编辑 tab 写 `aliases[]`（同一主机的其它 IP/域名）；**备注不是身份**。端口 tab 勾选后批量删除。Click port → Service dialog。
 5. Host 卡右上角图标：编辑 / 添加端口 / 删除主机。添加端口在卡内展开一行；当前组会把新端口收进该组装。删除主机走确认框。端口行 hover 右侧出删除，确认后从主机移除该端口。
 6. 点击卡片选中（可多选），不进编辑。选中后「移动到」把主机从当前组装挪到目标组（带走当前端口子集）。有选中时「新建组」变为「新建并加入组」：创建 Group 后立刻 `batch-move` 已选主机入组（命名组 tab 下会从当前组移出）。多选条「移出」只拆组装（不删 Host）；「删除」彻底删台账 Host（二次确认；`POST /api/assets/batch-delete`）。批量移动/装入/移出走 `POST /api/asset-groups/batch-move`（单事务）。**多选跨搜索/标签/Tab 保留**；仅「取消」、批量操作成功、或 Host 删除后清空。
 7. 右侧 Case Surface 树的 origin 行（hover「纳入」）是用户 promote：确认后 POST Host + 该 origin 的端口。不改 #368 树，不把路径抄进 Service 攻击面。**已入库判断 = Owner ledger（用户 `GET /api/assets` host:port）**，不是 Case snapshot 的 `conversation_id` 资产列表；已入库的 host:port 显示「已纳入」。
@@ -156,11 +156,11 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 
 | Seam | Prove |
 |------|--------|
-| **S1 Host** | Identity = asset id. Same address may be many Hosts across Groups; merge only group-member address. Aliases = same machine only. `a.example.com` and `10.1.1.1` stay two Hosts unless aliases. |
+| **S1 Host** | Identity = asset id. Same address may be many Hosts across Groups; merge only group-member address. Aliases = same machine only. `a.example.com` and `10.1.1.1` stay two Hosts unless aliases. Lookup by address/alias: unique → that id; **ambiguous (2+) → ask (`request_user_decision`); never first-match.** |
 | **S2 Service** | Same host+port merges; different ports distinct; two ports keep separate tags. Scan-sized enrich does not admit. |
 | **S3 Assembly** | Group1+Host1+{80,443} and Group2+Host1+{8080} coexist; opening Group2 does not show :80/:443. |
 | **S4 Tags** | Host tag + Service tag AND filter matches sample (部门1 ∧ 系统2 → Host + :443 only). Tag write does not create a Group. |
-| **S5 Scope** | Assembling a Group does not add members to `scope.allow`. |
+| **S5 Scope** | Assembling a Group does not add members to `scope.allow`. User-authorized Host **ids** (decision card `asset_ids` / `options.asset_id`, 资产页开测, Workset adopt, or owner-confirmed Case enroll_group of that discovery) become this Case Scope. Harness then projects intel; Agent continues the original task. |
 | **S6 Surface isolation** | Inventory writes do not mark Case Surface TESTED. Wave 2 path admit does not rewrite #368/#410 rows. |
 | **S7 Dual-read** | Until Service rows exist, `properties.services` + Host tags still list. No silent loss. |
 
@@ -207,3 +207,8 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-14 | Agent 可见/装入 Group：`platform_list_groups` / `create_group` / `assemble_group`；create_asset 支持 group_name。 |
 | 2026-08-15 | Intel wave law published: [`owner-intel.md`](owner-intel.md) (map #459). |
 | 2026-08-15 | Intel shipped: Host/Service hang + Findings 线索 + Agent record/list/get/forget. |
+| 2026-08-28 | Host 详情编辑 `aliases[]`（`PATCH /api/assets/{id}`）；备注不是身份。 |
+| 2026-08-28 | Identity lookup: unique / none / **ambiguous (2+)** → `request_user_decision`; never first-match. |
+| 2026-08-28 | Pentest Hard Graph `tools.allow` lists inventory reads (`platform_list_assets` / `get_asset` / `list_groups`); runner does not special-case them. |
+| 2026-08-29 | Case asset-intake `enroll_group`: user-asked Group policy may enroll eligible Workset `t_host` into that Group + this Case Scope; Group assembly still does not pull other members into Scope. |
+| 2026-08-30 | Agent `set_intake` records enroll_group only (`set_by=agent`). Host create + Scope expand wait for owner confirm (user PUT / adopt) or later propose/settle when `set_by=user`. Authorize cards show owned Host addresses. Agent restating the same Group keeps `set_by=user`; stamp lookup failure does not wipe authorize `asset_ids`. |

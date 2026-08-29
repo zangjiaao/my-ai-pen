@@ -73,8 +73,10 @@ export function createPlatformListAssetsTool(runtime: ToolRuntime): AgentTool<an
     description:
       "List Hosts from the **shared owner ledger** (same inventory as 资产管理). " +
       "Use whenever the user asks what machines you can see, whether a host/tag/note is on the books, " +
-      "or before claiming inventory is empty. Optional q filters address/name/tags/notes. Read-only. " +
-      "Response: count=this page, total=full inventory size, has_more. Default limit 200 (max 2000). " +
+      "or before claiming inventory is empty. Optional q filters address/name/tags/notes. " +
+      "When q is an IP/domain, response includes identity=unique|ambiguous|none (primary∪aliases, not note). " +
+      "identity=ambiguous → request_user_decision with those Host ids; never pick the first row. " +
+      "Read-only. Response: count=this page, total=full inventory size, has_more. Default limit 200 (max 2000). " +
       "Never treat count as total when has_more/total says otherwise.",
     parameters: Type.Object({
       limit: Type.Optional(Type.Number()),
@@ -466,7 +468,9 @@ export function createPlatformListGroupsTool(runtime: ToolRuntime): AgentTool<an
     description:
       "List owner ledger **Groups** (资产管理分组 / 公司·系统·项目). " +
       "Use when the user names a group (e.g. XXX公司) or asks where hosts are assembled. " +
-      "Returns id, name, member_count, **addresses** (full host list), members sample. " +
+      "Returns id, name, member_count, **addresses** (full host list), members sample with **asset_id** + aliases. " +
+      "Assemble does **not** expand Case Scope. If the member set is unclear, request_user_decision with those Host ids; " +
+      "after the user allows, continue the original task — do not invent a scan workflow. " +
       "For bulk port work on a group use platform_batch_enrich_assets(group_name=…).",
     parameters: Type.Object({
       q: Type.Optional(Type.String()),
