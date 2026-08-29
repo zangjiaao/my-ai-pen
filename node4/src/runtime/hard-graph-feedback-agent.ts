@@ -35,7 +35,7 @@ import {
 } from "./worker-audit-channel.js";
 import { attachChildSessionUsage } from "./child-session-usage.js";
 
-/** Read/inspect only — no shell/http, no confirm, no packages. */
+/** Read/inspect only — no shell/http, no confirm, no packages, no Host notebook writes. */
 export const GRAPH_FEEDBACK_TOOL_NAMES = ["fact", "read", "finding", "hypothesis"] as const;
 
 /** Stable panel / Agent id for the Graph run — not per-stage clones. */
@@ -187,7 +187,7 @@ export function feedbackSystemPrompt(task: TaskEnvelope, pack: RolePack, tools: 
   });
   const runtime = joinNonEmptyPromptParts([
     "Runtime · Graph Feedback: host-owned critic after stage L0. Not recon. Not booking.",
-    `Tools: ${tools.join(", ") || "(none)"}. finding is list/get only (depth-1 cannot confirm).`,
+    `Tools: ${tools.join(", ") || "(none)"}. finding is list/get only (depth-1 cannot confirm). fact upsert is this-session process keys only — no Host hang, no forget.`,
     "Profession methodology does not apply — judge Product state against the stage success line.",
     "One Feedback Agent for the Graph run. Each hop is the next turn on this session — not a new instance.",
     "stage_advance is this hop only. Honor the operator request for this hop. Default continue.",
@@ -336,6 +336,7 @@ export async function runHardGraphFeedbackAgent(
   const childRuntime: ToolRuntime = reuse
     ? {
         ...reuse.runtime,
+        platformApi: undefined,
         lifecycle: {
           ...reuse.runtime.lifecycle,
           abortSignal,
@@ -349,7 +350,7 @@ export async function runHardGraphFeedbackAgent(
         caseDir: parentRuntime.caseDir,
         sessionDir: parentRuntime.sessionDir,
         platform: parentRuntime.platform,
-        platformApi: parentRuntime.platformApi,
+        platformApi: undefined,
         todo: new TodoStore(),
         evidence: parentRuntime.evidence,
         findingsDir: parentRuntime.findingsDir,

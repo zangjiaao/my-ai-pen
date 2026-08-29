@@ -42,6 +42,12 @@ async def _user_for_conversation(db: AsyncSession, conversation_id: str | None) 
     return await ledger.conversation_user_id(db, conversation_id)
 
 
+def require_conversation_bound_to_node(conv: Conversation, node: Node) -> None:
+    """Workset / asset-intake mutate Case Scope — only the bound Node may call them."""
+    if conv.node_id is None or conv.node_id != node.id:
+        raise HTTPException(403, "conversation not bound to this node")
+
+
 @router.get("/assets")
 async def list_assets(
     conversation_id: str | None = Query(default=None),
@@ -393,7 +399,6 @@ async def conversation_workset_node(
     node: Node = Depends(get_node_from_token),
 ):
     """Spec #540 — Case Workset SoT for Agent workset(list|get). Capped index."""
-    _ = node
     try:
         cid = uuid.UUID(conversation_id)
     except ValueError as e:
@@ -402,6 +407,7 @@ async def conversation_workset_node(
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(404, "conversation not found")
+    require_conversation_bound_to_node(conv, node)
     from app.services.case_workset import get_asset_intake, get_workset, list_workset_for_agent
 
     ctx = conv.context if isinstance(conv.context, dict) else {}
@@ -428,7 +434,6 @@ async def conversation_asset_intake_node(
 
     Agent writes this when the user asked. Platform does not infer from free text.
     """
-    _ = node
     try:
         cid = uuid.UUID(conversation_id)
     except ValueError as e:
@@ -437,8 +442,11 @@ async def conversation_asset_intake_node(
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(404, "conversation not found")
+    require_conversation_bound_to_node(conv, node)
     payload = body if isinstance(body, dict) else {}
-    mode = str(payload.get("mode") or "enroll_group").strip().lower()
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in {"enroll_group", "ask"}:
+        raise HTTPException(400, "mode must be enroll_group or ask")
     group_id = str(payload.get("group_id") or "").strip()
     group_name = str(payload.get("group_name") or payload.get("group") or "").strip()
     if mode == "enroll_group" and not group_id and not group_name:

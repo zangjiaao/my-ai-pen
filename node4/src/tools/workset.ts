@@ -162,6 +162,7 @@ function fallbackFromCaseContext(runtime: ToolRuntime): WorksetListRow[] {
     family: i.family,
     title: i.title,
     status: i.status,
+    host: i.host,
   }));
 }
 

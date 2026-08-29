@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { ToolRuntime } from "../types.js";
 import {
   buildFeedbackUserPrompt,
+  feedbackSystemPrompt,
   feedbackToolNames,
   parseFeedbackAgentDecision,
   parseL1Decision,
@@ -58,6 +59,14 @@ assert.deepEqual(feedbackToolNames(["todo", "shell", "fact", "finding", "http"])
   "finding",
 ]);
 assert.ok(!feedbackToolNames(["shell", "http"]).includes("shell"));
+{
+  const sys = feedbackSystemPrompt(
+    { agentLanguage: "zh", packId: "pentest" } as any,
+    { id: "pentest", label: "P", missionLines: [], workLines: [] } as any,
+    ["fact", "finding"],
+  );
+  assert.match(sys, /no Host hang/);
+}
 
 const repoExperts = join(dirname(fileURLToPath(import.meta.url)), "../../../experts/pentest");
 const graph = await loadHardGraphFile(repoExperts, "app_assessment_thin");
@@ -188,6 +197,7 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
       workspaceDir: dir,
       piDir: dir,
       platform: { send: async (m: { type?: string }) => { sent.push(m); } },
+      platformApi: { baseUrl: "http://platform.test", nodeToken: "stolen" },
       findingsDir: join(dir, "findings"),
       lifecycle: {
         toolsInLastSegment: 0,
@@ -209,6 +219,7 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
     l1Input: { stageId: "init" },
     nextStageId: "surface",
     boundSessionFactory: async ({ runtime }) => {
+      assert.equal(runtime.platformApi, undefined, "Feedback must not inherit the Node ledger token");
       await runtime.processFacts?.upsert?.({
         fact_key: "l1_decision",
         summary: "pass",

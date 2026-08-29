@@ -1137,3 +1137,26 @@ def test_materialize_reopens_legacy_adopted_when_create_fails():
     finally:
         nl.create_hosts_for_user = orig
     assert get_workset(ctx)["items"][0]["status"] == "proposed"
+
+
+def test_workset_routes_require_bound_node():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from app.api.node_ledger import require_conversation_bound_to_node
+
+    nid = uuid4()
+    require_conversation_bound_to_node(SimpleNamespace(node_id=nid), SimpleNamespace(id=nid))
+    try:
+        require_conversation_bound_to_node(SimpleNamespace(node_id=None), SimpleNamespace(id=nid))
+        raise AssertionError("unbound conversation must 403")
+    except HTTPException as e:
+        assert e.status_code == 403
+    try:
+        require_conversation_bound_to_node(SimpleNamespace(node_id=uuid4()), SimpleNamespace(id=nid))
+        raise AssertionError("foreign node must 403")
+    except HTTPException as e:
+        assert e.status_code == 403
+

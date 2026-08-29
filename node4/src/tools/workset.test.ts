@@ -151,13 +151,25 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   runtime.task.caseContext = {
     next_work: {
       workset_open_count: 1,
-      workset_open: [{ id: "from-case", family: "t_host", title: "parked.lab", status: "proposed" }],
+      workset_open: [
+        { id: "from-case", family: "t_host", title: "parked.lab", status: "proposed", host: "parked.lab" },
+      ],
     },
   };
+  const sameHost = buildPassiveWorksetCandidate({
+    host: "parked.lab",
+    intel_source: "ct",
+    attribution: "crt.sh SAN parked.lab",
+  });
+  assert.ok(!("error" in sameHost));
+  if ("error" in sameHost) throw new Error(sameHost.error);
+  runtime.lifecycle.worksetProposed = [sameHost];
   const tool = createWorksetTool(runtime);
   const listed = await tool.execute!("1", { op: "list" });
   const listText = (listed as any).content?.[0]?.text || JSON.stringify(listed);
   assert.match(listText, /from-case|parked\.lab/);
+  const parsed = JSON.parse(listText);
+  assert.equal(parsed.items?.length, 1, "fallback host must alias-dedupe this-burst propose");
 }
 
 {
