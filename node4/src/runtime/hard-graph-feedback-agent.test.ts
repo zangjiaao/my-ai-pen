@@ -27,6 +27,7 @@ import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
 import { createProcessQualityState } from "./package-honesty-host.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { createUsageLedgerFromEnv } from "./platform-observability.js";
+import { createFactTool } from "../tools/fact.js";
 
 assert.equal(parseL1Decision({ l1_decision: "refine" }), "refine");
 assert.equal(parseL1Decision({ facts: [{ fact_key: "l1_decision", summary: "pass" }] }), "pass");
@@ -364,6 +365,38 @@ const initStage = graph!.stages.find((s) => s.id === "init")!;
   assert.equal(disposed, false, "must not dispose Feedback between stages");
   const ids = panel.list().filter((r) => r.parent_id).map((r) => r.id);
   assert.deepEqual([...new Set(ids)], ["feedback"]);
+}
+
+{
+  const dir = await mkdtemp(join(tmpdir(), "fb-fact-"));
+  const facts = new ProcessFactStore(join(dir, "facts"));
+  await facts.ensureDir?.();
+  const runtime = {
+    task: { taskId: "t", conversationId: "c", instruction: "x" },
+    workspaceDir: dir,
+    piDir: dir,
+    platform: { send: async () => {} },
+    platformApi: { baseUrl: "http://platform.test", nodeToken: "tok" },
+    processFacts: facts,
+    lifecycle: {
+      subagentDepth: 1,
+      workerAudit: { agentId: "feedback" },
+    },
+  } as unknown as ToolRuntime;
+  const tool = createFactTool(runtime);
+  const forgot = await tool.execute!("1", { op: "forget", id: "11111111-1111-4111-8111-111111111111", reason: "drop clue" });
+  const forgotText = (forgot as any).content?.[0]?.text || "";
+  assert.match(forgotText, /cannot fact\(forget\)/);
+  const hung = await tool.execute!("2", {
+    op: "upsert",
+    fact_key: "l1_decision",
+    summary: "pass",
+    body: "ok",
+    asset_id: "11111111-1111-4111-8111-111111111111",
+  });
+  const hungJson = JSON.parse((hung as any).content?.[0]?.text || "{}");
+  assert.equal(hungJson.hung, false);
+  assert.match(String(hungJson.guidance || ""), /Host notebook hang is not allowed/);
 }
 
 console.log("hard-graph-feedback-agent.test.ts: ok");

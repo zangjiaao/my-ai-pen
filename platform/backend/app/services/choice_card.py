@@ -108,7 +108,7 @@ def _parse_option_row(
             opt["workset_item_ids"] = workset_ids
     if _s(row.get("kind")):
         opt["kind"] = _s(row.get("kind"))
-    asset_id = _parse_asset_id(row.get("asset_id")) or _parse_asset_id(row.get("id"))
+    asset_id = _parse_asset_id(row.get("asset_id"))
     if asset_id:
         opt["asset_id"] = asset_id
     return opt
@@ -348,7 +348,7 @@ def expand_selected_options(
             continue
         summary_titles.append(_s(opt.get("title")) or oid)
         selected_options.append(opt)
-        aid = _parse_asset_id(opt.get("asset_id")) or _parse_asset_id(opt.get("id"))
+        aid = _parse_asset_id(opt.get("asset_id"))
         if aid and aid not in seen_assets:
             seen_assets.add(aid)
             asset_ids.append(aid)
@@ -402,6 +402,43 @@ def collect_authorized_asset_ids(
         expanded = expand_selected_options(card, all_ids)
         return list(expanded.get("asset_ids") or [])
     return []
+
+
+def merge_authorized_host_scope(
+    previous: dict | None,
+    *,
+    allow: list | None,
+    asset_ids: list[str],
+) -> dict[str, Any]:
+    """Union newly authorized Hosts into Case Scope. Do not wipe prior deny."""
+    prev = previous if isinstance(previous, dict) else {}
+    prev_allow = [_s(x) for x in (prev.get("allow") or []) if isinstance(prev.get("allow"), list) and _s(x)]
+    if not isinstance(prev.get("allow"), list):
+        prev_allow = []
+    prev_deny = [_s(x) for x in (prev.get("deny") or []) if isinstance(prev.get("deny"), list) and _s(x)]
+    if not isinstance(prev.get("deny"), list):
+        prev_deny = []
+    prev_ids = [_s(x) for x in (prev.get("asset_ids") or []) if isinstance(prev.get("asset_ids"), list) and _s(x)]
+    if not isinstance(prev.get("asset_ids"), list):
+        prev_ids = []
+    incoming_allow = [_s(x) for x in (allow or []) if _s(x)]
+    new_allow: list[str] = []
+    seen_allow: set[str] = set()
+    for item in [*prev_allow, *incoming_allow]:
+        key = item.lower()
+        if key in seen_allow:
+            continue
+        seen_allow.add(key)
+        new_allow.append(item)
+    new_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for item in [*prev_ids, *[_s(x) for x in asset_ids if _s(x)]]:
+        if item in seen_ids:
+            continue
+        seen_ids.add(item)
+        new_ids.append(item)
+    new_deny = [d for d in prev_deny if d.lower() not in seen_allow]
+    return {"allow": new_allow, "deny": new_deny, "asset_ids": new_ids}
 
 
 def format_selected_summary(summary_titles: list[str] | None) -> str:

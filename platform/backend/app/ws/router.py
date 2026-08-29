@@ -4309,9 +4309,15 @@ async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]
             found_ids = [str(a.id) for a in ordered]
             context = dict(c.context or {}) if isinstance(c.context, dict) else {}
             task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
-            task["scope"] = {"allow": allow, "deny": [], "asset_ids": found_ids}
-            if len(found_ids) == 1:
-                task["asset_id"] = found_ids[0]
+            from app.services.choice_card import merge_authorized_host_scope
+
+            task["scope"] = merge_authorized_host_scope(
+                task.get("scope") if isinstance(task.get("scope"), dict) else {},
+                allow=allow,
+                asset_ids=found_ids,
+            )
+            if len(task["scope"].get("asset_ids") or []) == 1:
+                task["asset_id"] = task["scope"]["asset_ids"][0]
             context["task"] = task
             c.context = context
             flag_modified(c, "context")

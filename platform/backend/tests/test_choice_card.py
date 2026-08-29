@@ -11,6 +11,7 @@ from app.services.choice_card import (
     collect_authorized_asset_ids,
     expand_selected_options,
     format_selected_summary,
+    merge_authorized_host_scope,
     is_next_steps_choice,
     is_question_answer_valid,
     map_authorize_decision,
@@ -155,6 +156,23 @@ def test_expand_and_collect_host_scope_ids():
     parsed = validate_choice_card_payload(card)
     assert parsed["ok"] is True
     assert parsed["value"]["options"][0]["asset_id"] == a
+    uuid_only = {
+        "kind": "next_steps",
+        "options": [{"id": a, "title": "本机", "body": "b"}],
+    }
+    assert expand_selected_options(uuid_only, [a])["asset_ids"] == []
+    assert collect_authorized_asset_ids(
+        decision="authorize", card=uuid_only, selected_option_ids=[a]
+    ) == []
+    merged = merge_authorized_host_scope(
+        {"allow": ["keep.example"], "deny": ["evil.example", "new.example"], "asset_ids": ["old"]},
+        allow=["new.example"],
+        asset_ids=[a],
+    )
+    assert "keep.example" in merged["allow"]
+    assert "new.example" in merged["allow"]
+    assert merged["deny"] == ["evil.example"]
+    assert "old" in merged["asset_ids"] and a in merged["asset_ids"]
 
 
 def test_s3_confirm_text_custom_is_peer_option():

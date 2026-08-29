@@ -246,7 +246,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
       "Ops: propose | list | get | set_intake.",
       "list/get read Case Workset SoT (filtered, capped) — not this-burst stash only.",
       "propose: host (or location URL), intel_source (ct|dns|shodan|fofa|ssl_history|other), attribution evidence, confidence (low|medium|high), scope_decision (pending|in_scope|out_of_scope|needs_authorization).",
-      "set_intake: when the user asked this Case's discoveries to go into a Group. mode=enroll_group needs group_id or group_name; mode=ask restores per-row adopt. Platform does not infer this from free text.",
+      "set_intake: when the user asked this Case's discoveries to go into a Group. Requires explicit mode=enroll_group (group_id or group_name) or mode=ask. Not available during a Graph stage. Platform does not infer this from free text.",
       "Default: do not http-probe, surface(mark), or create_asset until the user adopts or Case asset-intake enroll_group applies. No Host means no Intel hang.",
       "A missing optional intel source is not a failure — propose what the tools you have actually returned.",
     ].join(" "),
@@ -273,11 +273,20 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: Record<string, unknown>) {
       const op = String(params.op || "list").trim().toLowerCase();
       if (op === "set_intake") {
+        if (String(runtime.lifecycle.hardGraphRun?.stageId || "").trim()) {
+          return jsonResult({
+            ok: false,
+            error: "set_intake is not available during a Graph stage — park with propose; enroll from Free after the user asked",
+          });
+        }
         const cid = String(runtime.task?.conversationId || "").trim();
         if (!cid) {
           return jsonResult({ ok: false, error: "conversation_id required" });
         }
-        const mode = String(params.mode || "enroll_group").trim().toLowerCase() || "enroll_group";
+        const mode = String(params.mode || "").trim().toLowerCase();
+        if (mode !== "enroll_group" && mode !== "ask") {
+          return jsonResult({ ok: false, error: "set_intake requires mode=enroll_group or mode=ask" });
+        }
         const group_id = String(params.group_id || "").trim();
         const group_name = String(params.group_name || "").trim();
         if (mode === "enroll_group" && !group_id && !group_name) {

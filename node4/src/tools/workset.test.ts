@@ -175,6 +175,9 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
 {
   const { runtime } = makeRuntime();
   const tool = createWorksetTool(runtime);
+  const missingMode = await tool.execute!("s0", { op: "set_intake", group_name: "example公司" });
+  const missingModeText = (missingMode as any).content?.[0]?.text || JSON.stringify(missingMode);
+  assert.match(missingModeText, /mode=enroll_group or mode=ask/);
   const missing = await tool.execute!("s1", { op: "set_intake", mode: "enroll_group" });
   const missingText = (missing as any).content?.[0]?.text || JSON.stringify(missing);
   assert.match(missingText, /group_id or group_name/);
@@ -185,6 +188,19 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   });
   const noApiText = (noApi as any).content?.[0]?.text || JSON.stringify(noApi);
   assert.match(noApiText, /asset-intake persist failed|ok":\s*false/);
+}
+
+{
+  const { runtime } = makeRuntime();
+  runtime.lifecycle.hardGraphRun = { stageId: "surface" } as any;
+  const tool = createWorksetTool(runtime);
+  const blocked = await tool.execute!("g1", {
+    op: "set_intake",
+    mode: "enroll_group",
+    group_name: "example公司",
+  });
+  const blockedText = (blocked as any).content?.[0]?.text || JSON.stringify(blocked);
+  assert.match(blockedText, /not available during a Graph stage/);
 }
 
 console.log("workset.test.ts: ok");
