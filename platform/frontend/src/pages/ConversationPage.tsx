@@ -3510,8 +3510,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               surfaceLedger={surfaceLedger}
               findings={findings}
               intel={intel as IntelRow[]}
-              intelForgotten={intelForgotten as IntelRow[]}
-              intelSealed={intelSealed as IntelRow[]}
               currentTaskId={
                 String(
                   (taskContext as { task_id?: string; id?: string } | undefined)?.task_id ||
@@ -3519,7 +3517,10 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     "",
                 ).trim() || null
               }
-              assets={ownerLedgerAssets.length ? ownerLedgerAssets : assets}
+              assets={assets}
+              ownerLedgerAssets={ownerLedgerAssets}
+              workset={workset}
+              onWorksetUpdated={(ws) => setWorkset(ws as Record<string, unknown>)}
               taskContext={taskContext}
               conversationId={activeId}
               packageStatus={

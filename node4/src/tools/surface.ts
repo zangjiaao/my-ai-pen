@@ -28,6 +28,8 @@ import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
 } from "../runtime/surface-platform-sync.js";
+import { isAdmittedSurfaceHost } from "../runtime/surface-settle.js";
+import { parseLocation } from "../stores/surface-identity.js";
 import { selectNewUntestedSurfaces } from "../runtime/surface-harness.js";
 
 function resolveSourceAgentId(runtime: ToolRuntime): string {
@@ -35,6 +37,28 @@ function resolveSourceAgentId(runtime: ToolRuntime): string {
   if (wa != null && String(wa).trim()) return String(wa).trim();
   if ((runtime.lifecycle.subagentDepth || 0) >= 1) return "worker";
   return "main";
+}
+
+function hostFromWriteParams(params: Record<string, unknown> | undefined, fallbackLocation?: string): string {
+  const location = String(params?.location || fallbackLocation || "").trim();
+  if (location) {
+    const parsed = parseLocation(location);
+    if (parsed.ok) return parsed.host;
+  }
+  const origin = String(params?.origin_key || "").trim();
+  if (origin) {
+    const parsed = parseLocation(origin);
+    if (parsed.ok) return parsed.host;
+  }
+  return "";
+}
+
+function rejectForeignSurfaceWrite(runtime: ToolRuntime, host: string) {
+  if (isAdmittedSurfaceHost(host, runtime.task)) return null;
+  return textResult(
+    "error: origin is not an admitted Case Host — surface write fail-closed",
+    { isError: true },
+  );
 }
 
 function resolveCoverageMarkedBy(runtime: ToolRuntime): string {
@@ -280,6 +304,18 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             return textResult(`error: ${SKIP_REASON_REQUIRED_ERROR}`, { isError: true });
           }
         }
+        const existing = await store.get({
+          id: params?.id,
+          location: params?.location,
+          origin_key: params?.origin_key,
+          path_key: params?.path_key,
+        });
+        const host = hostFromWriteParams(
+          params,
+          existing ? String(existing.location || existing.origin_key || "") : "",
+        );
+        const foreign = rejectForeignSurfaceWrite(runtime, host);
+        if (foreign) return foreign;
         const written = await store.setCoverage({
           id: params?.id,
           location: params?.location,
@@ -331,6 +367,11 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             `error: surface(upsert) batch max is ${SURFACE_UPSERT_BATCH_MAX} per call (got ${items.length})`,
             { isError: true },
           );
+        }
+        for (const item of items) {
+          const host = hostFromWriteParams({ location: item.location });
+          const foreign = rejectForeignSurfaceWrite(runtime, host);
+          if (foreign) return foreign;
         }
         const source_agent_id = resolveSourceAgentId(runtime);
         const platformOnline = isSurfacePlatformOnline(runtime);

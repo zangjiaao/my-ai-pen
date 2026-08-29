@@ -5,7 +5,7 @@ When verifying **any page with a text field + a list or heavy chrome**, check th
 ## What exists
 
 - **DEV only.** `vite build` turns the React entry points into plain `setState`. No badge, no `window.__RENDER_AUDIT__`, no `flushSync`, no console. `npm run dev` is the only place the audit runs.
-- DEV `useRenderAudit(name)` on every route page, plus `ChatComposer`, `MessageRenderer`, `MarkdownText`, `RightPanel`, `TrafficAuditList`, `SurfaceTreeView`, `Sidebar`, `TopBar`.
+- DEV `useRenderAudit(name)` on every route page, plus `ChatComposer`, `MessageRenderer`, `MarkdownText`, `RightPanel`, `TrafficAuditList`, `SurfaceTreeView`, `SurfaceHostCards`, `Sidebar`, `TopBar`. Surface search uses owner `SurfaceHostCards` so RightPanel must not increment.
 - Keystrokes go through `commitTypedInput` / `handleTypedInput` — measure in the **same React turn** (`flushSync`). Live WS / timers after paint are not leaks.
 - `owner` (and optional `allow`) may increment. Filter boxes allow their page (`AssetPage.search` allows `AssetPage`) because the list must update.
 - Composer allows only `ChatComposer`. `ConversationPage` / `MessageRenderer` / `RightPanel` incrementing is a fail.

@@ -68,7 +68,7 @@ Chat may show a vuln **card** for operator reading; **cards must not feed** the 
 
 ### Later waves (Spec target architecture, not Wave1 DoD)
 
-- Case **Surface** coverage projection (same hook pattern) — **owned by** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368) (Node SQLite working store + Platform dual-write; UI Surface tab projects ledger only). **Not** the owner ledger — that is Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) / [`owner-ledger.md`](owner-ledger.md) and **depends on** #368 for Surface object semantics.
+- Case **Surface** coverage projection (same hook pattern) — **owned by** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368). UI Surface home is Host cards (Spec [#541](https://github.com/zangjiaao/my-ai-pen/issues/541)); path identities remain `surface_ledger`. **Not** the owner ledger — that is Spec [#454](https://github.com/zangjiaao/my-ai-pen/issues/454) / [`owner-ledger.md`](owner-ledger.md).
 - Request recording / Activity replacement — **owned by** [`traffic-audit-activity.md`](traffic-audit-activity.md) (Case traffic audit; Runtime hook collect → store/project → panel).
 - Agent tree / status already largely event-projected — align docs only unless bugs found.
 - Todo remains Agent-written Product state projected read-only; **no** anti-fraud todo gates in this Spec (explicit product choice).

@@ -1,6 +1,6 @@
 # Spec: Owner ledger Intel (线索 / 情报)
 
-**Status:** Living — shipped (Host/Service 情报 tabs + Findings 线索 + Agent record/list/get/forget).  
+**Status:** Living — shipped (Host/Service 情报 tabs + Agent record/list/get/forget). Case Findings tab does **not** project 线索 (Spec #541 — Host detail / asset 情报 only).  
 **Tracker:** Map [#459](https://github.com/zangjiaao/my-ai-pen/issues/459) · draft [#472](https://github.com/zangjiaao/my-ai-pen/issues/472)  
 **Decision source:** Hang + Intel≠Finding (map notes); lifecycle [#466](https://github.com/zangjiaao/my-ai-pen/issues/466); kinds [#469](https://github.com/zangjiaao/my-ai-pen/issues/469); identity [#470](https://github.com/zangjiaao/my-ai-pen/issues/470); write/read + persist cadence [#471](https://github.com/zangjiaao/my-ai-pen/issues/471).
 
@@ -22,7 +22,7 @@ UI already has **情报** tabs with empty honest copy. Product law for the rows 
 
 ## Solution
 
-**Intel** = operational notes worth keeping **during testing** (how login works, which creds still valid, a path to retry) hung on a **Host** or **Service**. Not a Finding. **Not Evidence.** Evidence exists only to **support a booked vuln**; Intel is leftover process knowledge for the next turn / Session. The two directions do not overlap — do not copy Finding titles, PoC, or Evidence into Intel. Not a Case-owned dump. Case **projects** Scope ∩ living intel into the Findings pane (a **section**, not a new right-panel tab).
+**Intel** = operational notes worth keeping **during testing** (how login works, which creds still valid, a path to retry) hung on a **Host** or **Service**. Not a Finding. **Not Evidence.** Evidence exists only to **support a booked vuln**; Intel is leftover process knowledge for the next turn / Session. The two directions do not overlap — do not copy Finding titles, PoC, or Evidence into Intel. Not a Case-owned dump. Case **projects** Scope ∩ living intel into **Host detail** (Surface card / asset 情报). The Case Findings tab lists confirmed findings only.
 
 Prompt framing (pack / Runtime): this is your notebook. Write what you need to keep. Do not treat it as a chore checklist.
 
@@ -158,7 +158,7 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 ## 8. UI
 
 - **Asset dialogs:** existing Host / Service **情报** tabs — living rows by default; **已忘记** filter for archived. Group tab stays empty/honest; **no Group writes in v1**.  
-- **Case right panel:** **线索** = all Scope ∩ not-hard-forgotten (no 50-cut; no 遗忘区). **已忘记** = hard forget (who + reason; restore / delete). Sort: this-Case new/used first, then `access_count` descending, then `updated_at`. Scope filter unchanged.  
+- **Case Surface Host detail / asset 情报:** living rows hang on the admitted Host (no 50-cut). Case **Findings** tab does **not** list 线索 (Spec #541). **已忘记** remains on asset dialogs (who + reason; restore / delete). Sort: this-Case new/used first, then `access_count` descending, then `updated_at`.  
 
 - Access count is an **eye + number** on the row and on the Finding-style detail dialog. Not a second tab.
 - Cards in chat must **not** invent a second list (same law as Findings projection).
@@ -189,7 +189,7 @@ Node HTTP `/api/node/ledger/intel` remains the harness path. Do **not** extend `
 
 ## Changelog
 
-| 2026-08-29 | Spec #540: no Host yet → park on Case Workset; do not invent a Host to hang a Shodan/CT row. |
+| 2026-08-30 | Spec #541: Case Findings tab does not project 线索; Host detail / asset 情报 remain. |
 | 2026-08-15 | Notebook model: harness stamps id/audit/New; Agent record + forget only. |
 | 2026-08-15 | Two-step forget: 1st = soft (update still allowed); 2nd = 遗忘区, user-only, never to Agent. |
 | 2026-08-15 | Shipped: `asset_intel` + node/user APIs + citizen tools + Findings 线索 + Host/Service 情报. |

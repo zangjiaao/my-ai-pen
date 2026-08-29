@@ -20,6 +20,8 @@ function minimalRuntime(taskDir: string, store: SurfaceSqliteStore, expertId = "
     conversationId: "c-518",
     instruction: "test",
     expertId,
+    target: { type: "url", value: "https://lab.example/" },
+    scope: { allow: ["https://lab.example"] },
   } as TaskEnvelope;
   return {
     task,
@@ -211,6 +213,30 @@ await store.upsert(
   });
   assert.ok(r.data);
   assert.equal((r.data!.surface as Record<string, unknown>).coverage_marked_by, "pentest/sub_cov");
+}
+
+{
+  const missing = await store.get({ location: "https://crt.sh/" });
+  assert.equal(missing, null);
+  const r = await toolJson(tool, { op: "mark", location: "https://crt.sh/" });
+  assert.ok(r.error);
+  assert.match(r.error!, /fail-closed|admitted Case Host/i);
+  assert.equal(await store.get({ location: "https://crt.sh/" }), null);
+}
+
+{
+  await store.upsert([{ location: "https://crt.sh/" }], { source: "traffic" });
+  const r = await toolJson(tool, { op: "mark", location: "https://crt.sh/" });
+  assert.ok(r.error);
+  assert.match(r.error!, /fail-closed|admitted Case Host/i);
+  const row = await store.get({ location: "https://crt.sh/" });
+  assert.equal(row?.coverage, "untested");
+}
+
+{
+  const r = await toolJson(tool, { op: "upsert", location: "https://dns.google/resolve" });
+  assert.ok(r.error);
+  assert.match(r.error!, /fail-closed|admitted Case Host/i);
 }
 
 store.close();
