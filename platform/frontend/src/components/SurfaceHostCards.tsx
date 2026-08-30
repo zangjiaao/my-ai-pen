@@ -6,8 +6,8 @@ import { useMemo, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { handleTypedInput, useRenderAudit } from "../lib/renderAudit";
 import {
-  extractHost,
   filterHostCards,
+  uniqueCardForHost,
   type HostCard,
   type HostCardViewFilter,
 } from "../lib/hostCardProjection";
@@ -114,6 +114,7 @@ export default function SurfaceHostCards({
         </button>
         <HostDetail
           card={selected}
+          cards={cards}
           knownAssets={knownAssets}
           currentTaskId={currentTaskId}
           conversationId={conversationId}
@@ -219,6 +220,7 @@ export default function SurfaceHostCards({
 
 function HostDetail({
   card,
+  cards,
   knownAssets,
   currentTaskId,
   conversationId,
@@ -229,6 +231,7 @@ function HostDetail({
   busy,
 }: {
   card: HostCard;
+  cards: HostCard[];
   knownAssets: SurfaceKnownAsset[];
   currentTaskId?: string | null;
   conversationId?: string | null;
@@ -241,14 +244,15 @@ function HostDetail({
   const surfaceKeyList = card.paths.map((e) => e.key);
   const findingAttachment = attachFindingsToSurface(card.findings, surfaceKeyList, card.paths);
   const tree = buildSurfaceTree(card.paths, findingAttachment.byPath);
-  const identity = new Set(
-    [card.address, ...card.aliases].map((h) => extractHost(h)).filter(Boolean),
-  );
   const ports = [
     ...new Set(
       knownAssets.flatMap((asset) => {
-        const names = [asset.address, ...(asset.aliases || [])].map((h) => extractHost(h));
-        if (!names.some((n) => identity.has(n))) return [];
+        const hits = new Set<HostCard>();
+        for (const key of [asset.address, ...(asset.aliases || [])]) {
+          const owner = uniqueCardForHost(cards, key);
+          if (owner) hits.add(owner);
+        }
+        if (hits.size !== 1 || [...hits][0]!.id !== card.id) return [];
         return (asset.ports || []).map((p) => String(p).trim()).filter(Boolean);
       }),
     ),

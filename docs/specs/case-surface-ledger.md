@@ -223,7 +223,7 @@ seen  →  touched  →  booked
 - Default: in-scope http(s) exchanges with a path become/update a Surface row.
 - **Static suffix denylist** — do **not** create Surface rows for the asset path itself, e.g. `.js`, `.css`, `.map`, common image/font extensions (exact list is an implementation knob; keep conservative).
 - **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
-- **Scope gate (product amend, Spec #541):** do **not** settle Surface for origins outside TARGET / `scope.allow`. **Empty or missing structured Scope is fail-closed** (do not settle). Traffic audit may still keep the exchange. `surface` write ops (mark / upsert) on a non-admitted origin fail closed. No hostname denylist of intel vendors.
+- **Scope gate (product amend, Spec #541):** do **not** settle Surface for origins outside TARGET / `scope.allow`. **Empty or missing structured Scope is fail-closed** (do not settle). Traffic audit may still keep the exchange. `surface` write ops (mark / upsert) on a non-admitted origin fail closed — when Scope names an explicit port **on that host**, host+port must match (default `:443` in the allow string is still explicit). Host-only siblings in a mixed allow list stay whole-host. No hostname denylist of intel vendors.
 - **Garbage path:** unexpanded `${…}` / `{{…}}` in path → do not settle.
 - **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
 
@@ -302,7 +302,7 @@ WS: `surface_upsert` by identity (retain).
 
 ### D10 — Frontend
 
-- Surface **home** is Host cards (Workset `t_host` + admitted Case Hosts). Path tree = `surface_ledger` identities **for that host** (v1 #375 path SoT still stands). Tool-platform origins are omitted from the card list (Spec #541).
+- Surface **home** is Host cards (Workset `t_host` + admitted Case Hosts). Admitted = Scope `asset_ids` or a **unique** primary∪alias match on `target` / `scope.allow` (ambiguous keys admit no one). Same machine (alias) is one card. Path tree = `surface_ledger` identities **for that host** (v1 #375 path SoT still stands). Tool-platform origins are omitted from the card list (Spec #541).
 - Empty with zero traffic may still be honest at t0; empty after heavy traffic is a settle bug.
 
 ### D11 — Graph gates

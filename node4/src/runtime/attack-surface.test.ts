@@ -40,6 +40,8 @@ const task = {
   assert.equal(parseHostPort("secrets.env").host, "");
   assert.equal(parseHostPort("backup.bak").host, "");
   assert.equal(parseHostPort("http://host.docker.internal:8080/x").host, "host.docker.internal");
+  assert.equal(parseHostPort("https://lab.example:443/").port, "443");
+  assert.equal(parseHostPort("https://lab.example/").port, undefined);
   console.log("ok finding and surface share the same host-parse filter");
 }
 

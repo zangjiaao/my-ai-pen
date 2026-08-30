@@ -239,6 +239,21 @@ await store.upsert(
   assert.match(r.error!, /fail-closed|admitted Case Host/i);
 }
 
+{
+  const portRt = minimalRuntime(dir, store, "pentest");
+  portRt.task = {
+    ...portRt.task,
+    target: { type: "url", value: "https://lab.example:443/" },
+    scope: { allow: ["https://lab.example:443"] },
+  };
+  const portTool = createSurfaceTool(portRt);
+  const r8080 = await toolJson(portTool, { op: "upsert", location: "https://lab.example:8080/side" });
+  assert.ok(r8080.error);
+  assert.match(r8080.error!, /fail-closed|admitted Case Host/i);
+  const r443 = await toolJson(portTool, { op: "mark", location: "https://lab.example/login" });
+  assert.ok(r443.data);
+}
+
 store.close();
 
 // --- one-time historical status → coverage map; later open only reads work-state ---

@@ -296,10 +296,12 @@ export default function RightPanel({
         workset,
         surfaceLedger,
         assets,
+        ownerAssets: ownerLedgerAssets,
+        taskContext,
         findings,
         intel,
       }),
-    [workset, surfaceLedger, assets, findings, intel],
+    [workset, surfaceLedger, assets, ownerLedgerAssets, taskContext, findings, intel],
   );
   const knownSurfaceAssets = useMemo(() => {
     const rows = ownerLedgerAssets.length ? ownerLedgerAssets : assets;

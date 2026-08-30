@@ -212,6 +212,7 @@ function intelApiLedger(): SurfaceLedger {
   const cards = projectHostCards({
     workset: { items: [] },
     assets: [{ id: "h1", address: "lab.example" }],
+    taskContext: { scope: { asset_ids: ["h1"], allow: ["lab.example"] } },
     findings,
     intel,
     surfaceLedger: { version: 2, surfaces: [] },
@@ -255,6 +256,160 @@ function intelApiLedger(): SurfaceLedger {
 {
   assert.equal(projectHostCards({ workset: { items: [] }, assets: [], surfaceLedger: intelApiLedger() }).length, 0);
   console.log("ok: empty portrait when no Hosts / Workset");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [proposedHost("www.example.com", 0)] },
+    assets: [{ id: "h-www", address: "www.example.com", aliases: ["www"] }],
+    ownerAssets: [{ id: "h-www", address: "www.example.com", aliases: ["www"] }],
+    taskContext: { scope: { asset_ids: ["h-www"], allow: ["www.example.com"] } },
+  });
+  assert.equal(cards.length, 1, "Workset alias/primary of admitted Host is one card");
+  assert.equal(cards[0]!.id, "h-www");
+  assert.equal(cards[0]!.admission, "admitted");
+  assert.equal(cards[0]!.worksetItemId, "ws_01");
+  console.log("ok: Workset name that is an admitted alias does not dual-card");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [proposedHost("alias.lab", 0)] },
+    assets: [],
+    ownerAssets: [{ id: "h-in", address: "in.lab", aliases: ["alias.lab"] }],
+    taskContext: { scope: { asset_ids: ["h-in"], allow: ["in.lab"] } },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]!.id, "h-in");
+  assert.equal(cards[0]!.admission, "admitted");
+  assert.ok(cards[0]!.aliases.includes("alias.lab") || cards[0]!.address === "in.lab");
+  console.log("ok: Workset address matching admitted alias merges into Host id");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    assets: [],
+    ownerAssets: [{ id: "h-scope", address: "scope.lab" }],
+    taskContext: { scope: { asset_ids: ["h-scope"] } },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]!.id, "h-scope");
+  assert.equal(cards[0]!.admission, "admitted");
+  console.log("ok: Scope asset_ids admits Owner Host not bound on the Case snapshot");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    assets: [{ id: "h-msg", address: "discovered.lab" }],
+    ownerAssets: [{ id: "h-msg", address: "discovered.lab" }],
+    taskContext: { scope: { allow: ["other.lab"], asset_ids: [] } },
+  });
+  assert.equal(cards.length, 0, "snapshot/message Host is not 已准入 without Scope");
+  console.log("ok: checkpoint assets without Scope are not admitted");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    assets: [],
+    ownerAssets: [
+      { id: "h-ip", address: "10.0.0.8", aliases: ["lab.internal"] },
+    ],
+    taskContext: { scope: { allow: ["alias.nope", "lab.internal"] } },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]!.id, "h-ip");
+  console.log("ok: unique identity match on alias admits the Owner Host");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [proposedHost("shared.lab", 0)] },
+    assets: [],
+    ownerAssets: [
+      { id: "h-a", address: "a.lab", aliases: ["shared.lab"] },
+      { id: "h-b", address: "b.lab", aliases: ["shared.lab"] },
+    ],
+    taskContext: { scope: { allow: ["shared.lab"] } },
+  });
+  assert.equal(
+    cards.filter((c) => c.admission === "admitted").length,
+    0,
+    "ambiguous alias does not pick the first Host",
+  );
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]!.admission, "pending");
+  assert.equal(cards[0]!.id, "ws_01");
+  console.log("ok: ambiguous identity stays pending, no silent first-match");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    assets: [
+      { id: "h-a", address: "a.lab" },
+      { id: "h-b", address: "b.lab" },
+    ],
+    ownerAssets: [
+      { id: "h-a", address: "a.lab" },
+      { id: "h-b", address: "b.lab" },
+    ],
+    taskContext: { scope: { asset_ids: ["h-a", "h-b"] } },
+    findings: [
+      {
+        id: "f-b",
+        title: "on B",
+        finding_kind: "vuln",
+        asset_id: "h-b",
+        location: "https://a.lab/login",
+      },
+    ],
+  });
+  const a = cards.find((c) => c.id === "h-a");
+  const b = cards.find((c) => c.id === "h-b");
+  assert.ok(a && b);
+  assert.equal(a!.findingCount, 0, "asset_id Host B does not hang on A via URL");
+  assert.equal(b!.findingCount, 1);
+  assert.equal(hostCardIdForFinding(cards, { asset_id: "h-b", location: "https://a.lab/login" }), "h-b");
+  console.log("ok: Finding with asset_id hangs on that Host only");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    ownerAssets: [
+      { id: "h-a", address: "a.lab", aliases: ["shared.lab"] },
+      { id: "h-b", address: "b.lab", aliases: ["shared.lab"] },
+    ],
+    taskContext: { scope: { asset_ids: ["h-a", "h-b"] } },
+    surfaceLedger: {
+      version: 2,
+      surfaces: [
+        {
+          origin_key: "https://shared.lab:443",
+          path_key: "/x",
+          location: "https://shared.lab/x",
+          coverage: "untested",
+        },
+        {
+          origin_key: "https://a.lab:443",
+          path_key: "/",
+          location: "https://a.lab/",
+          coverage: "untested",
+        },
+      ],
+    },
+  });
+  const a = cards.find((c) => c.id === "h-a");
+  const b = cards.find((c) => c.id === "h-b");
+  assert.ok(a && b);
+  assert.equal(a!.paths.filter((p) => p.host === "shared.lab").length, 0);
+  assert.equal(b!.paths.filter((p) => p.host === "shared.lab").length, 0);
+  assert.equal(a!.paths.some((p) => p.host === "a.lab"), true);
+  assert.equal(b!.paths.length, 0);
+  console.log("ok: ambiguous alias path does not dual-hang");
 }
 
 console.log("hostCardProjection.test.ts: all ok");

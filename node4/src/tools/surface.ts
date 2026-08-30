@@ -39,22 +39,25 @@ function resolveSourceAgentId(runtime: ToolRuntime): string {
   return "main";
 }
 
-function hostFromWriteParams(params: Record<string, unknown> | undefined, fallbackLocation?: string): string {
+function originFromWriteParams(
+  params: Record<string, unknown> | undefined,
+  fallbackLocation?: string,
+): { host: string; port: string } {
   const location = String(params?.location || fallbackLocation || "").trim();
   if (location) {
     const parsed = parseLocation(location);
-    if (parsed.ok) return parsed.host;
+    if (parsed.ok) return { host: parsed.host, port: String(parsed.port) };
   }
   const origin = String(params?.origin_key || "").trim();
   if (origin) {
     const parsed = parseLocation(origin);
-    if (parsed.ok) return parsed.host;
+    if (parsed.ok) return { host: parsed.host, port: String(parsed.port) };
   }
-  return "";
+  return { host: "", port: "" };
 }
 
-function rejectForeignSurfaceWrite(runtime: ToolRuntime, host: string) {
-  if (isAdmittedSurfaceHost(host, runtime.task)) return null;
+function rejectForeignSurfaceWrite(runtime: ToolRuntime, host: string, port?: string) {
+  if (isAdmittedSurfaceHost(host, runtime.task, port)) return null;
   return textResult(
     "error: origin is not an admitted Case Host — surface write fail-closed",
     { isError: true },
@@ -310,11 +313,11 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           origin_key: params?.origin_key,
           path_key: params?.path_key,
         });
-        const host = hostFromWriteParams(
+        const origin = originFromWriteParams(
           params,
           existing ? String(existing.location || existing.origin_key || "") : "",
         );
-        const foreign = rejectForeignSurfaceWrite(runtime, host);
+        const foreign = rejectForeignSurfaceWrite(runtime, origin.host, origin.port);
         if (foreign) return foreign;
         const written = await store.setCoverage({
           id: params?.id,
@@ -369,8 +372,8 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           );
         }
         for (const item of items) {
-          const host = hostFromWriteParams({ location: item.location });
-          const foreign = rejectForeignSurfaceWrite(runtime, host);
+          const origin = originFromWriteParams({ location: item.location });
+          const foreign = rejectForeignSurfaceWrite(runtime, origin.host, origin.port);
           if (foreign) return foreign;
         }
         const source_agent_id = resolveSourceAgentId(runtime);

@@ -1,7 +1,7 @@
 /**
  * Spec #541 — Case Surface Host-card projection.
  *
- * Pure: Workset t_host + Case assets + surface_ledger + findings + Host-hung Intel
+ * Pure: Workset t_host + Owner/Case Hosts ∩ Scope + surface_ledger + findings + Host-hung Intel
  * → operator Host cards. Tool-platform ledger origins are omitted.
  */
 import type { IntelRow } from "./intelView.ts";
@@ -16,12 +16,16 @@ export type HostCardAdmission = "pending" | "admitted";
 
 export type HostCardViewFilter = "all" | "pending" | "admitted" | "untested" | "findings";
 
-export type HostCard = {
-  id: string;
-  admission: HostCardAdmission;
+/** Same-machine identity: primary + aliases. Ambiguous keys do not pick the first Host. */
+export type HostIdentity = {
+  hostId?: string;
   address: string;
   aliases: string[];
-  hostId?: string;
+};
+
+export type HostCard = HostIdentity & {
+  id: string;
+  admission: HostCardAdmission;
   worksetItemId?: string;
   intelSource?: string;
   attribution?: string;
@@ -38,7 +42,12 @@ export type HostCard = {
 export type HostCardProjectionInput = {
   workset?: WorksetProjection | Record<string, unknown> | null;
   surfaceLedger?: SurfaceLedger | null;
+  /** Case snapshot assets — not admission by themselves. */
   assets?: Array<Record<string, unknown>>;
+  /** Owner ledger Hosts (Scope asset_ids / unique identity). */
+  ownerAssets?: Array<Record<string, unknown>>;
+  /** Structured task: target + scope.allow / scope.asset_ids. */
+  taskContext?: Record<string, unknown> | null;
   findings?: Array<Record<string, unknown>>;
   intel?: IntelRow[];
 };
@@ -107,6 +116,25 @@ export function isValidLedgerAddress(value: unknown): boolean {
   return HOSTISH.test(host);
 }
 
+export function hostIdentityKeys(id: Pick<HostIdentity, "address" | "aliases">): Set<string> {
+  const keys = new Set<string>();
+  const addr = normalizeHostKey(id.address);
+  if (addr) keys.add(addr);
+  for (const a of id.aliases || []) {
+    const k = normalizeHostKey(a);
+    if (k) keys.add(k);
+  }
+  return keys;
+}
+
+/** Unique catalog row for one identity key. Zero or 2+ hits → null (never first-match). */
+export function uniqueIdentityMatch<T extends HostIdentity>(catalog: T[], key: string): T | null {
+  const k = normalizeHostKey(key);
+  if (!k) return null;
+  const hits = catalog.filter((row) => hostIdentityKeys(row).has(k));
+  return hits.length === 1 ? hits[0]! : null;
+}
+
 function payloadHost(item: WorksetItem): string {
   const payload = item.payload && typeof item.payload === "object" ? item.payload : {};
   for (const key of ["host", "address", "url", "location"] as const) {
@@ -140,16 +168,77 @@ function assetAliasesOf(asset: Record<string, unknown>): string[] {
       v = String(row.value || row.address || row.host || "").trim();
     }
     const h = extractHost(v);
-    if (h) out.push(h);
+    if (h && isValidLedgerAddress(h)) out.push(h);
   }
   return [...new Set(out)];
 }
 
-function identityKeys(address: string, aliases: string[]): Set<string> {
-  const keys = new Set<string>();
-  if (address) keys.add(address);
-  for (const a of aliases) if (a) keys.add(a);
-  return keys;
+function parseHostRow(asset: Record<string, unknown>): HostIdentity | null {
+  const hostId = assetIdOf(asset);
+  const address = assetAddressOf(asset);
+  if (!hostId || !address || !isValidLedgerAddress(address)) return null;
+  const aliases = assetAliasesOf(asset).filter((a) => a !== address);
+  return { hostId, address, aliases };
+}
+
+function taskRecord(taskContext?: Record<string, unknown> | null): Record<string, unknown> {
+  if (!taskContext || typeof taskContext !== "object") return {};
+  const nested = taskContext.task;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  return taskContext;
+}
+
+function scopeAssetIds(taskContext?: Record<string, unknown> | null): string[] {
+  const task = taskRecord(taskContext);
+  const scope = task.scope && typeof task.scope === "object" ? (task.scope as Record<string, unknown>) : {};
+  const raw = Array.isArray(scope.asset_ids)
+    ? scope.asset_ids
+    : Array.isArray(task.asset_ids)
+      ? task.asset_ids
+      : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const s = String(item || "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function scopeHostKeys(taskContext?: Record<string, unknown> | null): string[] {
+  const task = taskRecord(taskContext);
+  const values: unknown[] = [];
+  const target = task.target;
+  if (typeof target === "string") values.push(target);
+  if (target && typeof target === "object") {
+    const rec = target as Record<string, unknown>;
+    values.push(rec.value, rec.url, rec.host, rec.address);
+  }
+  const scope = task.scope && typeof task.scope === "object" ? (task.scope as Record<string, unknown>) : {};
+  if (Array.isArray(scope.allow)) values.push(...scope.allow);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const h = extractHost(raw);
+    if (!h || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h);
+  }
+  return out;
+}
+
+function worksetMeta(item: WorksetItem): Pick<HostCard, "intelSource" | "attribution" | "confidence" | "scopeDecision"> {
+  const payload = item.payload && typeof item.payload === "object" ? item.payload : {};
+  return {
+    intelSource: String(payload.intel_source || payload.source || "").trim() || undefined,
+    attribution: String(payload.attribution || "").trim() || undefined,
+    confidence: String(payload.confidence || "").trim() || undefined,
+    scopeDecision: String(payload.scope_decision || "").trim() || undefined,
+  };
 }
 
 function findingHostKeys(finding: Record<string, unknown>): string[] {
@@ -174,60 +263,81 @@ function emptyCard(partial: Omit<HostCard, "findingCount" | "untestedCount" | "i
   };
 }
 
+function uniqueIndexFor(cards: HostCard[]): Map<string, HostCard> {
+  const buckets = new Map<string, HostCard[]>();
+  for (const card of cards) {
+    for (const k of hostIdentityKeys(card)) {
+      const list = buckets.get(k) || [];
+      list.push(card);
+      buckets.set(k, list);
+    }
+  }
+  const unique = new Map<string, HostCard>();
+  for (const [k, list] of buckets) {
+    const ids = new Set(list.map((c) => c.id));
+    if (ids.size === 1) unique.set(k, list[0]!);
+  }
+  return unique;
+}
+
+function admittedIdsFromScope(
+  catalog: HostIdentity[],
+  taskContext?: Record<string, unknown> | null,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const id of scopeAssetIds(taskContext)) {
+    if (catalog.some((row) => row.hostId === id)) ids.add(id);
+  }
+  for (const key of scopeHostKeys(taskContext)) {
+    const hit = uniqueIdentityMatch(catalog, key);
+    if (hit?.hostId) ids.add(hit.hostId);
+  }
+  return ids;
+}
+
+export function uniqueCardForHost(cards: HostCard[], host: string): HostCard | null {
+  const k = normalizeHostKey(extractHost(host) || host);
+  if (!k) return null;
+  const admitted = cards.filter((c) => c.admission === "admitted");
+  const primary = admitted.filter((c) => normalizeHostKey(c.address) === k);
+  if (primary.length === 1) return primary[0]!;
+  if (primary.length > 1) return null;
+  return uniqueIdentityMatch(admitted, k);
+}
+
+export function cardForFinding(cards: HostCard[], finding: Record<string, unknown>): HostCard | null {
+  const aid = String(finding.asset_id || "").trim();
+  if (aid) {
+    const hits = cards.filter((c) => c.hostId === aid || c.id === aid);
+    return hits.length === 1 ? hits[0]! : null;
+  }
+  const hits = new Set<HostCard>();
+  for (const h of findingHostKeys(finding)) {
+    const hit = uniqueIdentityMatch(cards, h);
+    if (hit) hits.add(hit);
+  }
+  return hits.size === 1 ? [...hits][0]! : null;
+}
+
 export function projectHostCards(input: HostCardProjectionInput): HostCard[] {
   const workset = parseWorksetProjection(input.workset);
-  const assets = Array.isArray(input.assets) ? input.assets : [];
+  const snapshotAssets = Array.isArray(input.assets) ? input.assets : [];
+  const ownerAssets = Array.isArray(input.ownerAssets) ? input.ownerAssets : [];
+  const catalogSource = ownerAssets.length ? ownerAssets : snapshotAssets;
   const findings = Array.isArray(input.findings) ? input.findings : [];
   const intel = Array.isArray(input.intel) ? input.intel : [];
   const entries = projectSurfaceEntriesFromLedger(input.surfaceLedger);
 
-  const byAddress = new Map<string, HostCard>();
-
-  const put = (card: HostCard) => {
-    const key = card.address;
-    if (!key) return;
-    const prev = byAddress.get(key);
-    if (!prev) {
-      byAddress.set(key, card);
-      return;
-    }
-    if (prev.admission === "admitted" && card.admission === "pending") {
-      byAddress.set(key, {
-        ...prev,
-        worksetItemId: card.worksetItemId || prev.worksetItemId,
-        intelSource: prev.intelSource || card.intelSource,
-        attribution: prev.attribution || card.attribution,
-        confidence: prev.confidence || card.confidence,
-        scopeDecision: prev.scopeDecision || card.scopeDecision,
-      });
-      return;
-    }
-    if (card.admission === "admitted") {
-      byAddress.set(key, {
-        ...card,
-        worksetItemId: prev.worksetItemId || card.worksetItemId,
-        intelSource: card.intelSource || prev.intelSource,
-        attribution: card.attribution || prev.attribution,
-        aliases: [...new Set([...card.aliases, ...prev.aliases])],
-      });
-    }
-  };
-
-  for (const asset of assets) {
-    const id = assetIdOf(asset);
-    const address = assetAddressOf(asset);
-    if (!id || !address || !isValidLedgerAddress(address)) continue;
-    const aliases = assetAliasesOf(asset).filter((a) => a !== address);
-    put(
-      emptyCard({
-        id,
-        admission: "admitted",
-        address,
-        aliases,
-        hostId: id,
-      }),
-    );
+  const catalog: HostIdentity[] = [];
+  const seenHostIds = new Set<string>();
+  for (const raw of catalogSource) {
+    const row = parseHostRow(raw);
+    if (!row?.hostId || seenHostIds.has(row.hostId)) continue;
+    seenHostIds.add(row.hostId);
+    catalog.push(row);
   }
+
+  const admittedIds = admittedIdsFromScope(catalog, input.taskContext);
 
   const openItems = (workset.items || []).filter((i) => {
     const st = String(i.status || "");
@@ -235,53 +345,104 @@ export function projectHostCards(input: HostCardProjectionInput): HostCard[] {
   });
   for (const item of openItems) {
     if (String(item.family || "") !== "t_host") continue;
+    if (String(item.status) !== "adopted") continue;
     const address = payloadHost(item);
     if (!address || !isValidLedgerAddress(address)) continue;
-    const payload = item.payload && typeof item.payload === "object" ? item.payload : {};
-    const adopted = String(item.status) === "adopted";
-    const existing = byAddress.get(address);
-    if (adopted && existing?.admission === "admitted") {
-      put(
-        emptyCard({
-          ...existing,
-          worksetItemId: item.id,
-          intelSource: String(payload.intel_source || payload.source || "").trim() || undefined,
-          attribution: String(payload.attribution || "").trim() || undefined,
-          confidence: String(payload.confidence || "").trim() || undefined,
-          scopeDecision: String(payload.scope_decision || "").trim() || undefined,
-        }),
-      );
-      continue;
-    }
-    put(
+    const hit = uniqueIdentityMatch(catalog, address);
+    if (hit?.hostId) admittedIds.add(hit.hostId);
+  }
+
+  const byId = new Map<string, HostCard>();
+  for (const row of catalog) {
+    if (!row.hostId || !admittedIds.has(row.hostId)) continue;
+    byId.set(
+      row.hostId,
       emptyCard({
-        id: adopted && existing?.hostId ? existing.hostId : item.id,
-        admission: adopted ? "admitted" : "pending",
-        address,
-        aliases: existing?.aliases || [],
-        hostId: existing?.hostId,
-        worksetItemId: item.id,
-        intelSource: String(payload.intel_source || payload.source || "").trim() || undefined,
-        attribution: String(payload.attribution || "").trim() || undefined,
-        confidence: String(payload.confidence || "").trim() || undefined,
-        scopeDecision: String(payload.scope_decision || "").trim() || undefined,
+        id: row.hostId,
+        admission: "admitted",
+        address: row.address,
+        aliases: row.aliases,
+        hostId: row.hostId,
       }),
     );
   }
 
-  const cards = [...byAddress.values()];
+  const mergeMeta = (card: HostCard, item: WorksetItem) => {
+    const meta = worksetMeta(item);
+    card.worksetItemId = item.id;
+    card.intelSource = card.intelSource || meta.intelSource;
+    card.attribution = card.attribution || meta.attribution;
+    card.confidence = card.confidence || meta.confidence;
+    card.scopeDecision = card.scopeDecision || meta.scopeDecision;
+  };
+
+  for (const item of openItems) {
+    if (String(item.family || "") !== "t_host") continue;
+    const address = payloadHost(item);
+    if (!address || !isValidLedgerAddress(address)) continue;
+    const adopted = String(item.status) === "adopted";
+    const existing = [...byId.values()];
+    const unique = uniqueIndexFor(existing);
+    const hit = unique.get(address);
+    if (hit) {
+      mergeMeta(hit, item);
+      continue;
+    }
+    const claimed = existing.filter((c) => hostIdentityKeys(c).has(address));
+    if (claimed.length > 1) continue;
+    if (adopted) {
+      const catalogHit = uniqueIdentityMatch(catalog, address);
+      if (catalogHit?.hostId && byId.has(catalogHit.hostId)) {
+        mergeMeta(byId.get(catalogHit.hostId)!, item);
+        continue;
+      }
+      byId.set(
+        item.id,
+        emptyCard({
+          id: item.id,
+          admission: "admitted",
+          address,
+          aliases: [],
+          worksetItemId: item.id,
+          ...worksetMeta(item),
+        }),
+      );
+      continue;
+    }
+    byId.set(
+      item.id,
+      emptyCard({
+        id: item.id,
+        admission: "pending",
+        address,
+        aliases: [],
+        worksetItemId: item.id,
+        ...worksetMeta(item),
+      }),
+    );
+  }
+
+  const cards = [...byId.values()];
+  const findingOwner = new Map<string, HostCard>();
+  for (const finding of findings) {
+    const owner = cardForFinding(cards, finding);
+    if (!owner || owner.admission !== "admitted") continue;
+    const fid = String(finding.id || "");
+    if (fid && findingOwner.has(fid)) continue;
+    if (fid) findingOwner.set(fid, owner);
+    owner.findings.push(finding);
+  }
+
+  for (const entry of entries) {
+    const owner = uniqueCardForHost(cards, entry.host);
+    if (!owner || owner.admission !== "admitted") continue;
+    owner.paths.push(entry);
+  }
 
   for (const card of cards) {
     if (card.admission !== "admitted") continue;
-    const keys = identityKeys(card.address, card.aliases);
-    card.paths = entries.filter((e) => keys.has(normalizeHostKey(e.host)));
     card.untestedCount = card.paths.filter((p) => (p.coverage || "untested") === "untested").length;
     card.isNew = card.paths.some((p) => p.isNew === true);
-    card.findings = findings.filter((f) => {
-      const aid = String(f.asset_id || "").trim();
-      if (card.hostId && aid && aid === card.hostId) return true;
-      return findingHostKeys(f).some((h) => keys.has(h));
-    });
     card.findingCount = card.findings.length;
     if (card.hostId) {
       card.intel = intel.filter((row) => String(row.asset_id || "").trim() === card.hostId);
@@ -312,14 +473,5 @@ export function filterHostCards(
 }
 
 export function hostCardIdForFinding(cards: HostCard[], finding: Record<string, unknown>): string | null {
-  const aid = String(finding.asset_id || "").trim();
-  if (aid) {
-    const byId = cards.find((c) => c.hostId === aid || c.id === aid);
-    if (byId) return byId.id;
-  }
-  for (const h of findingHostKeys(finding)) {
-    const hit = cards.find((c) => identityKeys(c.address, c.aliases).has(h));
-    if (hit) return hit.id;
-  }
-  return null;
+  return cardForFinding(cards, finding)?.id || null;
 }

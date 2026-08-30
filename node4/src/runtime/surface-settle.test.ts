@@ -20,6 +20,8 @@ import {
   isCollapsedOsProbePath,
   isHttpHttpsScheme,
   isOriginInEngagementScope,
+  isAdmittedSurfaceHost,
+  isUrlInEngagementScope,
   isStaticSurfacePath,
   isTrafficSettlePhase,
   planTrafficSurfaceSettle,
@@ -215,6 +217,30 @@ import {
     { allowedHosts: new Set(["www.example.com"]) },
   );
   assert.equal(wwwInAllow.settle, true);
+
+  {
+    const scoped = trafficSettleScopeFromTask({
+      target: { type: "url", value: "https://lab.example:443/" },
+      scope: { allow: ["https://lab.example:443"] },
+    });
+    assert.equal(isUrlInEngagementScope("lab.example", "443", scoped), true);
+    assert.equal(isUrlInEngagementScope("lab.example", "8080", scoped), false);
+    const task = { scope: { allow: ["https://lab.example:443"] } };
+    assert.equal(isAdmittedSurfaceHost("lab.example", task, "443"), true);
+    assert.equal(isAdmittedSurfaceHost("lab.example", task, "8080"), false);
+  }
+
+  {
+    const mixed = trafficSettleScopeFromTask({
+      scope: { allow: ["https://a.example:443", "b.example"] },
+    });
+    assert.equal(isUrlInEngagementScope("a.example", "443", mixed), true);
+    assert.equal(isUrlInEngagementScope("a.example", "8080", mixed), false);
+    assert.equal(isUrlInEngagementScope("b.example", "443", mixed), true);
+    assert.equal(isUrlInEngagementScope("b.example", "8080", mixed), true);
+    const mixedTask = { scope: { allow: ["https://a.example:443", "b.example"] } };
+    assert.equal(isAdmittedSurfaceHost("b.example", mixedTask, "8080"), true);
+  }
 
   const scope = { allowedHosts: new Set(["target.example", "host.docker.internal"]) };
 

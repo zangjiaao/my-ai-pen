@@ -181,6 +181,18 @@ export function isOriginInEngagementScope(
   return false;
 }
 
+/** Hosts that named an explicit port in TARGET / scope.allow. */
+function originHosts(origins: ReadonlySet<string>): Set<string> {
+  const hosts = new Set<string>();
+  for (const o of origins) {
+    const last = o.lastIndexOf(":");
+    if (last <= 0) continue;
+    const h = normalizeScopeHost(o.slice(0, last));
+    if (h) hosts.add(h);
+  }
+  return hosts;
+}
+
 /** Host+port gate when the engagement named an explicit port; else host-only. */
 export function isUrlInEngagementScope(
   host: string,
@@ -189,17 +201,18 @@ export function isUrlInEngagementScope(
 ): boolean {
   if (!scope) return false;
   const rawOrigins = scope.allowedOrigins;
-  if (rawOrigins != null) {
-    const origins =
-      rawOrigins instanceof Set
+  const origins =
+    rawOrigins == null
+      ? new Set<string>()
+      : rawOrigins instanceof Set
         ? rawOrigins
         : new Set([...rawOrigins].map((x) => String(x || "").trim().toLowerCase()).filter(Boolean));
-    if (origins.size > 0) {
-      const h = normalizeScopeHost(host);
-      const p = String(port ?? "").trim();
-      if (!h || !p) return false;
-      return origins.has(`${h}:${p}`);
-    }
+  const h = normalizeScopeHost(host);
+  if (!h) return false;
+  if (origins.size > 0 && originHosts(origins).has(h)) {
+    const p = String(port ?? "").trim();
+    if (!p) return false;
+    return origins.has(`${h}:${p}`);
   }
   return isOriginInEngagementScope(host, scope);
 }
@@ -248,12 +261,13 @@ export function trafficSettleScopeFromTask(task: {
   };
 }
 
-/** True when host is an admitted Case Host (TARGET / scope.allow). Empty Scope → false. */
+/** True when origin is an admitted Case Host. Explicit Scope ports are host+port. Empty Scope → false. */
 export function isAdmittedSurfaceHost(
   host: string,
   task?: { target?: Record<string, unknown>; scope?: Record<string, unknown> } | null,
+  port?: number | string | null,
 ): boolean {
-  return isOriginInEngagementScope(host, trafficSettleScopeFromTask(task || {}));
+  return isUrlInEngagementScope(host, port, trafficSettleScopeFromTask(task || {}));
 }
 
 /** HTTP(S) only for v2 settle (D6). */
