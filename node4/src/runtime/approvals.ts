@@ -18,6 +18,10 @@ export type ApprovalResult = {
   decision: ApprovalDecision;
   selected_option_ids?: string[];
   workset_item_ids?: string[];
+  adopted_t_host_ids?: string[];
+  live_adopted_t_host_ids?: string[];
+  scope?: Record<string, unknown>;
+  admission_ambiguous?: unknown[];
   text?: string;
   custom_text?: string;
   answers?: unknown[];
@@ -26,6 +30,10 @@ export type ApprovalResult = {
 export type ApprovalResolveExtras = {
   selected_option_ids?: unknown;
   workset_item_ids?: unknown;
+  adopted_t_host_ids?: unknown;
+  live_adopted_t_host_ids?: unknown;
+  scope?: unknown;
+  admission_ambiguous?: unknown;
   text?: unknown;
   custom_text?: unknown;
   answers?: unknown;
@@ -149,10 +157,20 @@ export function resolveApproval(
   const result: ApprovalResult = { decision };
   const selected = stringList(extras?.selected_option_ids);
   const workset = stringList(extras?.workset_item_ids);
+  const adopted = stringList(extras?.adopted_t_host_ids);
+  const liveAdopted = stringList(extras?.live_adopted_t_host_ids);
   const text = extras?.text != null ? String(extras.text).trim() : "";
   const custom = extras?.custom_text != null ? String(extras.custom_text).trim() : "";
   if (selected) result.selected_option_ids = selected;
   if (workset) result.workset_item_ids = workset;
+  if (adopted) result.adopted_t_host_ids = adopted;
+  if (liveAdopted) result.live_adopted_t_host_ids = liveAdopted;
+  if (extras?.scope && typeof extras.scope === "object" && !Array.isArray(extras.scope)) {
+    result.scope = extras.scope as Record<string, unknown>;
+  }
+  if (Array.isArray(extras?.admission_ambiguous) && extras.admission_ambiguous.length) {
+    result.admission_ambiguous = extras.admission_ambiguous;
+  }
   if (text) result.text = text;
   if (custom) result.custom_text = custom;
   if (Array.isArray(extras?.answers)) result.answers = extras.answers;

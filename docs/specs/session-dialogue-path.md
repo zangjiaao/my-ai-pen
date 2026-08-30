@@ -102,7 +102,7 @@ What they see instead often feels like a restart: a new Task package id, a long 
 - `_resume_message_from_context` (and any twin): restore structured sticky fields; **never** build `prior + "User continuation:" + next`.  
 - Terminal/idle package states (`failed` / `incomplete` / `paused` / `canceled` / `completed`) + durable sticky target → same-Session continue: hydrate sticky expert, restore structure when turn lacks target, set `session_continue`.  
 - `_task_assign_from_user_message` maps utterance → `initial_instruction` (and carries `session_continue`).  
-- `_remember_conversation_task` may store the latest utterance as sticky instruction snapshot (short); do not re-grow a composite book.  
+- `_remember_conversation_task` may store the latest utterance as sticky instruction snapshot (short); do not re-grow a composite book. Row-lock the Conversation; do not write a stale envelope `scope` over the live persisted Scope / Workset.
 - `case_context` may still be **attached** on wire for cold/park-miss consumers; park-hit must not **require** it for a valid turn.  
 - New `task_id` on continue is normal (L4); not a dialogue restart signal.
 

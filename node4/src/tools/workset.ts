@@ -7,6 +7,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import { platformLedgerFetch } from "./platform.js";
+import { applyServerScopeToTask } from "./decision.js";
 import type { WorksetCandidate, WorksetFamily } from "../runtime/workset-emit.js";
 
 const INTEL_SOURCES = new Set(["ct", "dns", "shodan", "fofa", "ssl_history", "other"]);
@@ -14,6 +15,13 @@ const CONFIDENCES = new Set(["low", "medium", "high"]);
 const SCOPE_DECISIONS = new Set(["pending", "in_scope", "out_of_scope", "needs_authorization"]);
 
 export const AGENT_WORKSET_LIST_CAP = 24;
+
+/** Agent "pending" means proposed admission, not a third status. */
+export function normalizeAgentWorksetStatus(status: string): string {
+  const st = String(status || "").trim().toLowerCase();
+  if (st === "pending" || st === "waiting" || st === "admission") return "proposed";
+  return st;
+}
 
 export type WorksetListRow = {
   id?: string;
@@ -93,6 +101,50 @@ export function mergeStashIntoCaseList(
   return out;
 }
 
+export function collectWorksetAdoptSelectors(params: Record<string, unknown>): {
+  hosts: string[];
+  item_ids: string[];
+} {
+  const hosts: string[] = [];
+  const seenH = new Set<string>();
+  const pushHost = (v: unknown) => {
+    if (Array.isArray(v)) {
+      for (const x of v) pushHost(x);
+      return;
+    }
+    if (v == null) return;
+    for (const part of String(v).split(/[\s,;]+/)) {
+      const h = part.trim();
+      if (h && !seenH.has(h.toLowerCase())) {
+        seenH.add(h.toLowerCase());
+        hosts.push(h);
+      }
+    }
+  };
+  const itemIds: string[] = [];
+  const seenI = new Set<string>();
+  const pushId = (v: unknown) => {
+    if (Array.isArray(v)) {
+      for (const x of v) pushId(x);
+      return;
+    }
+    if (v == null) return;
+    for (const part of String(v).split(/[\s,;]+/)) {
+      const iid = part.trim();
+      if (iid && !seenI.has(iid)) {
+        seenI.add(iid);
+        itemIds.push(iid);
+      }
+    }
+  };
+  pushHost(params.hosts);
+  pushHost(params.host);
+  pushId(params.item_ids);
+  pushId(params.ids);
+  pushId(params.workset_item_ids);
+  return { hosts, item_ids: itemIds };
+}
+
 export function filterWorksetForAgent(
   items: WorksetListRow[],
   opts: { family?: string; status?: string; needle?: string; itemId?: string; cap?: number } = {},
@@ -100,7 +152,7 @@ export function filterWorksetForAgent(
   const cap = Math.max(1, Math.min(Number(opts.cap) || AGENT_WORKSET_LIST_CAP, 40));
   const wantId = String(opts.itemId || "").trim();
   const fam = String(opts.family || "").trim().toLowerCase();
-  const st = String(opts.status || "").trim().toLowerCase();
+  const st = normalizeAgentWorksetStatus(opts.status || "");
   const q = String(opts.needle || "").trim().toLowerCase();
   const matched: WorksetListRow[] = [];
   for (const item of items) {
@@ -141,7 +193,7 @@ async function fetchCaseWorkset(
   if (!cid || !runtime.platformApi?.baseUrl || !runtime.platformApi.nodeToken) return null;
   const qs = new URLSearchParams();
   if (params.family) qs.set("family", params.family);
-  if (params.status) qs.set("status", params.status);
+  if (params.status) qs.set("status", normalizeAgentWorksetStatus(params.status));
   if (params.needle) qs.set("q", params.needle);
   if (params.itemId) qs.set("id", params.itemId);
   if (params.cap) qs.set("limit", String(params.cap));
@@ -242,17 +294,19 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
     name: "workset",
     label: "Workset",
     description: [
-      "Park pending-admission candidates on Case Workset. Not a Host, not Surface coverage, not Intel.",
-      "Ops: propose | list | get | set_intake.",
-      "list/get read Case Workset SoT (filtered, capped) — not this-burst stash only.",
+      "Park pending-admission candidates on Case Workset, then admit the ones the user named or selected.",
+      "Ops: propose | list | get | adopt | set_intake.",
+      "list/get read Case Workset SoT (filtered, capped; status=pending means proposed) — not this-burst stash only.",
       "propose: host (or location URL), intel_source (ct|dns|shodan|fofa|ssl_history|other), attribution evidence, confidence (low|medium|high), scope_decision (pending|in_scope|out_of_scope|needs_authorization).",
+      "adopt: only for still-proposed hosts the user named (chat or custom card text). Bound next_steps click and Surface 纳入 already persist — do not call adopt to prove those. Do not ask the user for a Host id. Do not platform_list_assets or create_asset. Do not adopt from recon alone.",
       "set_intake: when the user asked this Case's discoveries to go into a Group. Records mode=enroll_group (group_id or group_name) or mode=ask. Does not create Hosts — the user must confirm Case intake or adopt a row. Not available during a Graph stage. Platform does not infer this from free text.",
-      "Default: do not http-probe, surface(mark), or create_asset until the user adopts or confirms Case enroll_group intake. No Host means no Intel hang.",
+      "After propose: one next_steps card. If the user clicks a bound option, platform admits — continue. If they type still-proposed names, workset(adopt, hosts=those names). Do not list/get to prove adoption. No Host means no Intel hang.",
       "A missing optional intel source is not a failure — propose what the tools you have actually returned.",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
       host: Type.Optional(Type.String()),
+      hosts: Type.Optional(Type.String()),
       location: Type.Optional(Type.String()),
       port: Type.Optional(Type.String()),
       family: Type.Optional(Type.String()),
@@ -265,6 +319,8 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
       status: Type.Optional(Type.String()),
       q: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
+      ids: Type.Optional(Type.String()),
+      item_ids: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Number()),
       mode: Type.Optional(Type.String()),
       group_id: Type.Optional(Type.String()),
@@ -320,6 +376,62 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
               : "Case policy is ask. New hosts stay on Workset until the user adopts.",
         });
       }
+      if (op === "adopt") {
+        const cid = String(runtime.task?.conversationId || "").trim();
+        if (!cid) {
+          return jsonResult({ ok: false, error: "conversation_id required" });
+        }
+        const sel = collectWorksetAdoptSelectors(params);
+        if (!sel.hosts.length && !sel.item_ids.length) {
+          return jsonResult({
+            ok: false,
+            error: "adopt requires hosts (names the user chose) or item_ids from selected options",
+          });
+        }
+        const path = `/api/node/ledger/conversations/${encodeURIComponent(cid)}/workset/adopt`;
+        const res = await platformLedgerFetch(runtime, "POST", path, {
+          hosts: sel.hosts,
+          item_ids: sel.item_ids,
+        });
+        if (!res.ok || !res.data || typeof res.data !== "object") {
+          return jsonResult({
+            ok: false,
+            error: "workset adopt persist failed",
+            status: res.status,
+            data: res.data,
+          });
+        }
+        const data = res.data as {
+          ok?: boolean;
+          adopted_t_host_ids?: unknown;
+          live_adopted_t_host_ids?: unknown;
+          scope?: unknown;
+          admission_ambiguous?: unknown;
+        };
+        applyServerScopeToTask(runtime.task, data.scope);
+        const adopted = Array.isArray(data.adopted_t_host_ids)
+          ? data.adopted_t_host_ids.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        const ambiguous = Array.isArray(data.admission_ambiguous) ? data.admission_ambiguous : [];
+        const liveAdopted = Array.isArray(data.live_adopted_t_host_ids)
+          ? data.live_adopted_t_host_ids.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        return jsonResult({
+          ok: Boolean(data.ok) && adopted.length > 0,
+          op: "adopt",
+          adopted_t_host_ids: adopted,
+          live_adopted_t_host_ids: data.live_adopted_t_host_ids,
+          scope: data.scope,
+          admission_ambiguous: ambiguous,
+          guidance: adopted.length
+            ? "Those hosts are this Case Scope. Continue the original task. Do not list_assets, create_asset, or re-show the card."
+            : ambiguous.length
+              ? "Those names stay proposed (identity ambiguous). Tell the user once; do not ask for a Host id; do not re-show the card."
+              : liveAdopted.length
+                ? "No new Workset rows adopted. Live adopted Hosts remain this Case Scope — do not claim they were not admitted. Call adopt only for still-proposed names the user newly named."
+                : "No matching proposed t_host was adopted. Do not claim Hosts were admitted. Do not ask for a Host id.",
+        });
+      }
       if (op === "list" || op === "get") {
         const filters = {
           family: String(params.family || "").trim() || undefined,
@@ -340,11 +452,11 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
           op,
           ...listed,
           note:
-            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Adopt is a user action unless the owner confirmed Case enroll_group intake.",
+            "Case Workset pending admission. Not Host, not Surface coverage, not Intel. Bound click / Surface 纳入 already persist. Call workset(adopt) only for still-proposed names the user typed. Do not list/get to prove adoption.",
         });
       }
       if (op !== "propose") {
-        return textResult("error: op must be propose, list, get, or set_intake");
+        return textResult("error: op must be propose, list, get, adopt, or set_intake");
       }
       const built = buildPassiveWorksetCandidate({
         host: String(params.host || ""),
@@ -381,7 +493,7 @@ export function createWorksetTool(runtime: ToolRuntime): AgentTool<any> {
         op: "propose",
         item: built,
         guidance:
-          "Parked on Workset. Do not create_asset or active-test until the user adopts or confirms Case enroll_group intake.",
+          "Parked on Workset. Ask which to admit. Bound click persists; typed still-proposed names use workset(adopt). Do not create_asset.",
       });
     },
   };

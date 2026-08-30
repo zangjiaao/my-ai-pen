@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SurfaceSqliteStore } from "../stores/surface-sqlite.js";
+import { SurfaceSqliteStore, SURFACE_UPSERT_BATCH_MAX } from "../stores/surface-sqlite.js";
 import { createSurfaceTool } from "./surface.js";
 import type { ToolRuntime } from "../types.js";
 import type { TaskEnvelope } from "../types.js";
@@ -126,6 +126,80 @@ await store.upsert(
   assert.ok(r.data, `root mark failed: ${r.error}`);
   assert.equal((r.data!.surface as Record<string, unknown>).coverage, "tested");
   assert.equal((r.data!.surface as Record<string, unknown>).path_key, "/");
+}
+
+// --- mark locations[] covers many existing identities in one call ---
+{
+  await store.upsert(
+    [
+      { location: "https://lab.example/batch-a" },
+      { location: "https://lab.example/batch-b" },
+      { location: "https://lab.example/batch-c" },
+    ],
+    { source: "traffic" },
+  );
+  const r = await toolJson(tool, {
+    op: "mark",
+    locations: [
+      "https://lab.example/batch-a",
+      "https://lab.example/batch-b",
+      "https://lab.example/batch-c",
+    ],
+  });
+  assert.ok(r.data, `batch mark failed: ${r.error}`);
+  assert.equal(r.data!.ok, true);
+  const rows = r.data!.surfaces as Array<Record<string, unknown>>;
+  assert.equal(rows.length, 3);
+  assert.equal(r.data!.written, 3);
+  assert.deepEqual(
+    rows.map((s) => s.coverage),
+    ["tested", "tested", "tested"],
+  );
+  assert.equal((await store.get({ location: "https://lab.example/batch-a" }))?.coverage, "tested");
+  assert.equal((await store.get({ location: "https://lab.example/batch-c" }))?.coverage, "tested");
+}
+
+// --- batch keeps admitted marks when one location is fail-closed ---
+{
+  await store.upsert([{ location: "https://lab.example/batch-keep" }], { source: "traffic" });
+  const r = await toolJson(tool, {
+    op: "mark",
+    locations: ["https://lab.example/batch-keep", "https://crt.sh/"],
+  });
+  assert.ok(r.data, `mixed batch should return JSON, not a hard error: ${r.error}`);
+  assert.equal(r.data!.ok, true);
+  assert.equal(r.data!.written, 1);
+  const errs = r.data!.errors as Array<Record<string, unknown>>;
+  assert.equal(errs.length, 1);
+  assert.match(String(errs[0]!.error), /fail-closed|admitted Case Host/i);
+  assert.equal((await store.get({ location: "https://lab.example/batch-keep" }))?.coverage, "tested");
+}
+
+// --- skip locations[] uses one reason for every row ---
+{
+  await store.upsert(
+    [
+      { location: "https://lab.example/skip-a" },
+      { location: "https://lab.example/skip-b" },
+    ],
+    { source: "traffic" },
+  );
+  const r = await toolJson(tool, {
+    op: "skip",
+    reason: "deadend",
+    locations: ["https://lab.example/skip-a", "https://lab.example/skip-b"],
+  });
+  assert.ok(r.data, `batch skip failed: ${r.error}`);
+  assert.equal(r.data!.written, 2);
+  assert.equal((await store.get({ location: "https://lab.example/skip-a" }))?.coverage, "skipped");
+  assert.equal((await store.get({ location: "https://lab.example/skip-b" }))?.coverage_skip_reason, "deadend");
+}
+
+{
+  const tooMany = Array.from({ length: SURFACE_UPSERT_BATCH_MAX + 1 }, (_, i) => `https://lab.example/cap-${i}`);
+  const r = await toolJson(tool, { op: "mark", locations: tooMany });
+  assert.ok(r.error);
+  assert.match(r.error!, /batch max/);
 }
 
 // --- upsert deadend/skipped_roe is a hard error, not a silent translate ---

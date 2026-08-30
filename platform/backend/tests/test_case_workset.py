@@ -1,6 +1,9 @@
 """Spec #311 — Case Workset projection, mechanical gate, Goal outer terminals."""
+from app.services.asset_ledger import unique_asset_id_by_identity_keys
 from app.services.case_workset import (
     apply_intake_enroll_to_context,
+    apply_user_host_admission,
+    merge_authorized_hosts_into_scope,
     apply_settle_to_context,
     auto_check_safe,
     adopt_item,
@@ -18,15 +21,18 @@ from app.services.case_workset import (
     goal_wants_session_free,
     intake_enroll_eligible,
     intake_policy_user_committed,
+    live_admission_from_context,
     put_agent_asset_intake,
     mechanical_gate,
     merge_proposed_into_context,
     merge_proposed_items,
+    list_workset_for_agent,
     materialize_intake_hosts,
     materialize_user_committed_intake,
     normalize_asset_intake,
     normalize_candidate,
     order_workset_items,
+    parse_agent_adopt_request,
     project_workset_for_api,
     put_asset_intake,
     put_workset,
@@ -1231,4 +1237,554 @@ def test_workset_routes_require_bound_node():
         raise AssertionError("foreign node must 403")
     except HTTPException as e:
         assert e.status_code == 403
+
+
+def _ctx_with_passive_hosts(*hosts: str) -> dict:
+    ctx = {"task": {"scope": {"allow": [], "deny": [], "asset_ids": []}}}
+    return merge_proposed_into_context(
+        ctx,
+        [_passive_host(h) for h in hosts],
+        source="workset_propose",
+    )
+
+
+def _by_host(ctx: dict) -> dict[str, dict]:
+    return {i["payload"]["host"]: i for i in get_workset(ctx)["items"]}
+
+
+def test_authorize_host_keys_adopt_matching_t_host_only():
+    """User authorize of two Hosts adopts those Workset rows; siblings stay proposed."""
+    ctx = _ctx_with_passive_hosts(
+        "www.example.com",
+        "example.com",
+        "example.net",
+        "example.org",
+        "example.edu",
+    )
+    aid_www = "c0f509a9-796a-4b7f-868a-caf376f99dbc"
+    aid_apex = "ded278b8-c0a1-4df0-8aa7-4be919ca81ae"
+    ctx, adopted = apply_user_host_admission(
+        ctx,
+        host_keys=["example.com", "www.example.com"],
+        asset_id_by_host={
+            "example.com": aid_apex,
+            "www.example.com": aid_www,
+        },
+    )
+    by = _by_host(ctx)
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["example.com"]["status"] == "adopted"
+    assert by["example.net"]["status"] == "proposed"
+    assert by["example.org"]["status"] == "proposed"
+    assert by["example.edu"]["status"] == "proposed"
+    assert by["www.example.com"]["status_actor"] == "user"
+    assert set(adopted) == {by["www.example.com"]["id"], by["example.com"]["id"]}
+    scope = ctx["task"]["scope"]
+    assert "example.com" in scope["allow"]
+    assert "www.example.com" in scope["allow"]
+    assert "example.net" not in scope["allow"]
+    assert aid_www in scope["asset_ids"]
+    assert aid_apex in scope["asset_ids"]
+
+
+def test_next_steps_workset_binds_adopt_those_t_host_rows():
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    by = _by_host(ctx)
+    www_id = by["www.example.com"]["id"]
+    aid = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+    ctx, adopted = apply_user_host_admission(
+        ctx,
+        workset_item_ids=[www_id],
+        asset_id_by_host={"www.example.com": aid},
+    )
+    by = _by_host(ctx)
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["example.net"]["status"] == "proposed"
+    assert adopted == [www_id]
+    assert "www.example.com" in ctx["task"]["scope"]["allow"]
+    assert aid in ctx["task"]["scope"]["asset_ids"]
+
+
+def test_admission_without_host_id_stays_proposed():
+    """Host must exist (unique identity) before Workset/Scope commit."""
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    by = _by_host(ctx)
+    www_id = by["www.example.com"]["id"]
+    ctx, adopted = apply_user_host_admission(ctx, workset_item_ids=[www_id])
+    assert adopted == []
+    assert _by_host(ctx)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx["task"]["scope"].get("allow") or [])
+
+
+def test_user_host_admission_skips_t_surface_and_already_adopted():
+    ctx = merge_proposed_into_context(
+        {"task": _task()},
+        [
+            {
+                "location": "http://target.local/admin",
+                "host": "target.local",
+                "in_scope": True,
+                "path_key": "/admin",
+            },
+            _passive_host("cdn.example.com"),
+        ],
+        source="workset_propose",
+    )
+    items = get_workset(ctx)["items"]
+    surface_id = next(i["id"] for i in items if i["family"] == "t_surface")
+    host_id = next(i["id"] for i in items if i["family"] == "t_host")
+    ctx, _ = apply_user_host_admission(
+        ctx,
+        workset_item_ids=[surface_id, host_id],
+        asset_id_by_host={"cdn.example.com": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"},
+    )
+    by_id = {i["id"]: i for i in get_workset(ctx)["items"]}
+    assert by_id[surface_id]["status"] == "proposed"
+    assert by_id[host_id]["status"] == "adopted"
+    ctx, adopted = apply_user_host_admission(ctx, workset_item_ids=[host_id])
+    assert adopted == []
+    assert next(i["status"] for i in get_workset(ctx)["items"] if i["id"] == host_id) == "adopted"
+
+
+def test_unique_identity_map_omits_ambiguous_alias():
+    a = {
+        "id": "host-a",
+        "address": "example.com",
+        "properties": {"aliases": ["www.example.com"]},
+    }
+    b = {
+        "id": "host-b",
+        "address": "cdn.example.net",
+        "properties": {"aliases": ["www.example.com"]},
+    }
+    mapped = unique_asset_id_by_identity_keys([a, b])
+    assert mapped["example.com"] == "host-a"
+    assert mapped["cdn.example.net"] == "host-b"
+    assert "www.example.com" not in mapped
+
+
+def test_unique_identity_map_reuses_single_alias_hit():
+    a = {
+        "id": "host-a",
+        "address": "example.com",
+        "properties": {"aliases": ["www.example.com"]},
+    }
+    mapped = unique_asset_id_by_identity_keys([a])
+    assert mapped["example.com"] == "host-a"
+    assert mapped["www.example.com"] == "host-a"
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    listed = list_workset_for_agent(get_workset(ctx), status="pending")
+    assert listed["total"] == 2
+    assert {i["host"] for i in listed["items"]} == {"www.example.com", "example.net"}
+    exact = list_workset_for_agent(get_workset(ctx), status="proposed")
+    assert exact["total"] == 2
+    adopted = list_workset_for_agent(get_workset(ctx), status="adopted")
+    assert adopted["total"] == 0
+
+
+def test_live_admission_from_context_ignores_proposed_and_custom_text():
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    by = _by_host(ctx)
+    www_id = by["www.example.com"]["id"]
+    ctx, _ = apply_user_host_admission(
+        ctx,
+        workset_item_ids=[www_id],
+        asset_id_by_host={"www.example.com": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"},
+    )
+    live = live_admission_from_context(ctx)
+    assert live["adopted_t_host_ids"] == [www_id]
+    assert "www.example.com" in (live["scope"].get("allow") or [])
+    empty = live_admission_from_context(_ctx_with_passive_hosts("cdn.example.com"))
+    assert empty["adopted_t_host_ids"] == []
+
+
+def _http_admit(ctx, item_id, *, allow_create=True, hits=None, upsert=None):
+    """HTTP Surface 纳入: one Workset id, do not pull sibling hosts."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.case_workset import resolve_and_admit_workset_hosts, workset_host_admission_error
+
+    list_hits = list(hits) if hits is not None else []
+
+    async def fake_list(_db, _user, _address):
+        return list_hits
+
+    fake_upsert = upsert if upsert is not None else AsyncMock(return_value=None)
+
+    async def run():
+        with (
+            patch("app.services.owner_services.list_assets_by_identity", new=fake_list),
+            patch("app.api.assets.upsert_discovered_asset", new=fake_upsert),
+        ):
+            return await resolve_and_admit_workset_hosts(
+                object(),
+                user_id="u",
+                conversation_id="c",
+                context=ctx,
+                workset_item_ids=[item_id],
+                allow_create=allow_create,
+                match_resolved_hosts=False,
+            )
+
+    admitted = asyncio.run(run())
+    code = workset_host_admission_error(
+        item_id,
+        adopted_t_host_ids=admitted["adopted_t_host_ids"],
+        admission_ambiguous=admitted["admission_ambiguous"],
+    )
+    return admitted, code
+
+
+def _aid(n: int = 1) -> str:
+    return f"aaaaaaaa-1111-4111-8111-{n:012d}"
+
+
+def test_http_admission_reuses_unique_alias_host():
+    """Workset address hitting an existing Host alias reuses that id — no create."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    existing = _aid(1)
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    hit = SimpleNamespace(id=__import__("uuid").UUID(existing), address="example.com")
+    upsert = AsyncMock(side_effect=AssertionError("must not create when alias is unique"))
+    admitted, code = _http_admit(ctx, item_id, hits=[hit], upsert=upsert)
+    assert code is None
+    ctx2 = admitted["context"]
+    by = _by_host(ctx2)
+    assert by["www.example.com"]["status"] == "adopted"
+    assert existing in (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert "www.example.com" in (ctx2["task"]["scope"].get("allow") or [])
+    live = live_admission_from_context(ctx2)
+    assert live["adopted_t_host_ids"] == [item_id]
+    upsert.assert_not_called()
+
+
+def test_http_admission_ambiguous_alias_stays_proposed():
+    from types import SimpleNamespace
+
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    hits = [
+        SimpleNamespace(id=__import__("uuid").UUID(_aid(1)), address="example.com"),
+        SimpleNamespace(id=__import__("uuid").UUID(_aid(2)), address="www.example.com"),
+    ]
+    admitted, code = _http_admit(ctx, item_id, hits=hits)
+    assert code == "admission_ambiguous"
+    ctx2 = admitted["context"]
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+    assert not (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert live_admission_from_context(ctx2)["adopted_t_host_ids"] == []
+
+
+def test_http_admission_create_failure_stays_proposed():
+    from unittest.mock import AsyncMock
+
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    upsert = AsyncMock(side_effect=RuntimeError("ledger unavailable"))
+    admitted, code = _http_admit(ctx, item_id, hits=[], upsert=upsert)
+    assert code == "host_unresolved"
+    ctx2 = admitted["context"]
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+    assert not (ctx2["task"]["scope"].get("asset_ids") or [])
+    live = live_admission_from_context(ctx2)
+    assert live["adopted_t_host_ids"] == []
+    assert "www.example.com" not in (live["scope"].get("allow") or [])
+
+
+def test_http_admission_register_assets_false_without_host_stays_proposed():
+    from unittest.mock import AsyncMock
+
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    upsert = AsyncMock(side_effect=AssertionError("register_assets=false must not create"))
+    admitted, code = _http_admit(ctx, item_id, allow_create=False, hits=[], upsert=upsert)
+    assert code == "host_unresolved"
+    ctx2 = admitted["context"]
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+    assert not (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert live_admission_from_context(ctx2)["adopted_t_host_ids"] == []
+    upsert.assert_not_called()
+
+
+def test_http_admission_register_assets_false_reuses_unique():
+    """Opting out of create still reuses a unique existing Host."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    existing = _aid(3)
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    hit = SimpleNamespace(id=__import__("uuid").UUID(existing), address="example.com")
+    upsert = AsyncMock(side_effect=AssertionError("must not create"))
+    admitted, code = _http_admit(ctx, item_id, allow_create=False, hits=[hit], upsert=upsert)
+    assert code is None
+    ctx2 = admitted["context"]
+    assert _by_host(ctx2)["www.example.com"]["status"] == "adopted"
+    assert existing in (ctx2["task"]["scope"].get("asset_ids") or [])
+    upsert.assert_not_called()
+
+
+def test_http_admission_create_none_then_adopt():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    created = _aid(9)
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+
+    async def fake_upsert(*_a, **kwargs):
+        return SimpleNamespace(id=__import__("uuid").UUID(created), address=kwargs.get("address"))
+
+    admitted, code = _http_admit(ctx, item_id, hits=[], upsert=fake_upsert)
+    assert code is None
+    ctx2 = admitted["context"]
+    by = _by_host(ctx2)
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["example.net"]["status"] == "proposed"
+    assert created in (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert "example.net" not in (ctx2["task"]["scope"].get("allow") or [])
+
+
+def test_next_steps_bind_reuses_unique_existing_host():
+    """Bound next_steps + unique existing Host: reuse, adopt, write Scope asset_ids."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    existing = _aid(7)
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    www_id = _by_host(ctx)["www.example.com"]["id"]
+    hit = SimpleNamespace(id=__import__("uuid").UUID(existing), address="www.example.com")
+    upsert = AsyncMock(side_effect=AssertionError("unique existing Host must reuse"))
+    admitted, code = _http_admit(ctx, www_id, hits=[hit], upsert=upsert)
+    assert code is None
+    ctx2 = admitted["context"]
+    by = _by_host(ctx2)
+    assert admitted["adopted_t_host_ids"] == [www_id]
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["example.net"]["status"] == "proposed"
+    assert existing in (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert "www.example.com" in (ctx2["task"]["scope"].get("allow") or [])
+    upsert.assert_not_called()
+
+
+def test_authorized_scope_not_written_when_matching_t_host_still_proposed():
+    """Authorize Host id + failed adopt must not half-write Scope."""
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    aid = _aid(5)
+    ctx2 = merge_authorized_hosts_into_scope(
+        ctx,
+        asset_rows=[{"id": aid, "address": "www.example.com", "properties": {}}],
+    )
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+    assert aid not in (ctx2["task"]["scope"].get("asset_ids") or [])
+
+
+def test_authorized_scope_writes_host_without_matching_workset_row():
+    ctx = {"task": {"scope": {"allow": [], "deny": [], "asset_ids": []}}}
+    aid = _aid(6)
+    ctx2 = merge_authorized_hosts_into_scope(
+        ctx,
+        asset_rows=[{"id": aid, "address": "lab.example", "properties": {}}],
+    )
+    assert "lab.example" in (ctx2["task"]["scope"].get("allow") or [])
+    assert aid in (ctx2["task"]["scope"].get("asset_ids") or [])
+
+
+def test_create_fail_then_authorize_merge_does_not_split_scope():
+    """Create/reuse fail + authorize the same host: Workset stays proposed, Scope empty."""
+    from unittest.mock import AsyncMock
+
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    upsert = AsyncMock(side_effect=RuntimeError("ledger unavailable"))
+    admitted, code = _http_admit(ctx, item_id, hits=[], upsert=upsert)
+    assert code == "host_unresolved"
+    aid = _aid(8)
+    ctx2 = merge_authorized_hosts_into_scope(
+        admitted["context"],
+        asset_rows=[{"id": aid, "address": "www.example.com", "properties": {}}],
+    )
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+    assert not (ctx2["task"]["scope"].get("asset_ids") or [])
+
+
+def test_ambiguous_then_authorize_merge_does_not_split_scope():
+    from types import SimpleNamespace
+
+    ctx = _ctx_with_passive_hosts("www.example.com")
+    item_id = _by_host(ctx)["www.example.com"]["id"]
+    hits = [
+        SimpleNamespace(id=__import__("uuid").UUID(_aid(1)), address="example.com"),
+        SimpleNamespace(id=__import__("uuid").UUID(_aid(2)), address="www.example.com"),
+    ]
+    admitted, code = _http_admit(ctx, item_id, hits=hits)
+    assert code == "admission_ambiguous"
+    ctx2 = merge_authorized_hosts_into_scope(
+        admitted["context"],
+        asset_rows=[{"id": _aid(2), "address": "www.example.com", "properties": {}}],
+    )
+    assert _by_host(ctx2)["www.example.com"]["status"] == "proposed"
+    assert "www.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
+
+
+def test_find_asset_by_host_two_plus_returns_none_without_throw():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from app.api.assets import find_asset_by_host
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(id=uuid4(), address="example.com"),
+                SimpleNamespace(id=uuid4(), address="example.com"),
+            ]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_Result())
+    found = asyncio.run(find_asset_by_host(db, uuid4(), "example.com"))
+    assert found is None
+
+
+def test_upsert_two_plus_primary_does_not_create():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from app.api.assets import upsert_discovered_asset
+
+    class _Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(id=uuid4(), address="example.com"),
+                SimpleNamespace(id=uuid4(), address="example.com"),
+            ]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_Result())
+    db.add = AsyncMock()
+
+    async def run():
+        return await upsert_discovered_asset(
+            db,
+            user_id=uuid4(),
+            address="example.com",
+            allow_create=True,
+        )
+
+    out = asyncio.run(run())
+    assert out is None
+    db.add.assert_not_called()
+
+
+def test_authorize_asset_ids_adopt_matching_workset_without_binds():
+    """Authorize card has Host ids only — still adopt the matching proposed t_host."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.case_workset import resolve_and_admit_workset_hosts
+
+    existing = _aid(4)
+    ctx = _ctx_with_passive_hosts("www.example.com", "example.net")
+    www_id = _by_host(ctx)["www.example.com"]["id"]
+
+    async def run():
+        with (
+            patch("app.services.owner_services.list_assets_by_identity", new=AsyncMock(return_value=[])),
+            patch(
+                "app.api.assets.upsert_discovered_asset",
+                new=AsyncMock(side_effect=AssertionError("seed already has the Host")),
+            ),
+        ):
+            return await resolve_and_admit_workset_hosts(
+                object(),
+                user_id="u",
+                conversation_id="c",
+                context=ctx,
+                workset_item_ids=[],
+                host_keys=["www.example.com"],
+                seed_by_host={"www.example.com": existing},
+                allow_create=True,
+                match_resolved_hosts=True,
+            )
+
+    admitted = asyncio.run(run())
+    ctx2 = admitted["context"]
+    by = _by_host(ctx2)
+    assert admitted["adopted_t_host_ids"] == [www_id]
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["example.net"]["status"] == "proposed"
+    assert existing in (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert "www.example.com" in (ctx2["task"]["scope"].get("allow") or [])
+
+
+def test_parse_agent_adopt_request_hosts_not_prose():
+    hosts, ids, err = parse_agent_adopt_request({"hosts": "www.example.com, api.example.com"})
+    assert err is None
+    assert hosts == ["www.example.com", "api.example.com"]
+    assert ids == []
+    _, _, err2 = parse_agent_adopt_request({"question": "纳入 www.example.com"})
+    assert err2 == "hosts_or_ids_required"
+    hosts3, ids3, err3 = parse_agent_adopt_request(
+        {"host": "https://www.example.com/login", "item_ids": ["ws_1"]}
+    )
+    assert err3 is None
+    assert hosts3 == ["www.example.com"]
+    assert ids3 == ["ws_1"]
+
+
+def test_agent_adopt_by_hostname_creates_and_leaves_siblings():
+    """User named www — Agent workset(adopt) creates that Host only."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.case_workset import resolve_and_admit_workset_hosts
+
+    created_id = _aid(9)
+    ctx = _ctx_with_passive_hosts("www.example.com", "cdn.example.com")
+    www_id = _by_host(ctx)["www.example.com"]["id"]
+    created = SimpleNamespace(id=__import__("uuid").UUID(created_id), address="www.example.com")
+
+    async def run():
+        with (
+            patch("app.services.owner_services.list_assets_by_identity", new=AsyncMock(return_value=[])),
+            patch("app.api.assets.upsert_discovered_asset", new=AsyncMock(return_value=created)),
+        ):
+            return await resolve_and_admit_workset_hosts(
+                object(),
+                user_id="u",
+                conversation_id="c",
+                context=ctx,
+                host_keys=["www.example.com"],
+                allow_create=True,
+                match_resolved_hosts=True,
+            )
+
+    admitted = asyncio.run(run())
+    ctx2 = admitted["context"]
+    by = _by_host(ctx2)
+    assert admitted["adopted_t_host_ids"] == [www_id]
+    assert by["www.example.com"]["status"] == "adopted"
+    assert by["cdn.example.com"]["status"] == "proposed"
+    assert created_id in (ctx2["task"]["scope"].get("asset_ids") or [])
+    assert "cdn.example.com" not in (ctx2["task"]["scope"].get("allow") or [])
 

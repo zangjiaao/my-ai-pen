@@ -146,7 +146,7 @@ Agent surface is **`fact`** (same tool as this-task process keys). Host/Service 
 
 | `fact` op | Role |
 |-----------|------|
-| `upsert` | This-task `fact_key` plus living Intel when hang is known (`asset_id`, or the single on-ledger Scope Host). `kind` + summary + body. Harness stamps Intel id/audit. |
+| `upsert` | This-task `fact_key` plus living Intel when hang is known (`asset_id`, or the single on-ledger Scope Host). `kind` + summary + body. Harness stamps Intel id/audit. Intel-source HTTP 5xx / this-burst recon snapshot stays a this-task key (e.g. `intel/crt_sh`) — not a Host hang, not operator chat. |
 | `list` | Living Intel + this-task fact index. Never returns forgotten. |
 | `get` | Living Intel `id` or local `fact_key`. Forgotten: not found. Each successful Intel get increments `access_count`. |
 | `forget` | Intel `id` + **`reason`** (Agent required). Hard drop. `forgotten_by=agent`. |

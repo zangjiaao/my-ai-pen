@@ -485,7 +485,7 @@ export function formatCaseContextInjection(
         : "Parked hosts are not Case Surface coverage and are not Owner Hosts. No Host means no Intel hang. Do not probe until the user adopts or confirms Case intake.",
     );
     lines.push(
-      "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body; optional workset_item_ids). Do not only say 等待指示 or free-text A/B/C/D.",
+      "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body). When an option admits hosts, bind those rows' workset_item_ids — the platform adopts them. Do not platform_create_asset to enact a Scope option. Do not only say 等待指示 or free-text A/B/C/D.",
     );
     for (const item of open) {
       const id = item.id ? `id=${item.id}` : "id=?";

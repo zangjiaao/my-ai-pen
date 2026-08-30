@@ -726,7 +726,7 @@ async def put_conversation_asset_intake(
         put_asset_intake,
     )
 
-    c = await _get_conv(conv_id, current_user, db)
+    c = await _get_conv(conv_id, current_user, db, for_update=True)
     payload = body if isinstance(body, dict) else {}
     mode = str(payload.get("mode") or "").strip().lower()
     if mode not in {"enroll_group", "ask"}:
@@ -789,8 +789,9 @@ async def patch_workset_item(
 ):
     """Host-gated Workset item update (status / in_progress baton). Agent cannot self-adopt.
 
-    Spec #311: t_host adopt expands Scope.allow / assets (same spirit as next-scope);
-    never mark t_host adopted without Scope update.
+    Spec #311: t_host adopt expands Scope.allow / assets (same spirit as next-scope)
+    only after unique Host resolve/create (0 create, 1 reuse, 2+ stay proposed).
+    Never mark t_host adopted without a Host id and Scope `asset_ids`.
 
     User adopt (and in_progress=true 推进) takes the single in-progress baton and
     stamps expert(+Graph|Free) from Case task + Participant Session for US3 UI.
@@ -798,17 +799,18 @@ async def patch_workset_item(
     from app.services.case_workset import (
         adopt_item,
         annotation_fields_from_context,
-        expand_task_scope_for_host,
         get_workset,
         host_expand_fields_from_item,
         project_workset_for_api,
         put_workset,
+        resolve_and_admit_workset_hosts,
         scope_hosts_from_task,
         take_in_progress_baton,
         update_item_status,
+        workset_host_admission_error,
     )
 
-    c = await _get_conv(conv_id, current_user, db)
+    c = await _get_conv(conv_id, current_user, db, for_update=True)
     ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
     ws = get_workset(ctx)
     task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
@@ -824,53 +826,49 @@ async def patch_workset_item(
         target = next((i for i in ws["items"] if isinstance(i, dict) and str(i.get("id")) == item_id), None)
         if not target:
             raise HTTPException(400, "not_found")
-        # t_host: expand Scope before/with adopt (confirm path). Refuse adopt if expand fails.
         expand_fields = host_expand_fields_from_item(target)
         if expand_fields:
-            expanded_task, expand_err = expand_task_scope_for_host(
-                task,
-                host=expand_fields["host"],
-                port=expand_fields.get("port"),
-                urls=expand_fields.get("urls"),
+            register_assets = body.get("register_assets")
+            if register_assets is None:
+                register_assets = True
+            user_id = uuid.UUID(current_user["user_id"])
+            admitted = await resolve_and_admit_workset_hosts(
+                db,
+                user_id=user_id,
+                conversation_id=c.id,
+                context=ctx,
+                workset_item_ids=[item_id],
+                allow_create=bool(register_assets),
+                match_resolved_hosts=False,
             )
-            if expand_err:
-                raise HTTPException(400, f"scope_expand_failed:{expand_err}")
-            task = expanded_task
-            ctx["task"] = task
-            scope_hosts = scope_hosts_from_task(task)
+            fail = workset_host_admission_error(
+                item_id,
+                adopted_t_host_ids=admitted["adopted_t_host_ids"],
+                admission_ambiguous=admitted["admission_ambiguous"],
+            )
+            if fail:
+                raise HTTPException(400, fail)
+            ctx = admitted["context"]
+            ws = get_workset(ctx)
+            task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+            item = next((i for i in ws["items"] if isinstance(i, dict) and str(i.get("id")) == item_id), None)
+            aid = str((admitted["asset_id_by_host"] or {}).get(expand_fields["host"]) or "").strip()
+            if aid:
+                registered_asset = {
+                    "id": aid,
+                    "address": expand_fields["host"],
+                    "port": expand_fields.get("port"),
+                }
             scope_expanded = {
                 "host": expand_fields["host"],
                 "port": expand_fields.get("port"),
                 "allow": (task.get("scope") or {}).get("allow"),
             }
-            # Register asset (same spirit as POST next-scope; user confirm).
-            register_assets = body.get("register_assets")
-            if register_assets is None:
-                register_assets = True
-            if register_assets:
-                try:
-                    from app.api.assets import upsert_discovered_asset
-
-                    user_id = uuid.UUID(current_user["user_id"])
-                    port = expand_fields.get("port")
-                    urls = expand_fields.get("urls") or []
-                    asset = await upsert_discovered_asset(
-                        db,
-                        user_id=user_id,
-                        address=expand_fields["host"],
-                        open_ports=[port] if port else None,
-                        urls=urls if urls else None,
-                        port=port,
-                        conversation_id=c.id,
-                        source="user_workset_host_adopt",
-                        allow_create=True,
-                    )
-                    if asset:
-                        registered_asset = {"id": str(asset.id), "address": asset.address, "port": port}
-                except Exception as e:
-                    # Scope already expanded; asset registration failure must not orphan adopt.
-                    print(f"[api] workset t_host asset register error: {e}")
-        ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
+            err = None
+        elif str(target.get("family") or "") == "t_host":
+            raise HTTPException(400, "host_unresolved")
+        else:
+            ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
         # Spec #311 US3: user adopt takes the in-progress baton so expert(+Graph) lights.
         if not err and item:
             ann = annotation_fields_from_context(ctx)
@@ -947,7 +945,7 @@ async def reorder_workset(
     """User reorder of open 下一步 items."""
     from app.services.case_workset import get_workset, project_workset_for_api, put_workset, reorder_items
 
-    c = await _get_conv(conv_id, current_user, db)
+    c = await _get_conv(conv_id, current_user, db, for_update=True)
     ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
     ordered_ids = body.get("ordered_ids") or body.get("ids") or []
     if not isinstance(ordered_ids, list):
@@ -983,7 +981,7 @@ async def start_next_scope(
     from app.services.expert_offers import normalize_pack_id
     from app.ws import router as ws_router
 
-    c = await _get_conv(conv_id, current_user, db)
+    c = await _get_conv(conv_id, current_user, db, for_update=True)
     user_id = uuid.UUID(current_user["user_id"])
     raw_hosts = body.get("hosts") or body.get("candidates") or []
     if not isinstance(raw_hosts, list) or not raw_hosts:
@@ -1135,9 +1133,19 @@ async def _audit(db: AsyncSession, user_id: uuid.UUID, action: str, resource_typ
     ))
 
 
-async def _get_conv(conv_id: str, current_user: dict, db: AsyncSession) -> Conversation:
-    result = await db.execute(select(Conversation).where(
-        Conversation.id == uuid.UUID(conv_id), Conversation.user_id == uuid.UUID(current_user["user_id"])))
+async def _get_conv(
+    conv_id: str,
+    current_user: dict,
+    db: AsyncSession,
+    *,
+    for_update: bool = False,
+) -> Conversation:
+    """Load the Case. Workset/Scope writers must pass for_update=True."""
+    stmt = select(Conversation).where(
+        Conversation.id == uuid.UUID(conv_id), Conversation.user_id == uuid.UUID(current_user["user_id"]))
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
     c = result.scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Conversation not found")

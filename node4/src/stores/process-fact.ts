@@ -167,6 +167,7 @@ export function formatProcessFactIndexInjection(
     "Short summaries only. **Do not invent detail from a summary.** Call `fact(op=get, fact_key=...)` or `read` the body under `facts/` when you need repro steps, ports, auth state, or failed probes.",
     "Process facts ≠ product vulns: book confirmed issues with `finding(confirm)` + grounded proof. Host IP/domain asset rows are **user-created only** — facts must not create assets.",
     "Write-as-you-go: when you **confirm** a new cognition, upsert a fact immediately (do not wait for session end).",
+    "Intel-source HTTP failures belong in this index (not operator chat).",
   ];
   for (const e of slice) {
     const cat = e.category ? ` [${e.category}]` : "";

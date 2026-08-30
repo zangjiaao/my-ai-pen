@@ -430,6 +430,10 @@ client.on("user_input", async (message) => {
   resolveApproval(requestId, response, {
     selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
     workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
+    adopted_t_host_ids: message.adopted_t_host_ids ?? message.adoptedTHostIds,
+    live_adopted_t_host_ids: message.live_adopted_t_host_ids ?? message.liveAdoptedTHostIds,
+    scope: message.scope,
+    admission_ambiguous: message.admission_ambiguous ?? message.admissionAmbiguous,
     text: message.text,
     custom_text: message.custom_text ?? message.customText,
     answers: message.answers,

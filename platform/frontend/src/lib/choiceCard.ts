@@ -310,20 +310,23 @@ export function parseWizardQuestions(
   return [projectedAuthorizeQuestion(v.value)];
 }
 
-/** Map wizard submit on an authorize-family card to the Session decision token. */
+/** Map wizard submit on an authorize-family card to the Session decision token.
+ * Custom text is direction only — it does not authorize bound asset_ids.
+ */
 export function mapAuthorizeDecision(
   selected_option_ids?: string[] | null,
   custom_text?: string | null,
-): "authorize" | "cancel" | null {
+): "authorize" | "cancel" | "answered" | null {
   const ids = (Array.isArray(selected_option_ids) ? selected_option_ids : [])
     .map((id) => String(id || "").trim().toLowerCase())
     .filter(Boolean);
   if (ids.includes(AUTHORIZE_OPTION_NO) || ids.includes("deny") || ids.includes("reject")) {
     return "cancel";
   }
-  if (ids.includes(AUTHORIZE_OPTION_YES) || ids.includes("yes") || nonEmptyString(custom_text)) {
+  if (ids.includes(AUTHORIZE_OPTION_YES) || ids.includes("yes")) {
     return "authorize";
   }
+  if (nonEmptyString(custom_text)) return "answered";
   return null;
 }
 
@@ -597,4 +600,13 @@ export type ChoiceDecision =
 export function isChoiceDecisionFinal(decision: string | null | undefined): boolean {
   const d = nonEmptyString(decision).toLowerCase();
   return d === "authorize" || d === "cancel" || d === "answered" || d === "confirm_options";
+}
+
+/** Frozen-card footer. `answered` is dialogue-continue, not a selection. */
+export function choiceCardHistoryFooter(decision: string | null | undefined): string {
+  const d = nonEmptyString(decision).toLowerCase();
+  if (d === "confirm_options" || d === "authorize") return "已选择";
+  if (d === "cancel") return "已取消";
+  if (d === "answered") return "已通过对话继续";
+  return "";
 }

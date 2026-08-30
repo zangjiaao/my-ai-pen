@@ -2550,7 +2550,7 @@ export default function ConversationPage() {
 
   const handleDecision = useCallback((
     requestId: string,
-    decision: "authorize" | "cancel",
+    decision: "authorize" | "cancel" | "answered",
     extras?: { text?: string },
   ) => {
     if (!activeId || !requestId) return;

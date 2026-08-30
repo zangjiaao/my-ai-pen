@@ -67,6 +67,20 @@ assert.deepEqual(nextResult.selected_option_ids, ["a", "b"]);
 assert.deepEqual(nextResult.workset_item_ids, ["w1"]);
 assert.equal(nextResult.text, "已选择：A、B");
 
+const waitAdopted = registerApprovalWait("req-3c", "conv-1");
+assert.equal(
+  resolveApproval("req-3c", "confirm_options", {
+    selected_option_ids: ["a"],
+    workset_item_ids: ["w-surface", "w-host"],
+    adopted_t_host_ids: ["w-host"],
+    scope: { allow: ["example.com"], asset_ids: ["aid-1"] },
+  }),
+  true,
+);
+const adoptedResult = await waitAdopted;
+assert.deepEqual(adoptedResult.adopted_t_host_ids, ["w-host"]);
+assert.deepEqual(adoptedResult.scope, { allow: ["example.com"], asset_ids: ["aid-1"] });
+
 const waitCustom = registerApprovalWait("req-3b", "conv-1");
 assert.equal(
   resolveApproval("req-3b", "confirm_options", {
@@ -80,7 +94,20 @@ const customResult = await waitCustom;
 assert.equal(customResult.decision, "confirm_options");
 assert.equal(customResult.custom_text, "先做登录口");
 
-// Spec #312 L9: secondary freeze unblocks as answered (not authorize).
+const waitLive = registerApprovalWait("req-3d", "conv-1");
+assert.equal(
+  resolveApproval("req-3d", "confirm_options", {
+    selected_option_ids: [],
+    custom_text: "之纳入www.example.com",
+    live_adopted_t_host_ids: ["ws_www"],
+    scope: { allow: ["www.example.com"] },
+  }),
+  true,
+);
+const liveCustom = await waitLive;
+assert.deepEqual(liveCustom.live_adopted_t_host_ids, ["ws_www"]);
+assert.equal(liveCustom.adopted_t_host_ids, undefined);
+
 const waitAnswered = registerApprovalWait("req-4", "conv-1");
 assert.equal(resolveApproval("req-4", "answered"), true);
 assert.equal((await waitAnswered).decision, "answered");

@@ -36,6 +36,7 @@ from app.services.asset_ledger import (
     extract_urls,
     ensure_properties_aliases,
     replace_properties_aliases,
+    identity_match_kind,
     infer_asset_type,
     is_valid_ledger_address,
     merge_discover_properties,
@@ -954,21 +955,39 @@ async def delete_asset(
     return {"ok": True, "unlinked_vulnerabilities": unlinked}
 
 
+async def list_assets_by_primary_address(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    address: str,
+) -> list[Asset]:
+    """All Owner Hosts with this exact primary address (0 / 1 / 2+). Never first-match."""
+    host, _ = split_host_port(address)
+    if not host:
+        host = normalize_address(address)
+    if not host:
+        return []
+    return list(
+        (
+            await db.execute(
+                select(Asset).where(Asset.user_id == user_id, Asset.address == host)
+            )
+        ).scalars().all()
+    )
+
+
 async def find_asset_by_host(
     db: AsyncSession,
     user_id: uuid.UUID,
     address: str,
 ) -> Asset | None:
-    """Match ledger row by exact normalized host (IP or domain)."""
-    host, _ = split_host_port(address)
-    if not host:
-        host = normalize_address(address)
-    if not host:
+    """Match ledger row by exact normalized host (IP or domain).
+
+    0 → None, 1 → that row, 2+ → None (ambiguous). Does not raise MultipleResultsFound.
+    """
+    rows = await list_assets_by_primary_address(db, user_id, address)
+    if identity_match_kind(len(rows)) != "unique":
         return None
-    result = await db.execute(
-        select(Asset).where(Asset.user_id == user_id, Asset.address == host)
-    )
-    return result.scalar_one_or_none()
+    return rows[0]
 
 
 # Backward-compatible alias for callers still using identity name.
@@ -1014,7 +1033,11 @@ async def upsert_discovered_asset(
         raise ValueError("invalid asset host")
     port_norm = normalize_port(port) or addr_port
 
-    asset = await find_asset_by_host(db, user_id, host)
+    rows = await list_assets_by_primary_address(db, user_id, host)
+    kind = identity_match_kind(len(rows))
+    if kind == "ambiguous":
+        return None
+    asset = rows[0] if kind == "unique" else None
     if not asset and not allow_create:
         return None
 

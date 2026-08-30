@@ -375,7 +375,7 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("workset")) {
     runtimeParts.push(
-      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped). set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake or adopts. No Host means no Intel hang. A missing optional intel source is not a failure.",
+      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped; status=pending means proposed). set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake, adopts a Surface card, or confirms a Choice Card that binds those rows (workset_item_ids / authorize asset_ids). Remaining proposed t_host is waiting on the user — not Agent unresolved work. After propose: one next_steps with binds, one operator summary, then stop. Do not list/get to prove adoption; do not narrate runtime continues. Do not platform_create_asset or emit a second authorize card to clear them. No Host means no Intel hang. A missing optional intel source is not a failure.",
     );
   }
   if (pack.recipeDir) {

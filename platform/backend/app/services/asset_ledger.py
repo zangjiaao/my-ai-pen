@@ -333,6 +333,28 @@ def identity_match_kind(hit_count: int) -> str:
     return "ambiguous"
 
 
+def unique_asset_id_by_identity_keys(rows: list[dict] | None) -> dict[str, str]:
+    """host key → asset id only when exactly one Host owns that primary∪alias.
+
+    Ambiguous keys (2+ Hosts) are omitted — never setdefault/first-match.
+    """
+    buckets: dict[str, list[str]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id") or "").strip()
+        if not aid:
+            continue
+        for key in identity_values(row.get("address"), row.get("properties")):
+            k = str(key or "").strip().lower()
+            if not k:
+                continue
+            ids = buckets.setdefault(k, [])
+            if aid not in ids:
+                ids.append(aid)
+    return {k: ids[0] for k, ids in buckets.items() if len(ids) == 1}
+
+
 def extract_aliases(properties: object, primary_address: object = None) -> list[str]:
     """Extra addresses (IP/domain) beyond primary — low-friction multi-homing."""
     props = properties if isinstance(properties, dict) else {}

@@ -31,7 +31,7 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 2. **One shared chrome** (`ChoiceCard`): title, markdown body/preamble, options, primary CTA.  
    - **`authorize` / handoff** preset → today’s ConfirmCard behavior (授权 / 取消).  
    - **`next_steps` preset** → Approval wizard chrome (Spec #450): radio/check rows, **custom last-row option** (may stand alone), Send submits, ✕ cancels. Single-select default (Spec #313). Confirm continues the Session.  
-3. Each next_steps option has **title + required body** (why / what / success shape) and **optional** `workset_item_ids[]` (0..n) to bind Case Workset rows without listing every API as its own chip. Options are **agent-authored from prior work**; emit **only when valuable/purpose-clear** (may omit). Platform rejects empty/broken cards — does **not** supply fixed template options.  
+3. Each next_steps option has **title + required body** (why / what / success shape) and **optional** `workset_item_ids[]` (0..n) to bind Case Workset rows without listing every API as its own chip. Options are **agent-authored from prior work**; emit **only when valuable/purpose-clear** (may omit). After parking hosts: **one** next_steps with binds, one operator summary, then stop — do not `workset(list|get)` to prove adoption. Platform rejects empty/broken cards — does **not** supply fixed template options.
 4. User confirm → **structured `user_decision`** (`selected_option_ids` + full `text` including option title/body + optional supplement) + visible “已选择…” summary; demand is **FIFO Session queue** same as user text (#277 / #313).  
 5. Card **stays in history**; after user continues the conversation without using the card (or after answering), **controls become read-only**.  
 6. **Retire** right-panel Next and mechanical `WorksetChoiceBar` / `WorksetNextList` as user-facing choice UIs.  
@@ -129,6 +129,18 @@ user_decision:
   decision: "authorize" | "cancel" | "answered" | "confirm_options"
   selected_option_ids?: string[]  # next_steps
   # platform may expand selected_option_ids → workset_item_ids for task_assign
+  # authorize asset_ids or those binds → resolve Host first (unique primary∪alias:
+  # 0 create, 1 reuse, 2+ stay proposed), then adopt matching proposed t_host
+  # (same as HTTP Surface 纳入 PATCH) and expand this Case Scope; unselected siblings stay proposed.
+  # No Host id (create fail, alias 2+, register_assets=false with no unique hit) → stay proposed.
+  # Host Scope write and Workset adopt are one persist (Conversation row lock).
+  # Matching proposed t_host + unique Host: reuse (not "missing Host"), adopt, write asset_ids together.
+  # Adopt fail / 2+: stay proposed; do not write Scope for that Host (no split ledger).
+  # Failed adopt: tell the truth once; do not list_assets or emit a second decision card — Surface 纳入 remains.
+  # Custom answer: platform does not NLP. Agent calls workset(adopt) only for still-proposed
+  # names the user newly named. Live adopted Hosts (Surface / bound click) stay admitted.
+  # user_input still carries this-card adopted_t_host_ids when a bound click already admitted.
+  # plus live Workset/Scope (Surface 纳入 already on the Case). JWT must own the Case.
 ```
 
 (Exact wire names may alias existing `confirm_card` / `request_user_decision` if migration is cheaper—behavior locks above win.)

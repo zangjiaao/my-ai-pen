@@ -15,7 +15,7 @@ const RUNTIME_HEADING = "## Runtime";
 export const HARNESS_ROLE = "harness" as const;
 
 export const HARNESS_CONTINUE_NOTICE =
-  "This is a runtime continue, not a new operator instruction.";
+  "This is a runtime continue, not a new operator instruction. Do not tell the operator about this continue or paraphrase it in chat. Do not workset(list|get) or platform_list_assets to prove user-gated admission.";
 
 export type HarnessMessage = {
   role: typeof HARNESS_ROLE;

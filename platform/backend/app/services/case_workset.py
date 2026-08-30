@@ -1,8 +1,10 @@
 """Case Workset («下一步») — durable multi-discovery parking lot (Spec #311).
 
-Host-gated store on conversation.context["workset"]. Agent may propose only;
-adopt is user, Goal mechanical valve (in-scope t_surface), or Case asset-intake
-policy (user-delegated enroll_group). Never silent Scope/RoE expand.
+Host-gated store on conversation.context["workset"]. Agent may propose from
+recon; adopt after the user names or selects hosts (`workset(adopt)` by
+hostname, Surface 纳入, authorize asset_ids, next_steps binds), Goal
+mechanical valve (in-scope t_surface), or Case asset-intake enroll_group.
+Never silent Scope/RoE expand from recon alone.
 
 Families V1:
   t_surface — in-Scope deepen (adopt ≠ expand rights)
@@ -16,7 +18,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.asset_ledger import is_valid_ledger_address, split_host_port
+from app.services.asset_ledger import (
+    build_scope_allow,
+    identity_values,
+    is_valid_ledger_address,
+    split_host_port,
+)
 
 WORKSET_KEY = "workset"
 FAMILIES = frozenset({"t_surface", "t_host"})
@@ -67,6 +74,28 @@ def get_workset(context: object) -> dict[str, Any]:
         "items": cleaned,
         "goal": dict(goal) if goal else None,
     }
+
+
+def live_admission_from_context(context: object) -> dict[str, Any]:
+    """This-Case adopted t_host ids + task.scope. Card prose is not a source."""
+    ctx = context if isinstance(context, dict) else {}
+    ws = get_workset(ctx)
+    adopted: list[str] = []
+    seen: set[str] = set()
+    for item in ws.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("family") or "") != "t_host":
+            continue
+        if str(item.get("status") or "") != "adopted":
+            continue
+        iid = str(item.get("id") or "").strip()
+        if iid and iid not in seen:
+            seen.add(iid)
+            adopted.append(iid)
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope = dict(task.get("scope") or {}) if isinstance(task.get("scope"), dict) else {}
+    return {"adopted_t_host_ids": adopted, "scope": scope}
 
 
 def put_workset(context: dict | None, workset: dict[str, Any]) -> dict[str, Any]:
@@ -1011,6 +1040,346 @@ def host_expand_fields_from_item(item: dict[str, Any]) -> dict[str, Any] | None:
     return {"host": host, "port": port_s, "urls": [str(u) for u in urls if str(u or "").strip()]}
 
 
+def _normalize_host_key(value: object) -> str:
+    host, _ = split_host_port(value)
+    return (host or "").strip().lower()
+
+
+def parse_agent_adopt_request(payload: object) -> tuple[list[str], list[str], str | None]:
+    """Agent workset(adopt): hostnames and/or Workset item ids. Empty both is an error.
+
+    Does not scan card/chat prose. Caller must pass the names or ids the user chose.
+    """
+    if not isinstance(payload, dict):
+        return [], [], "hosts_or_ids_required"
+    hosts: list[str] = []
+    seen_h: set[str] = set()
+
+    def add_host(raw: object) -> None:
+        if isinstance(raw, list):
+            for x in raw:
+                add_host(x)
+            return
+        if raw is None:
+            return
+        blob = str(raw).strip()
+        if not blob:
+            return
+        parts = [p for p in blob.replace(";", ",").split(",") if str(p).strip()]
+        if not parts:
+            parts = [blob]
+        for part in parts:
+            key = _normalize_host_key(part)
+            if key and key not in seen_h:
+                seen_h.add(key)
+                hosts.append(key)
+
+    ids: list[str] = []
+    seen_i: set[str] = set()
+
+    def add_id(raw: object) -> None:
+        if isinstance(raw, list):
+            for x in raw:
+                add_id(x)
+            return
+        if raw is None:
+            return
+        for part in str(raw).replace(";", ",").split(","):
+            iid = part.strip()
+            if iid and iid not in seen_i:
+                seen_i.add(iid)
+                ids.append(iid)
+
+    add_host(payload.get("hosts"))
+    add_host(payload.get("host"))
+    add_id(payload.get("item_ids"))
+    add_id(payload.get("ids"))
+    add_id(payload.get("workset_item_ids"))
+    if not hosts and not ids:
+        return [], [], "hosts_or_ids_required"
+    return hosts, ids, None
+
+
+def select_t_host_ids_for_user_admission(
+    workset: dict[str, Any],
+    *,
+    workset_item_ids: list[str] | None = None,
+    host_keys: list[str] | None = None,
+) -> list[str]:
+    """Proposed t_host ids the user just allowed (explicit binds + host-key match).
+
+    Does not guess from option prose. Multiple proposed rows for the same host
+    all adopt. t_surface binds are ignored (not Host admission).
+    """
+    items = workset.get("items") if isinstance(workset.get("items"), list) else []
+    by_id = {
+        str(i.get("id") or ""): i
+        for i in items
+        if isinstance(i, dict) and str(i.get("id") or "").strip()
+    }
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add_if_proposed_host(item_id: str) -> None:
+        item = by_id.get(item_id)
+        if not item:
+            return
+        if str(item.get("family") or "") != "t_host":
+            return
+        if str(item.get("status") or "") != "proposed":
+            return
+        if item_id in seen:
+            return
+        seen.add(item_id)
+        out.append(item_id)
+
+    for raw in workset_item_ids or []:
+        add_if_proposed_host(str(raw or "").strip())
+
+    wanted = {_normalize_host_key(raw) for raw in (host_keys or [])}
+    wanted.discard("")
+    if wanted:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fields = host_expand_fields_from_item(item)
+            if not fields:
+                continue
+            if fields["host"] in wanted:
+                add_if_proposed_host(str(item.get("id") or "").strip())
+    return out
+
+
+def apply_user_host_admission(
+    context: dict | None,
+    *,
+    workset_item_ids: list[str] | None = None,
+    host_keys: list[str] | None = None,
+    asset_id_by_host: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """User authorize / next_steps / HTTP Surface 纳入: adopt matching t_host and expand Case Scope.
+
+    Actor is user. Does not create Owner Hosts (caller must resolve/create first).
+    Items without a unique asset_id stay proposed. Siblings not named by binds
+    or host_keys stay proposed.
+    """
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    ws = get_workset(ctx)
+    ids = select_t_host_ids_for_user_admission(
+        ws,
+        workset_item_ids=workset_item_ids,
+        host_keys=host_keys,
+    )
+    if not ids:
+        return ctx, []
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    by_host = asset_id_by_host if isinstance(asset_id_by_host, dict) else {}
+    adopted: list[str] = []
+    by_id = {
+        str(i.get("id") or ""): i
+        for i in (ws.get("items") or [])
+        if isinstance(i, dict)
+    }
+    for item_id in ids:
+        item = by_id.get(item_id)
+        fields = host_expand_fields_from_item(item) if item else None
+        if not fields:
+            continue
+        aid = str(by_host.get(fields["host"]) or "").strip()
+        if not aid:
+            continue
+        ws2, found, err = adopt_item(ws, item_id, actor="user")
+        if err or not found:
+            continue
+        ws = ws2
+        adopted.append(item_id)
+        task, _expand_err = expand_task_scope_for_host(
+            task,
+            host=fields["host"],
+            port=fields.get("port"),
+            urls=fields.get("urls"),
+            asset_id=aid,
+        )
+    ctx["task"] = task
+    return put_workset(ctx, ws), adopted
+
+
+def workset_host_admission_error(
+    item_id: str,
+    *,
+    adopted_t_host_ids: list[str],
+    admission_ambiguous: list | None = None,
+) -> str | None:
+    """HTTP/WS: None if this row adopted; else a fail-closed code (Workset stays proposed)."""
+    wanted = str(item_id or "").strip()
+    if wanted and wanted in {str(x) for x in (adopted_t_host_ids or [])}:
+        return None
+    if admission_ambiguous:
+        return "admission_ambiguous"
+    return "host_unresolved"
+
+
+async def resolve_and_admit_workset_hosts(
+    db,
+    *,
+    user_id,
+    conversation_id,
+    context: dict | None,
+    workset_item_ids: list[str] | None = None,
+    host_keys: list[str] | None = None,
+    seed_by_host: dict[str, str] | None = None,
+    allow_create: bool = True,
+    match_resolved_hosts: bool = False,
+) -> dict[str, Any]:
+    """0 create / 1 reuse / 2+ skip, then adopt only rows with a Host id.
+
+    HTTP Surface 纳入: ``workset_item_ids`` only (``match_resolved_hosts=False``).
+    WS authorize: pass authorized ``seed_by_host`` + ``match_resolved_hosts=True``.
+    Create failure / ``allow_create=False`` with no unique hit → omit that host
+    (caller must not mark adopted or expand Scope).
+    """
+    from app.api.assets import upsert_discovered_asset
+    from app.services.asset_ledger import identity_match_kind
+    from app.services.owner_services import list_assets_by_identity
+
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    ws = get_workset(ctx)
+    selected = select_t_host_ids_for_user_admission(
+        ws,
+        workset_item_ids=workset_item_ids,
+        host_keys=host_keys,
+    )
+    by_host: dict[str, str] = {
+        str(k): str(v)
+        for k, v in (seed_by_host or {}).items()
+        if str(k or "").strip() and str(v or "").strip()
+    }
+    ambiguous: list[dict[str, Any]] = []
+    registered: list[dict[str, str]] = []
+    by_id = {
+        str(i.get("id") or ""): i
+        for i in (ws.get("items") or [])
+        if isinstance(i, dict)
+    }
+    for item_id in selected:
+        item = by_id.get(item_id)
+        fields = host_expand_fields_from_item(item) if item else None
+        if not fields:
+            continue
+        host = fields["host"]
+        if by_host.get(host):
+            continue
+        hits = await list_assets_by_identity(db, user_id, host)
+        kind = identity_match_kind(len(hits))
+        if kind == "unique":
+            by_host[host] = str(hits[0].id)
+            continue
+        if kind == "ambiguous":
+            ambiguous.append({
+                "host": host,
+                "asset_ids": [str(a.id) for a in hits],
+            })
+            continue
+        if not allow_create:
+            continue
+        try:
+            asset = await upsert_discovered_asset(
+                db,
+                user_id=user_id,
+                address=host,
+                open_ports=[fields["port"]] if fields.get("port") else None,
+                urls=fields.get("urls") or None,
+                port=fields.get("port"),
+                conversation_id=conversation_id,
+                source="user_workset_host_adopt",
+                allow_create=True,
+            )
+        except Exception as e:
+            print(f"[workset] host register error host={host}: {e}")
+            continue
+        if asset:
+            by_host[host] = str(asset.id)
+            registered.append({"id": str(asset.id), "address": str(getattr(asset, "address", host) or host)})
+    apply_host_keys = list(by_host.keys()) if match_resolved_hosts else None
+    ctx, adopted = apply_user_host_admission(
+        ctx,
+        workset_item_ids=workset_item_ids,
+        host_keys=apply_host_keys,
+        asset_id_by_host=by_host,
+    )
+    return {
+        "context": ctx,
+        "adopted_t_host_ids": adopted,
+        "admission_ambiguous": ambiguous,
+        "asset_id_by_host": by_host,
+        "registered": registered,
+    }
+
+
+def proposed_t_host_keys(workset: dict[str, Any] | None) -> set[str]:
+    """Normalized hosts that still have a proposed t_host row."""
+    out: set[str] = set()
+    items = workset.get("items") if isinstance(workset, dict) else None
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") != "proposed":
+            continue
+        fields = host_expand_fields_from_item(item)
+        if fields:
+            out.add(fields["host"])
+    return out
+
+
+def merge_authorized_hosts_into_scope(
+    context: dict | None,
+    *,
+    asset_rows: list[dict] | None,
+) -> dict[str, Any]:
+    """Union authorized Hosts into Scope only when no proposed t_host remains for that identity.
+
+    Same persist as adopt: if a matching t_host is still proposed, do not write Scope
+    for that Host (no split ledger). Hosts with no matching proposed row still enter Scope.
+    """
+    from app.services.choice_card import merge_authorized_host_scope, sync_task_asset_id_from_scope
+
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    remaining = proposed_t_host_keys(get_workset(ctx))
+    allow_rows: list[dict[str, Any]] = []
+    asset_ids: list[str] = []
+    for row in asset_rows or []:
+        if not isinstance(row, dict):
+            continue
+        aid = str(row.get("id") or "").strip()
+        if not aid:
+            continue
+        keys = {
+            str(k).strip().lower()
+            for k in identity_values(row.get("address"), row.get("properties"))
+            if str(k or "").strip()
+        }
+        if keys & remaining:
+            continue
+        asset_ids.append(aid)
+        allow_rows.append({
+            "address": row.get("address"),
+            "properties": row.get("properties") or {},
+        })
+    if not asset_ids:
+        return ctx
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    task["scope"] = merge_authorized_host_scope(
+        task.get("scope") if isinstance(task.get("scope"), dict) else {},
+        allow=build_scope_allow(allow_rows),
+        asset_ids=asset_ids,
+    )
+    sync_task_asset_id_from_scope(task)
+    ctx["task"] = task
+    return ctx
+
+
 # --- Goal outer loop ---
 
 GOAL_TERMINALS = frozenset({
@@ -1208,6 +1577,14 @@ def project_workset_for_api(
     return out
 
 
+def _normalize_agent_workset_status(status: str) -> str:
+    """Agent 'pending' means proposed admission, not a third status."""
+    st = str(status or "").strip().lower()
+    if st in {"pending", "waiting", "admission"}:
+        return "proposed"
+    return st
+
+
 def list_workset_for_agent(
     workset: dict[str, Any],
     *,
@@ -1226,7 +1603,7 @@ def list_workset_for_agent(
     items = [dict(i) for i in (workset.get("items") or []) if isinstance(i, dict)]
     want_id = str(item_id or "").strip()
     fam = str(family or "").strip().lower()
-    st = str(status or "").strip().lower()
+    st = _normalize_agent_workset_status(status or "")
     q = str(needle or "").strip().lower()
     matched: list[dict[str, Any]] = []
     for item in items:
@@ -1288,7 +1665,7 @@ def list_workset_for_agent(
         "cap": cap_n,
         "note": (
             "Case Workset is pending admission — not Host, not Surface coverage, not Intel. "
-            "Adopt is a user action unless Case asset-intake enroll_group applies. "
+            "status=pending means proposed. Adopt is a user action unless Case asset-intake enroll_group applies. "
             "Parked hosts must not be probed or hung as Intel until adopt or enroll."
         ),
     }
@@ -1619,6 +1996,7 @@ async def materialize_intake_hosts(
                 reason="Case asset-intake policy (user-delegated enroll_group)",
                 group_id=policy.get("group_id"),
                 group_name=policy.get("group_name"),
+                commit=False,
             )
             asset_id = _first_host_asset_id(created)
             if not asset_id:

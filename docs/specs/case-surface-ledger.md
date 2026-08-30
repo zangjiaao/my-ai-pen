@@ -17,6 +17,7 @@
 | 2026-08-10 | Field failure: Case finished with Findings + Traffic, Surface empty; Agent recon = prior path lists + curl, not scientific crawl; finding→booked failed on non-URL `location` |
 | 2026-08-10 | **v2 grill (this amendment):** Surface is **Agent working memory**, **Runtime-passive from Traffic**, completion via **finding confirm**; no complete-tag without test traffic |
 | 2026-08-10 | **v3 operator model (amend):** [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) — UI **NEW** (inventory novelty) + **TESTED** + finding tags; no BOOK/SEEN/PRIOR chips; method chips off tree; priors ≠ coverage. **v4 (#518):** TESTED is Agent coverage work-state, not this-Case traffic. Internal settle may keep seen/touched/booked expand–contract. |
+| 2026-08-30 | `surface(op=mark|unmark|skip)` accepts `location` (one) or `locations[]` (many, same coverage / skip reason). Cap = upsert batch max. Mixed fail-closed: admitted rows write; foreign origins return per-item errors. |
 
 ---
 
@@ -225,7 +226,7 @@ seen  →  touched  →  booked
 - **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
 - **Scope gate (product amend, Spec #541):** do **not** settle Surface for origins outside TARGET / `scope.allow`. **Empty or missing structured Scope is fail-closed** (do not settle). Traffic audit may still keep the exchange. `surface` write ops (mark / upsert) on a non-admitted origin fail closed — when Scope names an explicit port **on that host**, host+port must match (default `:443` in the allow string is still explicit). Host-only siblings in a mixed allow list stay whole-host. No hostname denylist of intel vendors.
 - **Garbage path:** unexpanded `${…}` / `{{…}}` in path → do not settle.
-- **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
+- **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark: `location` or `locations[]`), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
 
 **Status vocabulary (locked):** keep **`seen` / `touched` / `booked`** (not collapsed). First observation → `seen`; later real request on same identity → `touched`; finding confirm → `booked`.
 
@@ -302,7 +303,7 @@ WS: `surface_upsert` by identity (retain).
 
 ### D10 — Frontend
 
-- Surface **home** is Host cards (Workset `t_host` + admitted Case Hosts). Admitted = Scope `asset_ids` or a **unique** primary∪alias match on `target` / `scope.allow` (ambiguous keys admit no one). Same machine (alias) is one card. Path tree = `surface_ledger` identities **for that host** (v1 #375 path SoT still stands). Tool-platform origins are omitted from the card list (Spec #541).
+- Surface **home** is Host cards (Workset `t_host` + admitted Case Hosts). Admitted = Scope `asset_ids` or a **unique** primary∪alias match on `target` / `scope.allow` (ambiguous keys admit no one), or a user-adopted Workset `t_host` (Surface 纳入 HTTP PATCH, authorize `asset_ids`, or next_steps `workset_item_ids` — same 0 create / 1 reuse / 2+ stay proposed; no Host id → not adopted). Same machine (alias) is one card. Path tree = `surface_ledger` identities **for that host** (v1 #375 path SoT still stands). Tool-platform origins are omitted from the card list (Spec #541).
 - Empty with zero traffic may still be honest at t0; empty after heavy traffic is a settle bug.
 
 ### D11 — Graph gates

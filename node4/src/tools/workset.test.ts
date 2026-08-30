@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { ALL_NODE4_TOOL_FACTORIES } from "./index.js";
 import { SUBAGENT_CHILD_TOOL_NAMES } from "../runtime/subagent-session.js";
-import { buildPassiveWorksetCandidate, createWorksetTool, filterWorksetForAgent, mergeStashIntoCaseList } from "./workset.js";
+import { buildPassiveWorksetCandidate, collectWorksetAdoptSelectors, createWorksetTool, filterWorksetForAgent, mergeStashIntoCaseList, normalizeAgentWorksetStatus } from "./workset.js";
 import type { ToolRuntime } from "../types.js";
 
 assert.equal(typeof ALL_NODE4_TOOL_FACTORIES.workset, "function");
@@ -47,6 +47,11 @@ assert.ok(
   if ("error" in other) throw new Error(other.error);
   assert.equal(other.intel_source, "other");
 }
+
+assert.equal(normalizeAgentWorksetStatus("pending"), "proposed");
+assert.equal(normalizeAgentWorksetStatus("waiting"), "proposed");
+assert.equal(normalizeAgentWorksetStatus("admission"), "proposed");
+assert.equal(normalizeAgentWorksetStatus("adopted"), "adopted");
 
 function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] } {
   const sent: Record<string, unknown>[] = [];
@@ -144,6 +149,9 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   const filtered = filterWorksetForAgent(both, { family: "t_host", needle: "mail" });
   assert.equal(filtered.total, 1);
   assert.equal(filtered.items[0]!.host, "mail.example.com");
+  const pending = filterWorksetForAgent(thinCase, { status: "pending" });
+  assert.equal(pending.total, 1);
+  assert.equal(pending.items[0]!.id, "ws-b");
 }
 
 {
@@ -201,6 +209,78 @@ function makeRuntime(): { runtime: ToolRuntime; sent: Record<string, unknown>[] 
   });
   const blockedText = (blocked as any).content?.[0]?.text || JSON.stringify(blocked);
   assert.match(blockedText, /not available during a Graph stage/);
+}
+
+{
+  const sel = collectWorksetAdoptSelectors({
+    hosts: "www.example.com, api.example.com",
+    item_ids: "ws_1",
+  });
+  assert.deepEqual(sel.hosts, ["www.example.com", "api.example.com"]);
+  assert.deepEqual(sel.item_ids, ["ws_1"]);
+  const empty = collectWorksetAdoptSelectors({ op: "adopt", question: "纳入 www" });
+  assert.deepEqual(empty.hosts, []);
+  assert.deepEqual(empty.item_ids, []);
+}
+
+{
+  const { runtime } = makeRuntime();
+  const tool = createWorksetTool(runtime);
+  const missing = await tool.execute!("a0", { op: "adopt" });
+  const missingText = (missing as any).content?.[0]?.text || JSON.stringify(missing);
+  assert.match(missingText, /hosts \(names the user chose\)/);
+}
+
+function jsonFetch(body: unknown, status = 200): typeof fetch {
+  return (async () =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+}
+
+{
+  const { runtime } = makeRuntime();
+  runtime.platformApi = { baseUrl: "http://ledger.test", nodeToken: "tok" } as any;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = jsonFetch({
+    ok: true,
+    adopted_t_host_ids: ["ws_www"],
+    scope: { allow: ["www.example.com"], asset_ids: ["aid-1"] },
+    admission_ambiguous: [],
+  });
+  try {
+    const tool = createWorksetTool(runtime);
+    const out = await tool.execute!("a1", { op: "adopt", hosts: "www.example.com" });
+    const text = (out as any).content?.[0]?.text || JSON.stringify(out);
+    assert.match(text, /"ok":\s*true/);
+    assert.match(text, /ws_www/);
+    assert.deepEqual((runtime.task as { scope?: { allow?: string[] } }).scope?.allow, ["www.example.com"]);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+}
+
+{
+  const { runtime } = makeRuntime();
+  runtime.platformApi = { baseUrl: "http://ledger.test", nodeToken: "tok" } as any;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = jsonFetch({
+    ok: false,
+    adopted_t_host_ids: [],
+    live_adopted_t_host_ids: ["ws_www"],
+    scope: { allow: ["www.example.com"] },
+    admission_ambiguous: [],
+  });
+  try {
+    const tool = createWorksetTool(runtime);
+    const out = await tool.execute!("a2", { op: "adopt", hosts: "www.example.com" });
+    const text = (out as any).content?.[0]?.text || JSON.stringify(out);
+    assert.match(text, /Live adopted Hosts remain/);
+    assert.doesNotMatch(text, /Do not claim Hosts were admitted/);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 }
 
 console.log("workset.test.ts: ok");

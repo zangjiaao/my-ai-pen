@@ -31,7 +31,7 @@ interface Props {
   platformAgentNodeId?: string | null;
   onDecision?: (
     requestId: string,
-    decision: "authorize" | "cancel",
+    decision: "authorize" | "cancel" | "answered",
     extras?: { text?: string },
   ) => void;
   /** Spec #313 / #450 next_steps confirm: option ids and/or custom-alone. */
@@ -556,6 +556,7 @@ function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbac
           disabled={choiceDisabled}
           onAuthorize={(text) => onDecision?.(content.request_id as string, "authorize", text ? { text } : undefined)}
           onCancel={() => onDecision?.(content.request_id as string, "cancel")}
+          onAnswered={(text) => onDecision?.(content.request_id as string, "answered", text ? { text } : undefined)}
           onConfirmOptions={(ids, extras) =>
             onConfirmOptions?.(String(content.request_id || ""), ids, content, extras)
           }

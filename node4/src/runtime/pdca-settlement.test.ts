@@ -121,10 +121,11 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(snap.admission.length, 1);
   assert.equal(snap.admission[0]!.id, "ws-h");
   const settled = settleParticipantTurn({ overlay: snap });
-  assert.equal(settled.verdict, "replan");
-  assert.ok(settled.unresolved.some((u) => u.kind === "workset" && u.id === "ws-h"));
+  assert.equal(settled.verdict, "completed");
+  assert.equal(settled.unresolved.length, 0);
   const live = formatLiveStateHarness(snap);
   assert.match(live, /Pending admission/);
+  assert.match(live, /not Agent work/);
   assert.match(live, /workset\(list\|get\)/);
 }
 
@@ -372,6 +373,8 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   const prompt = formatReplanPrompt(settled.delta, settled.unresolved);
   assert.match(prompt, /login/);
   assert.doesNotMatch(prompt, /"untested":\s*1/);
+  assert.match(prompt, /Do not tell the operator/);
+  assert.match(prompt, /workset\(list\|get\)/);
 }
 
 // --- Graph may not complete when base honesty still has unresolved work ---
@@ -407,7 +410,7 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
 }
 
-// --- This-burst workset(propose) stash is unresolved admission (not assign-time snapshot) ---
+// --- This-burst workset(propose) stash is visible admission (user-gated; not Agent unresolved) ---
 {
   const runtime = {
     task: { caseContext: { next_work: { workset_open: [] } } },
@@ -423,11 +426,11 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
       ],
     },
     todo: { openCount: () => 0 },
-  } as import("../types.js").ToolRuntime;
+  } as unknown as import("../types.js").ToolRuntime;
   const snap = await projectOverlayFromRuntime(runtime);
   assert.equal(snap.admission.length, 1);
   assert.match(snap.admission[0]!.id, /cdn\.example\.com/);
-  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
+  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "completed");
 }
 
 {
@@ -442,7 +445,7 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   const snap = projectLiveStateOverlay({ worksetOpen: merged });
   assert.equal(snap.admission.length, 1);
   assert.equal(snap.admission[0]!.id, "ws-open");
-  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "replan");
+  assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "completed");
 }
 
 console.log("pdca-settlement.test.ts: ok");
