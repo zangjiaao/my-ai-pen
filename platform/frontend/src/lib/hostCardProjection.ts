@@ -298,11 +298,10 @@ function admittedIdsFromScope(
 export function uniqueCardForHost(cards: HostCard[], host: string): HostCard | null {
   const k = normalizeHostKey(extractHost(host) || host);
   if (!k) return null;
-  const admitted = cards.filter((c) => c.admission === "admitted");
-  const primary = admitted.filter((c) => normalizeHostKey(c.address) === k);
-  if (primary.length === 1) return primary[0]!;
-  if (primary.length > 1) return null;
-  return uniqueIdentityMatch(admitted, k);
+  return uniqueIdentityMatch(
+    cards.filter((c) => c.admission === "admitted"),
+    k,
+  );
 }
 
 export function cardForFinding(cards: HostCard[], finding: Record<string, unknown>): HostCard | null {

@@ -9,6 +9,7 @@ import {
   hostCardIdForFinding,
   isValidLedgerAddress,
   projectHostCards,
+  uniqueCardForHost,
   type HostCard,
 } from "./hostCardProjection.ts";
 import type { SurfaceLedger } from "./surfaceModel.ts";
@@ -410,6 +411,42 @@ function intelApiLedger(): SurfaceLedger {
   assert.equal(a!.paths.some((p) => p.host === "a.lab"), true);
   assert.equal(b!.paths.length, 0);
   console.log("ok: ambiguous alias path does not dual-hang");
+}
+
+{
+  const cards = projectHostCards({
+    workset: { items: [] },
+    ownerAssets: [
+      { id: "h-a", address: "shared.lab" },
+      { id: "h-b", address: "b.lab", aliases: ["shared.lab"] },
+    ],
+    taskContext: { scope: { asset_ids: ["h-a", "h-b"] } },
+    surfaceLedger: {
+      version: 2,
+      surfaces: [
+        {
+          origin_key: "https://shared.lab:443",
+          path_key: "/x",
+          location: "https://shared.lab/x",
+          coverage: "untested",
+        },
+        {
+          origin_key: "https://b.lab:443",
+          path_key: "/",
+          location: "https://b.lab/",
+          coverage: "untested",
+        },
+      ],
+    },
+  });
+  const a = cards.find((c) => c.id === "h-a");
+  const b = cards.find((c) => c.id === "h-b");
+  assert.ok(a && b);
+  assert.equal(uniqueCardForHost(cards, "shared.lab"), null);
+  assert.equal(a!.paths.filter((p) => p.host === "shared.lab").length, 0);
+  assert.equal(b!.paths.filter((p) => p.host === "shared.lab").length, 0);
+  assert.equal(b!.paths.some((p) => p.host === "b.lab"), true);
+  console.log("ok: primary vs other Host alias is ambiguous");
 }
 
 console.log("hostCardProjection.test.ts: all ok");
