@@ -234,3 +234,33 @@ def test_remember_conversation_task_row_lock_does_not_clobber_admitted_scope():
     assert conv.context["task"]["scope"]["asset_ids"] == ["aid-www"]
     assert conv.context["workset"]["items"][0]["status"] == "adopted"
     assert conv.context["task"]["instruction"] == "继续"
+
+
+def test_node_asset_intake_source_takes_row_lock():
+    import inspect
+
+    from app.api.node_ledger import conversation_asset_intake_node
+
+    src = inspect.getsource(conversation_asset_intake_node)
+    assert "conversation_for_update_stmt" in src
+    assert "select(Conversation).where(Conversation.id == cid)" not in src
+
+
+def test_notify_bound_node_case_scope_sends_live_envelope():
+    sent: list = []
+
+    async def fake_send(conv_id, raw):
+        sent.append((conv_id, json.loads(raw)))
+        return True
+
+    from app.api.conversations import _notify_bound_node_case_scope
+
+    with patch("app.ws.router._send_to_bound_node", new=fake_send):
+        asyncio.run(_notify_bound_node_case_scope("c1", {"allow": ["www.example.com"]}))
+    assert sent[0][0] == "c1"
+    assert sent[0][1]["type"] == "case_scope_updated"
+    assert sent[0][1]["scope"]["allow"] == ["www.example.com"]
+    sent.clear()
+    with patch("app.ws.router._send_to_bound_node", new=fake_send):
+        asyncio.run(_notify_bound_node_case_scope("c1", None))
+    assert sent == []

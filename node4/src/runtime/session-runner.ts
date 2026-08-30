@@ -15,6 +15,7 @@ import { toolNamesForPack } from "../tools/index.js";
 import { loadConfirmedFindings } from "../tools/finding.js";
 import { createBoundNode4Session, type Node4AgentSession } from "./run-node4-agent.js";
 import { registerActiveSession } from "./active-session-registry.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
 import { resolveTerminalTaskStatus } from "./harness-settlement.js";
 import {
   composeContinuePrompt,
@@ -485,6 +486,7 @@ export async function runNode4Task(
     taskId: task.taskId,
     steer: (text) => session.steer(text),
     followUp: (text) => session.followUp(text),
+    applyScope: (scope) => applyServerScopeToTask(task, scope),
   });
 
   // Panel / text stream / usage — tool_output already bridged in createBoundNode4Session.

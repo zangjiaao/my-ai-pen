@@ -15,6 +15,8 @@ export type ActiveSessionHandle = {
   steer: (text: string) => void;
   /** Fallback: inject after agent would stop (pi Agent.followUp). */
   followUp: (text: string) => void;
+  /** HTTP Surface 纳入 / live Scope push — mutate the burst TaskEnvelope. */
+  applyScope?: (scope: unknown) => void;
 };
 
 const byConversation = new Map<string, ActiveSessionHandle>();
@@ -64,6 +66,14 @@ export function registerActiveSession(handle: ActiveSessionHandle): () => void {
 
 export function getActiveSession(conversationId: string): ActiveSessionHandle | undefined {
   return byConversation.get(String(conversationId || "").trim());
+}
+
+/** Apply Case Scope onto the live burst envelope (HTTP Surface 纳入). */
+export function applyScopeToLiveSession(conversationId: string, scope: unknown): boolean {
+  const handle = getActiveSession(conversationId);
+  if (!handle?.applyScope) return false;
+  handle.applyScope(scope);
+  return true;
 }
 
 /**

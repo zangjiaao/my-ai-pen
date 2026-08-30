@@ -26,6 +26,7 @@ import {
   parkedSessionHasHistory,
   parkedTodoNonEmpty,
   peekParkedSession,
+  applyScopeToParkedRuntimes,
   resetWorkingSessionMemory,
   resolveWorkingSessionContinue,
   takeParkedSession,
@@ -1168,6 +1169,24 @@ function runtimeWithPool(pool: SubagentIdlePool): ToolRuntime {
 
   clearWorkingSessionParksForTests();
   clearRegisteredIdlePoolsForTests();
+}
+
+{
+  clearWorkingSessionParksForTests();
+  const task = { scope: { allow: [] as string[] } };
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-scope",
+      expertId: "exp",
+      runtime: { task } as ToolRuntime,
+    }),
+  );
+  const n = applyScopeToParkedRuntimes("c-scope", (t) => {
+    t.scope = { allow: ["www.example.com"] };
+  });
+  assert.equal(n, 1);
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  clearWorkingSessionParksForTests();
 }
 
 clearWorkingSessionParksForTests();

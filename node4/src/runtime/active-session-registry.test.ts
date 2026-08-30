@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import {
+  applyScopeToLiveSession,
   clearActiveSessionsForTests,
   clearPendingSteers,
   deliverUserSteerToActiveSession,
@@ -163,6 +164,24 @@ clearActiveSessionsForTests();
   });
   assert.deepEqual(a, []);
   assert.deepEqual(b, ["for next stage"]);
+  clearActiveSessionsForTests();
+}
+
+{
+  const task = { scope: { allow: [] as string[] } };
+  registerActiveSession({
+    conversationId: "c-scope",
+    taskId: "t-scope",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.equal(applyScopeToLiveSession("c-scope", { allow: ["www.example.com"] }), true);
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  assert.equal(applyScopeToLiveSession("missing", { allow: ["x"] }), false);
   clearActiveSessionsForTests();
 }
 

@@ -398,6 +398,23 @@ export function peekParkedSession(
   return parks.get(key);
 }
 
+/** HTTP Surface 纳入: refresh parked captain TaskEnvelope Scope without attach. */
+export function applyScopeToParkedRuntimes(
+  conversationId: string,
+  apply: (task: { scope?: Record<string, unknown> }) => void,
+): number {
+  const cid = String(conversationId || "").trim();
+  if (!cid) return 0;
+  let n = 0;
+  for (const entry of parks.values()) {
+    if (String(entry.conversationId || "").trim() !== cid) continue;
+    if (!entry.runtime?.task) continue;
+    apply(entry.runtime.task);
+    n += 1;
+  }
+  return n;
+}
+
 /**
  * Take parked runtime for attach (removes from park map).
  * Caller owns dispose / re-park. Expired entries are disposed and treated as miss.

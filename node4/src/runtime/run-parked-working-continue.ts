@@ -22,6 +22,7 @@ import {
 } from "./pdca-settlement.js";
 import { joinHarnessPrefixes } from "./harness-channel.js";
 import { registerActiveSession } from "./active-session-registry.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
 import {
   attachNode4SessionObservability,
   CheckpointThrottle,
@@ -195,6 +196,7 @@ export async function runParkedWorkingContinue(options: {
     taskId: task.taskId,
     steer: (text) => session.steer(text),
     followUp: (text) => session.followUp(text),
+    applyScope: (scope) => applyServerScopeToTask(task, scope),
   });
 
   const sessionObs = attachNode4SessionObservability({

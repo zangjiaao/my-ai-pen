@@ -21,6 +21,7 @@ import { TodoStore } from "../stores/todo.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
 import { createBoundNode4Session } from "./run-node4-agent.js";
 import { registerActiveSession } from "./active-session-registry.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
 import { createNode4Tools } from "../tools/index.js";
 import {
   applyCaptainEndDisposition,
@@ -941,6 +942,7 @@ export function createHardGraphStageExecutor(options: {
         taskId: task.taskId,
         steer: (text) => session.steer(text),
         followUp: (text) => session.followUp(text),
+        applyScope: (scope) => applyServerScopeToTask(task, scope),
       });
 
       // Spec #353: stream health + idle abort for Graph Main stage (same rules as Free).

@@ -930,6 +930,10 @@ async def patch_workset_item(
     if scope_expanded:
         out["scope"] = {"allow": scope_expanded.get("allow") or [], "deny": (task.get("scope") or {}).get("deny") or []}
         out["scope_expanded"] = scope_expanded
+        await _notify_bound_node_case_scope(
+            str(c.id),
+            (task.get("scope") if isinstance(task.get("scope"), dict) else None),
+        )
     if registered_asset:
         out["registered_asset"] = registered_asset
     return out
@@ -1150,6 +1154,28 @@ async def _get_conv(
     if not c:
         raise HTTPException(404, "Conversation not found")
     return c
+
+
+async def _notify_bound_node_case_scope(conv_id: str, scope: object) -> None:
+    """Push admitted Scope onto the live/parked Node TaskEnvelope (HTTP Surface 纳入)."""
+    if not isinstance(scope, dict):
+        return
+    try:
+        from app.ws.router import _send_to_bound_node
+
+        await _send_to_bound_node(
+            conv_id,
+            json.dumps(
+                {
+                    "type": "case_scope_updated",
+                    "conversation_id": conv_id,
+                    "scope": scope,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as e:
+        print(f"[HTTP] case_scope_updated error: {e}")
 
 
 def _out(c: Conversation) -> ConversationOut:

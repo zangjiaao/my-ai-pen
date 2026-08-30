@@ -9,6 +9,7 @@ import {
 } from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
 import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
+import { applyServerScopeToTask } from "./tools/decision.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
@@ -28,11 +29,13 @@ import {
 } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 import {
+  applyScopeToLiveSession,
   clearPendingSteers,
   deliverUserSteerToActiveSession,
   enqueuePendingSteer,
 } from "./runtime/active-session-registry.js";
 import {
+  applyScopeToParkedRuntimes,
   clearPendingCaseDispose,
   clearPendingSessionDispose,
   disposeWorkingSession,
@@ -443,6 +446,15 @@ client.on("user_input", async (message) => {
   if (shouldAbortTurnOnApprovalDecision(normalizeApprovalResponse(response)) && conversationId) {
     aborts.get(conversationId)?.abort();
   }
+});
+
+/** HTTP Surface 纳入 → refresh live/parked TaskEnvelope Scope (fail-closed writes). */
+client.on("case_scope_updated", (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  if (!conversationId) return;
+  const scope = message.scope;
+  applyScopeToLiveSession(conversationId, scope);
+  applyScopeToParkedRuntimes(conversationId, (task) => applyServerScopeToTask(task, scope));
 });
 
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */

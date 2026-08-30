@@ -519,7 +519,13 @@ async def conversation_asset_intake_node(
         cid = uuid.UUID(conversation_id)
     except ValueError as e:
         raise HTTPException(400, "invalid conversation id") from e
-    result = await db.execute(select(Conversation).where(Conversation.id == cid))
+    from app.services.case_workset import (
+        get_asset_intake,
+        put_agent_asset_intake,
+    )
+    from app.services.conversation_access import conversation_for_update_stmt
+
+    result = await db.execute(conversation_for_update_stmt(cid))
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(404, "conversation not found")
@@ -532,11 +538,6 @@ async def conversation_asset_intake_node(
     group_name = str(payload.get("group_name") or payload.get("group") or "").strip()
     if mode == "enroll_group" and not group_id and not group_name:
         raise HTTPException(400, "enroll_group requires group_id or group_name")
-    from app.services.case_workset import (
-        get_asset_intake,
-        put_agent_asset_intake,
-    )
-
     if mode == "enroll_group" and not group_id and group_name:
         try:
             group = await ledger.resolve_group(
@@ -556,6 +557,7 @@ async def conversation_asset_intake_node(
         },
     )
     conv.context = ctx
+    flag_modified(conv, "context")
     await db.commit()
     return {"ok": True, "asset_intake": get_asset_intake(ctx)}
 

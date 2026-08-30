@@ -38,19 +38,18 @@ export function hostAdmissionContinueMessage(opts: {
   }
   if (opts.customAnswer) {
     const live = (opts.liveAdoptedTHostIds || []).filter(Boolean);
-    if (live.length > 0) {
-      return (
-        "User gave a custom answer. Platform did not NLP that text. " +
-        "This Case already has adopted Hosts (Surface 纳入 or a prior bound option). " +
-        "Continue from live Workset/Scope. Call workset(adopt) only for still-proposed hosts the user newly named — do not re-adopt live rows. " +
-        "Do not claim already-adopted Hosts were not admitted. Do not ask for a Host id; " +
-        "do not platform_list_assets or platform_create_asset; do not re-show the card."
-      );
-    }
+    const liveNote =
+      live.length > 0
+        ? "This Case already has adopted Hosts (Surface 纳入 or a prior bound option). Continue from live Workset/Scope. "
+        : "";
+    const liveClaim =
+      live.length > 0 ? "Do not claim already-adopted Hosts were not admitted. " : "";
     return (
-      "User named or described which hosts to admit. Platform did not NLP that text. " +
-      "Call workset(adopt, hosts=those still-proposed Workset hostnames). " +
-      "Do not ask for a Host id. Do not platform_list_assets or platform_create_asset. Do not re-show the card."
+      "User gave a custom answer. Platform did not NLP that text. " +
+      liveNote +
+      "Continue that direction. Call workset(adopt) only for still-proposed hosts the user newly named in this answer — not every proposed Workset row. " +
+      liveClaim +
+      "Do not ask for a Host id; do not platform_list_assets or platform_create_asset; do not re-show the card."
     );
   }
   const ambiguous = Array.isArray(opts.admissionAmbiguous) && opts.admissionAmbiguous.length > 0;
