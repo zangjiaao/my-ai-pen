@@ -27,6 +27,7 @@ const ACT_LOOP_REQUIRED = [
 ] as const;
 
 const ACT_LOOP_FORBIDDEN = [
+  "inventory",
   "platform_list_assets",
   "platform_get_asset",
   "platform_create_asset",
@@ -53,10 +54,12 @@ assert.ok(
 );
 assert.ok(pentest.toolNames.includes("hypothesis"), "hypothesis stays on pack for Graph stages");
 
-assert.ok(DEFAULT_SEAT_PACK.toolNames.includes("platform_list_assets"), "Default still lists assets");
-assert.ok(DEFAULT_SEAT_PACK.toolNames.includes("platform_create_asset"), "Default still creates Hosts");
+assert.ok(DEFAULT_SEAT_PACK.toolNames.includes("inventory"), "Default clerk uses inventory");
+assert.ok(!DEFAULT_SEAT_PACK.toolNames.includes("platform_list_assets"), "Default catalog dropped list_assets");
+assert.ok(!DEFAULT_SEAT_PACK.toolNames.includes("platform_create_asset"), "Default creates Hosts via inventory");
 assert.ok(!DEFAULT_SEAT_PACK.toolNames.includes("finding"), "Default does not book");
 
+assert.ok(!ctf.toolNames.includes("inventory"), "ctf is not a hidden asset manager");
 assert.ok(!ctf.toolNames.includes("platform_list_assets"), "ctf is not a hidden asset manager");
 assert.ok(ctf.toolNames.includes("http"), "ctf keeps act tools");
 
@@ -70,8 +73,8 @@ assert.deepEqual(
 );
 assert.equal(
   mergePlatformCitizenTools(["shell"], "ledger_assist")[0],
-  "platform_list_assets",
-  "ledger_assist still prepends inventory reads",
+  "inventory",
+  "ledger_assist prepends inventory",
 );
 
 const actMission = mergePlatformCitizenMission(["You are pentest."], "act_expert");
@@ -98,8 +101,12 @@ assert.deepEqual(
 
 const ledgerMission = mergePlatformCitizenMission(["You are default."], "ledger_assist");
 assert.ok(
-  ledgerMission.some((l) => /platform_list_assets first/i.test(l)),
-  "Default clerk mission still lists assets first",
+  ledgerMission.some((l) => /inventory\(list\) first/i.test(l)),
+  "Default clerk mission still lists first",
+);
+assert.ok(
+  !actMission.some((l) => /inventory\(list\) first/i.test(l)),
+  "act mission must stay blackboard-first",
 );
 
 console.log("platform-citizen.test.ts ok");

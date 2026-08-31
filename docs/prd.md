@@ -32,7 +32,7 @@
 3. **Harness over restriction** — 能力不足时优先改进 prompt / 任务信封 / 工具密度；不把靶场答案表、预期漏洞数、coverage 硬门当作默认「智能」。
 4. **结构化意图** — 角色/engagement 来自 UI 或任务信封显式字段；**禁止**用关键词 NLP 扫描用户自然语言猜 workflow。
 5. **Node 是唯一 Agent Runtime；Expert 是产品路由实体** — 已绑定的 Node 候选 **始终**带内置 **`default`（工作台助手）**；商业/专项能力以 **专家包** 形式 install；平台 **offers** 许可/计费；**专家管理** 创建可 `@` 的专家实例并绑定 Node。见 `docs/specs/expert-offers.md`。  
-   **Model B：** Citizen 按座位拆套（`node4/src/roles/platform-citizen.ts`）。**Default** 是台账助理（Owner Ledger 读写）。**act Expert** 只注入 rewritten Citizen mission + `fact` / `request_user_decision`（Wave 1 仍留标题工具）；库存读由 Case 黑板注入，不前置 `platform_list_*`。主机创建仍仅用户授权边界（开测 Authorize / next-scope / 资产页 / Workset adopt）。Hard Graph 阶段工具面是 pack `graphs/hard/*.json` 的 `tools.allow`（渗透图阶段 **不含** 库存只读；create/enrich 仍不在清单上）；Node 只按该清单过滤。
+   **Model B：** Citizen 按座位拆套（`node4/src/roles/platform-citizen.ts`）。**Default** 是台账助理：Host/Group clerk 收成一个 `inventory` multi-op，另留漏洞/报告/标题/`list_experts`。**act Expert** 只注入 rewritten Citizen mission + `fact` / `request_user_decision`（Wave 1 仍留标题工具）；库存读由 Case 黑板注入，不前置 `inventory`。主机创建仍仅用户授权边界（开测 Authorize / next-scope / 资产页 / Workset adopt）。Hard Graph 阶段工具面是 pack `graphs/hard/*.json` 的 `tools.allow`（渗透图阶段 **不含** 库存只读；create/enrich 仍不在清单上）；Node 只按该清单过滤。会话开始后目录固定，不靠扫描用户文本挂 clerk 工具。
 6. **单路径协作** — 用户消息经平台鉴权/落库后转发到所选 Node 参与者；台账读写由 Node 调**平台数据 Tools**完成，避免后端 Agent 与 Node 双脑来回路由。
 7. **无靶场答案键** — 不以 DVWA/Juice/CTF flag 列表驱动 runtime 或 prompt。
 8. **远程热装 marketplace** — 非本阶段目标。

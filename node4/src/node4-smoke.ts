@@ -177,11 +177,11 @@ async function main() {
   );
   // Model B: citizen kit split at pack load (act_expert vs ledger_assist)
   assert(
-    mergePlatformCitizenTools(["shell", "platform_list_assets"]).filter((n) => n === "platform_list_assets")
+    mergePlatformCitizenTools(["shell", "inventory"]).filter((n) => n === "inventory")
       .length === 1,
     "citizen tools de-dupe",
   );
-  assert(mergePlatformCitizenTools(["shell"], "ledger_assist")[0] === "platform_list_assets", "citizen tools prepend");
+  assert(mergePlatformCitizenTools(["shell"], "ledger_assist")[0] === "inventory", "citizen tools prepend");
   assert(
     mergePlatformCitizenMission(["x"]).some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
     "citizen mission inject",
@@ -194,6 +194,7 @@ async function main() {
   );
   const pentestLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "pentest"));
   assert(pentestLoaded.toolNames.includes("http"), "pentest keeps http");
+  assert(!pentestLoaded.toolNames.includes("inventory"), "pentest has no inventory (citizen kit split)");
   assert(!pentestLoaded.toolNames.includes("platform_list_assets"), "pentest has no list_assets (citizen kit split)");
   assert(pentestLoaded.toolNames.includes("shell"), "pentest keeps shell");
   assert(pentestLoaded.toolNames.includes("finding"), "pentest keeps finding");
@@ -202,6 +203,7 @@ async function main() {
     "pentest mission has citizen layer",
   );
   const ctfLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "ctf"));
+  assert(!ctfLoaded.toolNames.includes("inventory"), "ctf has no inventory (citizen kit split)");
   assert(!ctfLoaded.toolNames.includes("platform_list_assets"), "ctf has no list_assets (citizen kit split)");
   assert(ctfLoaded.toolNames.includes("captcha"), "ctf keeps captcha");
   // Persona template: product expert name injected into default-seat system prompt
