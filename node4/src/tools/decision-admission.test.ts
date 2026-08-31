@@ -75,9 +75,11 @@ import { applyServerScopeToTask, hostAdmissionContinueMessage } from "./decision
   });
   assert.match(String(msg), /custom answer/);
   assert.match(String(msg), /did not NLP/);
-  assert.match(String(msg), /newly named/);
-  assert.match(String(msg), /not every proposed Workset row/);
+  assert.match(String(msg), /did not persist host admission/);
+  assert.match(String(msg), /Do not call workset\(adopt\) for this reply/);
   assert.match(String(msg), /Do not ask for a Host id/);
+  assert.doesNotMatch(String(msg), /newly named/);
+  assert.doesNotMatch(String(msg), /Call workset\(adopt\)/);
   assert.doesNotMatch(String(msg), /those still-proposed Workset hostnames/);
   assert.doesNotMatch(String(msg), /User named or described which hosts to admit/);
   assert.doesNotMatch(String(msg), /already-adopted Hosts were not admitted/);
@@ -92,9 +94,9 @@ import { applyServerScopeToTask, hostAdmissionContinueMessage } from "./decision
     customAnswer: true,
   });
   assert.match(String(msg), /already has adopted Hosts/);
-  assert.match(String(msg), /newly named/);
-  assert.match(String(msg), /not every proposed Workset row/);
+  assert.match(String(msg), /Do not call workset\(adopt\) for this reply/);
   assert.match(String(msg), /Do not claim already-adopted Hosts were not admitted/);
+  assert.doesNotMatch(String(msg), /newly named/);
   assert.doesNotMatch(String(msg), /Call workset\(adopt, hosts=the proposed/);
   assert.doesNotMatch(String(msg), /those still-proposed Workset hostnames/);
 }

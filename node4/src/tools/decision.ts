@@ -45,9 +45,9 @@ export function hostAdmissionContinueMessage(opts: {
     const liveClaim =
       live.length > 0 ? "Do not claim already-adopted Hosts were not admitted. " : "";
     return (
-      "User gave a custom answer. Platform did not NLP that text. " +
+      "User gave a custom answer. Platform did not NLP that text and did not persist host admission from it. " +
       liveNote +
-      "Continue that direction. Call workset(adopt) only for still-proposed hosts the user newly named in this answer — not every proposed Workset row. " +
+      "Continue that direction. Do not call workset(adopt) for this reply. Remaining proposed hosts wait for a bound option or Surface 纳入. " +
       liveClaim +
       "Do not ask for a Host id; do not platform_list_assets or platform_create_asset; do not re-show the card."
     );

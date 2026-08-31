@@ -137,8 +137,8 @@ user_decision:
   # Matching proposed t_host + unique Host: reuse (not "missing Host"), adopt, write asset_ids together.
   # Adopt fail / 2+: stay proposed; do not write Scope for that Host (no split ledger).
   # Failed adopt: tell the truth once; do not list_assets or emit a second decision card — Surface 纳入 remains.
-  # Custom answer: platform does not NLP. Agent calls workset(adopt) only for still-proposed
-  # names the user newly named. Live adopted Hosts (Surface / bound click) stay admitted.
+  # Custom answer: platform does not NLP and does not persist admission.
+  # Trusted continue does not instruct workset(adopt). Remaining proposed wait for a bound option or Surface 纳入.
   # user_input still carries this-card adopted_t_host_ids when a bound click already admitted.
   # plus live Workset/Scope (Surface 纳入 already on the Case). JWT must own the Case.
 ```

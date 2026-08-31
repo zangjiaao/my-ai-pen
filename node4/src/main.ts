@@ -30,8 +30,10 @@ import {
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 import {
   applyScopeToLiveSession,
+  clearPendingScope,
   clearPendingSteers,
   deliverUserSteerToActiveSession,
+  enqueuePendingScope,
   enqueuePendingSteer,
 } from "./runtime/active-session-registry.js";
 import {
@@ -151,8 +153,9 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       aborts.delete(task.conversationId);
     }
     busy.delete(task.conversationId);
-    // Drop steers that never hit a live session (burst ended mid-race).
+    // Drop steers/Scope that never hit a live session (burst ended mid-race).
     clearPendingSteers(task.conversationId);
+    clearPendingScope(task.conversationId);
     await emitWorkStatus(task.conversationId, task.taskId, false, {
       reason: endReason,
       expert_id: task.expertId,
@@ -453,7 +456,9 @@ client.on("case_scope_updated", (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
   const scope = message.scope;
-  applyScopeToLiveSession(conversationId, scope);
+  if (!applyScopeToLiveSession(conversationId, scope) && busy.has(conversationId)) {
+    enqueuePendingScope(conversationId, scope);
+  }
   applyScopeToParkedRuntimes(conversationId, (task) => applyServerScopeToTask(task, scope));
 });
 

@@ -5,7 +5,8 @@
  * into the live Agent (steer/followUp) instead of rejecting as "still working".
  *
  * Race: busy is set before the Free/Graph session registers. Pending steers
- * and case_scope_updated pushes queue until registerActiveSession flushes them.
+ * and case_scope_updated (busy-only) queue until registerActiveSession flushes them.
+ * Do not queue Scope while idle — that snapshot can overwrite a later dispatch.
  */
 
 export type ActiveSessionHandle = {
@@ -22,7 +23,7 @@ export type ActiveSessionHandle = {
 const byConversation = new Map<string, ActiveSessionHandle>();
 /** Steers that arrived while busy but before any session registered. */
 const pendingByConversation = new Map<string, string[]>();
-/** Last case_scope_updated while busy-before-register (or idle before next burst). */
+/** Last case_scope_updated during busy-before-register. Not queued while idle. */
 const pendingScopeByConversation = new Map<string, unknown>();
 
 function injectIntoHandle(
@@ -83,13 +84,27 @@ export function applyScopeToLiveSession(conversationId: string, scope: unknown):
   const id = String(conversationId || "").trim();
   if (!id) return false;
   const handle = getActiveSession(id);
+  if (!handle?.applyScope) return false;
+  handle.applyScope(scope);
+  pendingScopeByConversation.delete(id);
+  return true;
+}
+
+/**
+ * Queue Scope until a session registers (busy race), or apply now if live.
+ * Caller must only enqueue while the conversation is busy. Idle 纳入 is
+ * parked via applyScopeToParkedRuntimes; do not survive into the next dispatch.
+ */
+export function enqueuePendingScope(conversationId: string, scope: unknown): void {
+  const id = String(conversationId || "").trim();
+  if (!id) return;
+  const handle = byConversation.get(id);
   if (handle?.applyScope) {
     handle.applyScope(scope);
     pendingScopeByConversation.delete(id);
-    return true;
+    return;
   }
   pendingScopeByConversation.set(id, scope);
-  return false;
 }
 
 /**
@@ -117,6 +132,11 @@ export function enqueuePendingSteer(conversationId: string, text: string): void 
 /** Drop queued steers (e.g. work burst ended without a live session). */
 export function clearPendingSteers(conversationId: string): void {
   pendingByConversation.delete(String(conversationId || "").trim());
+}
+
+/** Drop queued Scope so a later dispatch is not overwritten by an idle snapshot. */
+export function clearPendingScope(conversationId: string): void {
+  pendingScopeByConversation.delete(String(conversationId || "").trim());
 }
 
 /**
