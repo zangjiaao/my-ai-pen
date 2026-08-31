@@ -17,6 +17,7 @@ import {
   SURFACE_LIST_DEFAULT_LIMIT,
   SURFACE_UPSERT_BATCH_MAX,
   SURFACE_WRITE_HARD_CAP,
+  type SurfaceRow,
   type SurfaceUpsertItem,
 } from "../stores/surface-sqlite.js";
 import {
@@ -28,6 +29,8 @@ import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
 } from "../runtime/surface-platform-sync.js";
+import { isAdmittedSurfaceHost } from "../runtime/surface-settle.js";
+import { parseLocation } from "../stores/surface-identity.js";
 import { selectNewUntestedSurfaces } from "../runtime/surface-harness.js";
 
 function resolveSourceAgentId(runtime: ToolRuntime): string {
@@ -35,6 +38,31 @@ function resolveSourceAgentId(runtime: ToolRuntime): string {
   if (wa != null && String(wa).trim()) return String(wa).trim();
   if ((runtime.lifecycle.subagentDepth || 0) >= 1) return "worker";
   return "main";
+}
+
+function originFromWriteParams(
+  params: Record<string, unknown> | undefined,
+  fallbackLocation?: string,
+): { host: string; port: string } {
+  const location = String(params?.location || fallbackLocation || "").trim();
+  if (location) {
+    const parsed = parseLocation(location);
+    if (parsed.ok) return { host: parsed.host, port: String(parsed.port) };
+  }
+  const origin = String(params?.origin_key || "").trim();
+  if (origin) {
+    const parsed = parseLocation(origin);
+    if (parsed.ok) return { host: parsed.host, port: String(parsed.port) };
+  }
+  return { host: "", port: "" };
+}
+
+const FOREIGN_SURFACE_WRITE_ERROR =
+  "origin is not an admitted Case Host — surface write fail-closed";
+
+function rejectForeignSurfaceWrite(runtime: ToolRuntime, host: string, port?: string) {
+  if (isAdmittedSurfaceHost(host, runtime.task, port)) return null;
+  return textResult(`error: ${FOREIGN_SURFACE_WRITE_ERROR}`, { isError: true });
 }
 
 function resolveCoverageMarkedBy(runtime: ToolRuntime): string {
@@ -77,6 +105,44 @@ function asItemList(params: Record<string, unknown>): SurfaceUpsertItem[] {
   ];
 }
 
+type CoverageTarget = {
+  id?: string;
+  location?: string;
+  origin_key?: string;
+  path_key?: string;
+};
+
+function collectCoverageTargets(params: Record<string, unknown>): CoverageTarget[] {
+  const out: CoverageTarget[] = [];
+  const seen = new Set<string>();
+  const push = (t: CoverageTarget) => {
+    const location = String(t.location || "").trim();
+    const id = String(t.id || "").trim();
+    const origin_key = String(t.origin_key || "").trim();
+    const path_key = String(t.path_key || "").trim();
+    if (!location && !id && !origin_key && !path_key) return;
+    const key = `${id}|${location}|${origin_key}|${path_key}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      id: id || undefined,
+      location: location || undefined,
+      origin_key: origin_key || undefined,
+      path_key: path_key || undefined,
+    });
+  };
+  if (Array.isArray(params.locations)) {
+    for (const loc of params.locations) push({ location: String(loc ?? "") });
+  }
+  push({
+    id: params.id != null ? String(params.id) : undefined,
+    location: params.location != null ? String(params.location) : undefined,
+    origin_key: params.origin_key != null ? String(params.origin_key) : undefined,
+    path_key: params.path_key != null ? String(params.path_key) : undefined,
+  });
+  return out;
+}
+
 /** Sample path count for surface(op=summary) agent management view (#383). */
 const SURFACE_SUMMARY_SAMPLE_MAX = 8;
 
@@ -89,7 +155,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       "PRIMARY ops: summary | list | get | mark | unmark | skip.",
       "Identities are born from Traffic settle + TARGET seed — do not invent paths.",
       "Coverage work-state (Case-shared): untested (default) | tested | skipped. Who tests, marks. Operators do not tick.",
-      "mark: existing identity → tested. unmark → untested. skip: existing identity → skipped with reason=deadend|roe.",
+      "mark: existing identity → tested (`location` or `locations[]`, same coverage). unmark → untested. skip: existing identity → skipped with reason=deadend|roe.",
       "Origin/root may be marked without HTTP if the seed row exists; child paths must already be on the tree.",
       "summary: tested/untested/skipped counts from work-state (not Traffic purpose=test). Primary duty: look at the tree → plan → act → mark/skip → look again.",
       `list: default seen+touched untested queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT}. status=all for full ledger.`,
@@ -104,6 +170,8 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       op: Type.String({ description: "summary | list | get | mark | unmark | skip | upsert (upsert non-primary)" }),
       /** Single location (upsert/get) */
       location: Type.Optional(Type.String()),
+      /** Batch mark/unmark/skip (same coverage / skip reason for every location). */
+      locations: Type.Optional(Type.Array(Type.String())),
       /** Batch upsert items (non-primary) */
       surfaces: Type.Optional(
         Type.Array(
@@ -280,34 +348,99 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             return textResult(`error: ${SKIP_REASON_REQUIRED_ERROR}`, { isError: true });
           }
         }
-        const written = await store.setCoverage({
-          id: params?.id,
-          location: params?.location,
-          origin_key: params?.origin_key,
-          path_key: params?.path_key,
-          coverage,
-          skip_reason: op === "skip" ? coerceSurfaceSkipReason(reasonRaw) : undefined,
-          marked_by: resolveCoverageMarkedBy(runtime),
-        });
-        if (!written.ok) {
-          return textResult(`error: ${written.error}`, { isError: true });
+        const targets = collectCoverageTargets(params || {});
+        if (!targets.length) {
+          return textResult(
+            `error: surface(${op}) requires location, locations[], id, or origin_key+path_key`,
+            { isError: true },
+          );
+        }
+        if (targets.length > SURFACE_UPSERT_BATCH_MAX) {
+          return textResult(
+            `error: surface(${op}) batch max is ${SURFACE_UPSERT_BATCH_MAX} per call (got ${targets.length})`,
+            { isError: true },
+          );
+        }
+        const markedBy = resolveCoverageMarkedBy(runtime);
+        const writtenRows: SurfaceRow[] = [];
+        const errors: Array<{ location?: string; id?: string; error: string }> = [];
+        for (const target of targets) {
+          const existing = await store.get({
+            id: target.id,
+            location: target.location,
+            origin_key: target.origin_key,
+            path_key: target.path_key,
+          });
+          const origin = originFromWriteParams(
+            { location: target.location, origin_key: target.origin_key },
+            existing ? String(existing.location || existing.origin_key || "") : "",
+          );
+          const foreign = rejectForeignSurfaceWrite(runtime, origin.host, origin.port);
+          if (foreign) {
+            if (targets.length === 1) return foreign;
+            errors.push({
+              location: target.location,
+              id: target.id,
+              error: FOREIGN_SURFACE_WRITE_ERROR,
+            });
+            continue;
+          }
+          const written = await store.setCoverage({
+            id: target.id,
+            location: target.location,
+            origin_key: target.origin_key,
+            path_key: target.path_key,
+            coverage,
+            skip_reason: op === "skip" ? coerceSurfaceSkipReason(reasonRaw) : undefined,
+            marked_by: markedBy,
+          });
+          if (!written.ok) {
+            if (targets.length === 1) {
+              return textResult(`error: ${written.error}`, { isError: true });
+            }
+            errors.push({
+              location: target.location,
+              id: target.id,
+              error: written.error,
+            });
+            continue;
+          }
+          writtenRows.push(written.surface);
         }
         const platformOnline = isSurfacePlatformOnline(runtime);
-        if (platformOnline) {
-          void enqueueSurfacePlatformSync(runtime, [written.surface]);
+        if (platformOnline && writtenRows.length) {
+          void enqueueSurfacePlatformSync(runtime, writtenRows);
+        }
+        const guidance =
+          op === "skip"
+            ? "Coverage skipped. Graph todo(done) treats skipped as not-open. Status (seen/touched/booked) is unchanged."
+            : op === "mark"
+              ? "Coverage tested. Who-tests-marks. Status (seen/touched/booked) is unchanged."
+              : "Coverage returned to untested.";
+        if (targets.length === 1) {
+          const only = writtenRows[0];
+          if (!only) {
+            return textResult("error: surface write failed", { isError: true });
+          }
+          return jsonResult({
+            ok: true,
+            op,
+            surface: only,
+            coverage: only.coverage,
+            coverage_skip_reason: only.coverage_skip_reason,
+            guidance,
+          });
         }
         return jsonResult({
-          ok: true,
+          ok: writtenRows.length > 0,
           op,
-          surface: written.surface,
-          coverage: written.surface.coverage,
-          coverage_skip_reason: written.surface.coverage_skip_reason,
-          guidance:
-            op === "skip"
-              ? "Coverage skipped. Graph todo(done) treats skipped as not-open. Status (seen/touched/booked) is unchanged."
-              : op === "mark"
-                ? "Coverage tested. Who-tests-marks. Status (seen/touched/booked) is unchanged."
-                : "Coverage returned to untested.",
+          surfaces: writtenRows,
+          surface: writtenRows[0],
+          written: writtenRows.length,
+          failed: errors.length,
+          errors: errors.length ? errors : undefined,
+          coverage,
+          guidance,
         });
       }
 
@@ -331,6 +464,11 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             `error: surface(upsert) batch max is ${SURFACE_UPSERT_BATCH_MAX} per call (got ${items.length})`,
             { isError: true },
           );
+        }
+        for (const item of items) {
+          const origin = originFromWriteParams({ location: item.location });
+          const foreign = rejectForeignSurfaceWrite(runtime, origin.host, origin.port);
+          if (foreign) return foreign;
         }
         const source_agent_id = resolveSourceAgentId(runtime);
         const platformOnline = isSurfacePlatformOnline(runtime);

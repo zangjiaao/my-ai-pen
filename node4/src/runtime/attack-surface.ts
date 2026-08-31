@@ -57,7 +57,16 @@ export function parseHostPort(raw: string): { host: string; port?: string } {
     if (withScheme || s.includes("://")) {
       const u = new URL(withScheme || s);
       const host = (u.hostname || "").toLowerCase();
-      if (host) return { host, port: u.port || undefined };
+      if (host) {
+        let port = u.port || undefined;
+        if (!port) {
+          const idx = s.toLowerCase().indexOf(host);
+          const after = idx >= 0 ? s.slice(idx + host.length) : "";
+          const m = after.match(/^:(\d{1,5})/);
+          if (m?.[1]) port = m[1];
+        }
+        return { host, port };
+      }
     }
   } catch {
     /* ignore */

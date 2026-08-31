@@ -99,14 +99,13 @@ export type TrafficSettleApplyResult =
   | { ok: false; error: string };
 
 /**
- * Optional engagement-scope context for L2 noise filter (#412).
- * When omitted, or when allowedHosts is empty, origin scope gate is off
- * (lab / no TARGET+allow → keep prior settle behaviour).
+ * Optional engagement-scope context for L2 noise filter (#412 / #541).
+ * Empty or missing allowedHosts is fail-closed (do not settle).
  */
 export type TrafficSettleScopeContext = {
   /**
    * Lowercase hostnames from task TARGET + scope.allow
-   * (same set as scopeHostsFromTask). Empty/missing = no origin filter.
+   * (same set as scopeHostsFromTask). Empty/missing = fail-closed origin filter.
    */
   allowedHosts?: ReadonlySet<string> | readonly string[] | null;
   /**
@@ -160,20 +159,20 @@ export function normalizeScopeHost(host: string): string {
 
 /**
  * Whether origin host is in engagement scope (TARGET + scope.allow hosts).
- * Empty/missing allowedHosts → true (no gate).
+ * Empty/missing allowedHosts → false (fail-closed). Spec #541.
  */
 export function isOriginInEngagementScope(
   host: string,
   scope?: TrafficSettleScopeContext | null,
 ): boolean {
-  if (!scope) return true;
+  if (!scope) return false;
   const raw = scope.allowedHosts;
-  if (raw == null) return true;
+  if (raw == null) return false;
   const set =
     raw instanceof Set
       ? raw
       : new Set([...raw].map((h) => normalizeScopeHost(String(h))).filter(Boolean));
-  if (set.size === 0) return true;
+  if (set.size === 0) return false;
   const h = normalizeScopeHost(host);
   if (!h) return false;
   if (set.has(h)) return true;
@@ -182,25 +181,38 @@ export function isOriginInEngagementScope(
   return false;
 }
 
+/** Hosts that named an explicit port in TARGET / scope.allow. */
+function originHosts(origins: ReadonlySet<string>): Set<string> {
+  const hosts = new Set<string>();
+  for (const o of origins) {
+    const last = o.lastIndexOf(":");
+    if (last <= 0) continue;
+    const h = normalizeScopeHost(o.slice(0, last));
+    if (h) hosts.add(h);
+  }
+  return hosts;
+}
+
 /** Host+port gate when the engagement named an explicit port; else host-only. */
 export function isUrlInEngagementScope(
   host: string,
   port: number | string | null | undefined,
   scope?: TrafficSettleScopeContext | null,
 ): boolean {
-  if (!scope) return true;
+  if (!scope) return false;
   const rawOrigins = scope.allowedOrigins;
-  if (rawOrigins != null) {
-    const origins =
-      rawOrigins instanceof Set
+  const origins =
+    rawOrigins == null
+      ? new Set<string>()
+      : rawOrigins instanceof Set
         ? rawOrigins
         : new Set([...rawOrigins].map((x) => String(x || "").trim().toLowerCase()).filter(Boolean));
-    if (origins.size > 0) {
-      const h = normalizeScopeHost(host);
-      const p = String(port ?? "").trim();
-      if (!h || !p) return false;
-      return origins.has(`${h}:${p}`);
-    }
+  const h = normalizeScopeHost(host);
+  if (!h) return false;
+  if (origins.size > 0 && originHosts(origins).has(h)) {
+    const p = String(port ?? "").trim();
+    if (!p) return false;
+    return origins.has(`${h}:${p}`);
   }
   return isOriginInEngagementScope(host, scope);
 }
@@ -249,6 +261,15 @@ export function trafficSettleScopeFromTask(task: {
   };
 }
 
+/** True when origin is an admitted Case Host. Explicit Scope ports are host+port. Empty Scope → false. */
+export function isAdmittedSurfaceHost(
+  host: string,
+  task?: { target?: Record<string, unknown>; scope?: Record<string, unknown> } | null,
+  port?: number | string | null,
+): boolean {
+  return isUrlInEngagementScope(host, port, trafficSettleScopeFromTask(task || {}));
+}
+
 /** HTTP(S) only for v2 settle (D6). */
 export function isHttpHttpsScheme(scheme: string): boolean {
   const s = String(scheme || "").trim().toLowerCase();
@@ -284,7 +305,7 @@ export function extractUrlParamNames(url: string): string[] {
  *
  * @param exchange — traffic row (url/method/phase required for eligibility; optional purpose/source)
  * @param existing — prior Surface row for this identity, if any (null/undefined = first hit)
- * @param scope — optional L2 engagement hosts; omit/empty = no origin filter
+ * @param scope — L2 engagement hosts; omit/empty = fail-closed (do not settle)
  */
 export function planTrafficSurfaceSettle(
   exchange: {
@@ -401,7 +422,7 @@ export async function settleTrafficToSurface(
       return { ok: true, skipped: true, reason: "no_surface_store" };
     }
 
-    // L2 scope from task TARGET + scope.allow (host set). Empty → no origin gate.
+    // L2 scope from task TARGET + scope.allow (host set). Empty → fail-closed.
     const scope = trafficSettleScopeFromTask(runtime.task || {});
 
     // Cheap pure pre-check without DB (skip static / garbage / OOS / pending).

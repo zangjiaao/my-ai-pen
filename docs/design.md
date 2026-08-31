@@ -882,7 +882,7 @@ Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 ### Collapsing
 
 - **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。可手动折叠为 64px 图标轨（`localStorage.sidebar_collapsed`）。图标轨 Case 列表与展开态同一集合，溢出在会话区内滚动（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。
-- **Right Panel**（会话 Status / Surface / Findings / Traffic）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。Traffic 为 Case 流量审计表（搜索 + Source 筛选；列：# 倒序最新在上 / Method / Domain / Path / Status / Source / Time 耗时；详情 dialog 居中；见 Spec #309）。Surface 工具栏与 Traffic 对齐（同行搜索 + 下拉筛选）：**All / NEW / Untested / Findings**（覆盖视角；Findings 细类 Vuln/Key/Flag 在 Findings 页）。
+- **Right Panel**（会话 Status / Surface / Findings / Traffic）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。Traffic 为 Case 流量审计表（搜索 + Source 筛选；列：# 倒序最新在上 / Method / Domain / Path / Status / Source / Time 耗时；详情 dialog 居中；见 Spec #309）。Surface 主页是 **Host 卡**（搜索 + 待准入 / 已准入 / Untested / Findings）；点卡进详情才见该 Host 的路径树。Findings 只列已确认 Vuln / Key / Flag。
 - **对话区**: 始终 flex 占满剩余空间。
 
 ---

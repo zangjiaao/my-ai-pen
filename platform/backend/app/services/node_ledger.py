@@ -122,6 +122,7 @@ async def create_hosts_for_user(
     group_name: str | None = None,
     assembly_ports: object = None,
     exclude_last_octets: object = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Create or merge Hosts when the user asked the Agent to add inventory.
 
@@ -277,7 +278,10 @@ async def create_hosts_for_user(
             commit=False,
         )
 
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     out: dict[str, Any] = {
         "ok": True,
         "reason": reason_text,

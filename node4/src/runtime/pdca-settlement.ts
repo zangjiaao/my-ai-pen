@@ -64,7 +64,7 @@ export type LiveStateOverlay = {
     omitted: number;
   };
   pendingUserDecision: boolean;
-  /** Spec #540 — proposed t_host rows waiting for user adopt. */
+  /** Spec #540 — proposed t_host rows waiting for user adopt (live index only; not Agent unresolved). */
   admission: PdcaIdentity[];
   admissionOmitted: number;
 };
@@ -377,7 +377,6 @@ export function collectUnresolved(overlay: LiveStateOverlay): PdcaIdentity[] {
     ...overlay.findings.feedbackOkUnbooked,
     ...overlay.surfaces.actionable,
     ...overlay.hypotheses.active,
-    ...(overlay.admission || []),
   ];
 }
 
@@ -457,7 +456,7 @@ export function formatLiveStateHarness(overlay: LiveStateOverlay, delta?: TurnDe
   }
   if (overlay.pendingUserDecision) lines.push("Pending user decision: yes");
   if ((overlay.admission || []).length) {
-    lines.push("Pending admission (Workset t_host proposed):");
+    lines.push("Pending admission (Workset t_host proposed — user adopt / authorize; not Agent work):");
     for (const a of overlay.admission) lines.push(`  - ${ident(a)}`);
   }
   if (overlay.admissionOmitted) {

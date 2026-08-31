@@ -9,6 +9,7 @@ import {
 } from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
 import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
+import { applyServerScopeToTask } from "./tools/decision.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
@@ -28,11 +29,15 @@ import {
 } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 import {
+  applyScopeToLiveSession,
+  clearPendingScope,
   clearPendingSteers,
   deliverUserSteerToActiveSession,
+  enqueuePendingScope,
   enqueuePendingSteer,
 } from "./runtime/active-session-registry.js";
 import {
+  applyScopeToParkedRuntimes,
   clearPendingCaseDispose,
   clearPendingSessionDispose,
   disposeWorkingSession,
@@ -148,8 +153,9 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       aborts.delete(task.conversationId);
     }
     busy.delete(task.conversationId);
-    // Drop steers that never hit a live session (burst ended mid-race).
+    // Drop steers/Scope that never hit a live session (burst ended mid-race).
     clearPendingSteers(task.conversationId);
+    clearPendingScope(task.conversationId);
     await emitWorkStatus(task.conversationId, task.taskId, false, {
       reason: endReason,
       expert_id: task.expertId,
@@ -430,6 +436,10 @@ client.on("user_input", async (message) => {
   resolveApproval(requestId, response, {
     selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
     workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
+    adopted_t_host_ids: message.adopted_t_host_ids ?? message.adoptedTHostIds,
+    live_adopted_t_host_ids: message.live_adopted_t_host_ids ?? message.liveAdoptedTHostIds,
+    scope: message.scope,
+    admission_ambiguous: message.admission_ambiguous ?? message.admissionAmbiguous,
     text: message.text,
     custom_text: message.custom_text ?? message.customText,
     answers: message.answers,
@@ -438,6 +448,20 @@ client.on("user_input", async (message) => {
   // (that re-opens the work timer and can emit another 等待授权 card).
   if (shouldAbortTurnOnApprovalDecision(normalizeApprovalResponse(response)) && conversationId) {
     aborts.get(conversationId)?.abort();
+  }
+});
+
+/** HTTP Surface 纳入 → refresh live/parked TaskEnvelope Scope (fail-closed writes). */
+client.on("case_scope_updated", (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  if (!conversationId) return;
+  const scope = message.scope;
+  const live = applyScopeToLiveSession(conversationId, scope);
+  const parked = applyScopeToParkedRuntimes(conversationId, (task) =>
+    applyServerScopeToTask(task, scope),
+  );
+  if (!live && parked === 0 && busy.has(conversationId)) {
+    enqueuePendingScope(conversationId, scope);
   }
 });
 

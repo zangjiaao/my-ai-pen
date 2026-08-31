@@ -73,13 +73,13 @@ function src(rel: string): string {
 
 {
   resetRenderAudit();
-  recordRender("SurfaceTreeView");
+  recordRender("SurfaceHostCards");
   recordRender("RightPanel");
-  beginTypedInput("SurfaceTreeView");
-  recordRender("SurfaceTreeView");
-  const flag = finishTypedInput();
-  assert.equal(flag, null, "isolated widget search is clean when parent stays still");
-  console.log("ok: isolated SurfaceTreeView search is clean");
+  beginTypedInput("SurfaceHostCards");
+  recordRender("SurfaceHostCards");
+  const flagHost = finishTypedInput();
+  assert.equal(flagHost, null, "isolated widget search is clean when parent stays still");
+  console.log("ok: isolated SurfaceHostCards search is clean");
 }
 
 {
@@ -108,6 +108,7 @@ function src(rel: string): string {
     ["components/Sidebar.tsx", 'useRenderAudit("Sidebar")'],
     ["components/TopBar.tsx", 'useRenderAudit("TopBar")'],
     ["components/SurfaceTreeView.tsx", 'useRenderAudit("SurfaceTreeView")'],
+    ["components/SurfaceHostCards.tsx", 'useRenderAudit("SurfaceHostCards")'],
   ];
   for (const [file, needle] of watched) {
     assert.match(src(file), new RegExp(needle.replace(/[()]/g, "\\$&")), `${file} must call ${needle}`);

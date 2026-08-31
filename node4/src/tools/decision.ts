@@ -11,6 +11,69 @@ import { jsonResult, textResult } from "./common.js";
 import { registerApprovalWait, type ApprovalResult } from "../runtime/approvals.js";
 import { platformLedgerFetch } from "./platform.js";
 
+export function applyServerScopeToTask(
+  task: { scope?: Record<string, unknown> },
+  scope: unknown,
+): void {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return;
+  const incoming = scope as Record<string, unknown>;
+  const cur = task.scope && typeof task.scope === "object" ? task.scope : {};
+  task.scope = { ...cur, ...incoming };
+}
+
+export function hostAdmissionContinueMessage(opts: {
+  adoptedTHostIds: string[];
+  liveAdoptedTHostIds?: string[];
+  boundWorkset: boolean;
+  authorizedHosts: boolean;
+  customAnswer?: boolean;
+  admissionAmbiguous?: unknown[];
+}): string | null {
+  if (opts.adoptedTHostIds.length > 0) {
+    return (
+      "User authorized those Hosts as this Case Scope. Platform adopted matching Workset t_host rows. " +
+      "Continue the user's original task; do not platform_list_assets or platform_create_asset to re-settle them; " +
+      "do not invent a scan workflow; do not re-show the card."
+    );
+  }
+  if (opts.customAnswer) {
+    const live = (opts.liveAdoptedTHostIds || []).filter(Boolean);
+    const liveNote =
+      live.length > 0
+        ? "This Case already has adopted Hosts (Surface 纳入 or a prior bound option). Continue from live Workset/Scope. "
+        : "";
+    const liveClaim =
+      live.length > 0 ? "Do not claim already-adopted Hosts were not admitted. " : "";
+    return (
+      "User gave a custom answer. Platform did not NLP that text and did not persist host admission from it. " +
+      liveNote +
+      "Continue that direction. Do not call workset(adopt) for this reply. Remaining proposed hosts wait for a bound option or Surface 纳入. " +
+      liveClaim +
+      "Do not ask for a Host id; do not platform_list_assets or platform_create_asset; do not re-show the card."
+    );
+  }
+  const ambiguous = Array.isArray(opts.admissionAmbiguous) && opts.admissionAmbiguous.length > 0;
+  const stayProposedWhy = ambiguous
+    ? "identity is ambiguous (2+ Owner Hosts share that address)"
+    : "not t_host, already adopted, create/reuse failed, or identity ambiguous";
+  if (opts.boundWorkset) {
+    return (
+      `User confirmed the card. Platform did not adopt those Workset rows (${stayProposedWhy}). ` +
+      "Those rows stay proposed; Scope was not written for them. " +
+      "Do not claim Hosts were admitted. Do not platform_list_assets or platform_create_asset; " +
+      "do not emit another decision card. Remaining proposed hosts wait for Surface 纳入."
+    );
+  }
+  if (opts.authorizedHosts) {
+    return (
+      "User authorized Hosts on this card. Continue from this Case Scope/Workset; " +
+      "do not platform_list_assets or platform_create_asset to re-settle them; " +
+      "do not invent a scan workflow; do not re-show the card."
+    );
+  }
+  return null;
+}
+
 function speakerFields(runtime: ToolRuntime): { expert_id?: string; expert_name?: string } {
   // Always attribute the waiting turn to the *requesting* Session persona.
   // handoff_expert_* is card body only — never top-level speaker.
@@ -54,14 +117,16 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       "Click and type are the same path — the tool unblocks with the user's response. " +
       "When legal entity, Host identity, Group member set, active-testing authorization, or Scope is insufficient, ask here and wait — do not invent Scope or Target. " +
       "Group / Hosts: pass asset_ids (and/or options[].asset_id = Host id from platform_list_groups / platform_list_assets). " +
-      "After the user allows, the platform writes those Hosts as Case Scope; continue the user's original task — do not invent a scan workflow. " +
+      "After the user allows, the platform writes those Hosts as Case Scope and adopts matching Workset t_host rows in the same persist; continue the user's original task — do not invent a scan workflow, do not platform_list_assets or platform_create_asset to prove or re-settle admission, do not emit another decision card. " +
+      "If the tool result says rows stay proposed or admission_ambiguous, tell the user once; remaining hosts wait for workset(adopt) of a uniquely resolvable name or Surface 纳入 — do not ask for a Host id and do not re-show this card. " +
       "For multi-agent handoff to any listed colleague (default/assistant, pentest, CTF, …): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
       "Do not write method, RoE, playbook, or ledger-dump instructions in proposed_action — those live in Profession/Runtime. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
       "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
       "Never silent-switch Free↔Graph — always card or user composer Workflow. " +
       "Spec #312 next_steps: at stoppable settle / empty-continue with open Case Workset, emit kind=next_steps + options[2–5] " +
-      "(each id,title,body required; optional workset_item_ids binds). Multi-select; do not only say 等待指示 or prose A/B/C/D. " +
+      "(each id,title,body required; when an option admits hosts, bind those rows' workset_item_ids). Multi-select; do not only say 等待指示 or prose A/B/C/D. " +
+      "If the user types names of still-proposed hosts instead of clicking, call workset(adopt, hosts=those names) — do not re-adopt live rows and do not ask for a Host id. " +
       "Do not chain multiple cards; put defaults on the card. " +
       "After authorize on handoff, the platform starts the destination expert; do not reply. " +
       "After authorize on enter/switch Graph, platform settles Session work_mode and may re-dispatch Graph. " +
@@ -361,6 +426,9 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
       const decision = approvalResult.decision;
+      if (approvalResult.scope) {
+        applyServerScopeToTask(runtime.task, approvalResult.scope);
+      }
 
       // Session-owned handoff apply: button and free-text both resolve here.
       // Platform only displays + forwards feedback; this tool starts the destination
@@ -421,18 +489,31 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         .filter((s) => s.length > 2)
         .join("; ");
       const customText = String(approvalResult.custom_text || "").trim();
-      const hostScopeMsg =
-        "User authorized those Hosts as this Case Scope. Continue the user's original task; do not invent a scan workflow; do not re-show the card.";
+      const boundWorkset =
+        Array.isArray(approvalResult.workset_item_ids) &&
+        approvalResult.workset_item_ids.length > 0;
+      const adoptedTHostIds = Array.isArray(approvalResult.adopted_t_host_ids)
+        ? approvalResult.adopted_t_host_ids.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const liveAdoptedTHostIds = Array.isArray(approvalResult.live_adopted_t_host_ids)
+        ? approvalResult.live_adopted_t_host_ids.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const hostScopeMsg = hostAdmissionContinueMessage({
+        adoptedTHostIds,
+        liveAdoptedTHostIds,
+        boundWorkset,
+        authorizedHosts,
+        customAnswer: Boolean(customText) && selectedIds.length === 0,
+        admissionAmbiguous: approvalResult.admission_ambiguous,
+      });
       const nextStepsMsg =
         decision === "confirm_options"
-          ? authorizedHosts
+          ? hostScopeMsg
             ? hostScopeMsg
             : selectedBits
-            ? `User confirmed next_steps. Selected: ${selectedBits}. Honor those option bodies; do not start unselected work; do not re-show the same card.`
-            : customText
-              ? `User confirmed next_steps with a custom answer: ${customText}. Honor that answer; do not re-show the same card.`
-              : "User confirmed next_steps. Honor the selected option bodies; do not start unselected work; do not re-show the same card."
-          : decision === "authorize" && authorizedHosts
+            ? `User confirmed next_steps. Selected: ${selectedBits}. Bound options already persist when adopted_t_host_ids is set — do not call workset(adopt) to prove that. Do not platform_create_asset or ask for a Host id. Do not start unselected work; do not re-show the same card.`
+            : "User confirmed next_steps. Honor the selected option bodies. Do not call workset(adopt) for this confirmation. Do not start unselected work; do not re-show the same card."
+          : decision === "authorize" && hostScopeMsg
             ? hostScopeMsg
           : decision === "authorize" && kind === "next_steps"
             ? "User replied on the next_steps card. Honor their reply; do not re-show the same card."
@@ -462,6 +543,15 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       }
       if (approvalResult.workset_item_ids?.length) {
         resultPayload.workset_item_ids = approvalResult.workset_item_ids;
+      }
+      if (adoptedTHostIds.length) {
+        resultPayload.adopted_t_host_ids = adoptedTHostIds;
+      }
+      if (liveAdoptedTHostIds.length) {
+        resultPayload.live_adopted_t_host_ids = liveAdoptedTHostIds;
+      }
+      if (Array.isArray(approvalResult.admission_ambiguous) && approvalResult.admission_ambiguous.length) {
+        resultPayload.admission_ambiguous = approvalResult.admission_ambiguous;
       }
       if (approvalResult.text) {
         resultPayload.user_text = approvalResult.text;

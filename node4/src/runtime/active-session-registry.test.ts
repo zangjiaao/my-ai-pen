@@ -3,9 +3,12 @@
  */
 import assert from "node:assert/strict";
 import {
+  applyScopeToLiveSession,
   clearActiveSessionsForTests,
+  clearPendingScope,
   clearPendingSteers,
   deliverUserSteerToActiveSession,
+  enqueuePendingScope,
   enqueuePendingSteer,
   registerActiveSession,
 } from "./active-session-registry.js";
@@ -163,6 +166,76 @@ clearActiveSessionsForTests();
   });
   assert.deepEqual(a, []);
   assert.deepEqual(b, ["for next stage"]);
+  clearActiveSessionsForTests();
+}
+
+{
+  const task = { scope: { allow: [] as string[] } };
+  registerActiveSession({
+    conversationId: "c-scope",
+    taskId: "t-scope",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.equal(applyScopeToLiveSession("c-scope", { allow: ["www.example.com"] }), true);
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  assert.equal(applyScopeToLiveSession("missing", { allow: ["x"] }), false);
+  clearActiveSessionsForTests();
+}
+
+{
+  const task = { scope: { allow: [] as string[] } };
+  enqueuePendingScope("c-scope-race", { allow: ["www.example.com"] });
+  registerActiveSession({
+    conversationId: "c-scope-race",
+    taskId: "t-race",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  clearActiveSessionsForTests();
+}
+
+{
+  const task = { scope: { allow: ["api.example.com"] } };
+  applyScopeToLiveSession("c-scope-idle", { allow: ["www.example.com"] });
+  registerActiveSession({
+    conversationId: "c-scope-idle",
+    taskId: "t-idle",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.deepEqual(task.scope.allow, ["api.example.com"]);
+  clearActiveSessionsForTests();
+}
+
+{
+  const task = { scope: { allow: [] as string[] } };
+  enqueuePendingScope("c-scope-drop", { allow: ["www.example.com"] });
+  clearPendingScope("c-scope-drop");
+  registerActiveSession({
+    conversationId: "c-scope-drop",
+    taskId: "t-drop",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.deepEqual(task.scope.allow, []);
   clearActiveSessionsForTests();
 }
 

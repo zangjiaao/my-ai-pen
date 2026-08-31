@@ -102,6 +102,8 @@ const baseTask: TaskEnvelope = {
   ok(layers.runtime.includes("Booking mode:"), "Runtime has booking mode");
   ok(PENTEST_ROLE_PACK.toolNames.includes("workset"), "pentest pack registers workset");
   ok(/workset tool/i.test(layers.runtime), "Runtime has workset gated one-liner (#532)");
+  ok(/status=pending means proposed/.test(layers.runtime), "Runtime maps Agent pending to proposed");
+  ok(/one next_steps with binds/.test(layers.runtime), "Runtime: one next_steps then stop");
   ok(!DEFAULT_SEAT_PACK.toolNames.includes("workset"), "default seat has no workset");
   ok(layers.runtime.includes("allow_postex"), "Runtime has RoE injection");
   ok(layers.runtime.includes("Stay in authorized scope."), "Runtime has scope stay line");

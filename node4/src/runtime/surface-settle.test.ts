@@ -20,6 +20,8 @@ import {
   isCollapsedOsProbePath,
   isHttpHttpsScheme,
   isOriginInEngagementScope,
+  isAdmittedSurfaceHost,
+  isUrlInEngagementScope,
   isStaticSurfacePath,
   isTrafficSettlePhase,
   planTrafficSurfaceSettle,
@@ -107,6 +109,7 @@ import {
       phase: "completed",
     },
     null,
+    { allowedHosts: new Set(["example.com"]) },
   );
   assert.equal(first.settle, true);
   if (!first.settle) throw new Error("expected settle");
@@ -127,6 +130,7 @@ import {
       phase: "completed",
     },
     { status: "seen", methods: ["GET"] },
+    { allowedHosts: new Set(["example.com"]) },
   );
   assert.equal(second.settle, true);
   if (!second.settle) throw new Error("expected settle");
@@ -139,6 +143,7 @@ import {
   const forbidden = planTrafficSurfaceSettle(
     { url: "https://example.com/admin", method: "GET", phase: "completed" },
     null,
+    { allowedHosts: new Set(["example.com"]) },
   );
   assert.equal(forbidden.settle, true);
   if (!forbidden.settle) throw new Error("expected settle");
@@ -149,6 +154,7 @@ import {
   const failed = planTrafficSurfaceSettle(
     { url: "https://example.com/slow", method: "GET", phase: "failed" },
     null,
+    { allowedHosts: new Set(["example.com"]) },
   );
   assert.equal(failed.settle, true);
 }
@@ -181,20 +187,60 @@ import {
 }
 
 {
-  // No scope context → origin gate off (backward compatible)
+  // Spec #541: missing / empty allowedHosts is fail-closed
   const open = planTrafficSurfaceSettle(
     { url: "https://www.w3.org/TR/html", method: "GET", phase: "completed" },
     null,
   );
-  assert.equal(open.settle, true);
+  assert.equal(open.settle, false);
+  if (!open.settle) assert.equal(open.reason, "out_of_scope");
 
-  // Empty allowedHosts → gate off
   const emptyScope = planTrafficSurfaceSettle(
-    { url: "https://www.w3.org/TR/html", method: "GET", phase: "completed" },
+    { url: "https://crt.sh/", method: "GET", phase: "completed" },
     null,
     { allowedHosts: new Set() },
   );
-  assert.equal(emptyScope.settle, true);
+  assert.equal(emptyScope.settle, false);
+  if (!emptyScope.settle) assert.equal(emptyScope.reason, "out_of_scope");
+
+  const exampleOnly = planTrafficSurfaceSettle(
+    { url: "https://crt.sh/", method: "GET", phase: "completed" },
+    null,
+    { allowedHosts: new Set(["example.com"]) },
+  );
+  assert.equal(exampleOnly.settle, false);
+  if (!exampleOnly.settle) assert.equal(exampleOnly.reason, "out_of_scope");
+
+  const wwwInAllow = planTrafficSurfaceSettle(
+    { url: "https://www.example.com/login", method: "GET", phase: "completed" },
+    null,
+    { allowedHosts: new Set(["www.example.com"]) },
+  );
+  assert.equal(wwwInAllow.settle, true);
+
+  {
+    const scoped = trafficSettleScopeFromTask({
+      target: { type: "url", value: "https://lab.example:443/" },
+      scope: { allow: ["https://lab.example:443"] },
+    });
+    assert.equal(isUrlInEngagementScope("lab.example", "443", scoped), true);
+    assert.equal(isUrlInEngagementScope("lab.example", "8080", scoped), false);
+    const task = { scope: { allow: ["https://lab.example:443"] } };
+    assert.equal(isAdmittedSurfaceHost("lab.example", task, "443"), true);
+    assert.equal(isAdmittedSurfaceHost("lab.example", task, "8080"), false);
+  }
+
+  {
+    const mixed = trafficSettleScopeFromTask({
+      scope: { allow: ["https://a.example:443", "b.example"] },
+    });
+    assert.equal(isUrlInEngagementScope("a.example", "443", mixed), true);
+    assert.equal(isUrlInEngagementScope("a.example", "8080", mixed), false);
+    assert.equal(isUrlInEngagementScope("b.example", "443", mixed), true);
+    assert.equal(isUrlInEngagementScope("b.example", "8080", mixed), true);
+    const mixedTask = { scope: { allow: ["https://a.example:443", "b.example"] } };
+    assert.equal(isAdmittedSurfaceHost("b.example", mixedTask, "8080"), true);
+  }
 
   const scope = { allowedHosts: new Set(["target.example", "host.docker.internal"]) };
 
@@ -344,8 +390,8 @@ function runtimeFor(
     taskId: "t-380",
     conversationId: opts?.conversationId ?? "conv-380",
     instruction: "test",
-    target: opts?.target ?? {},
-    scope: opts?.scope ?? {},
+    target: opts?.target ?? { type: "url", value: "https://target.example/" },
+    scope: opts?.scope ?? { allow: ["https://target.example"] },
   } as TaskEnvelope;
   return {
     task,
@@ -478,7 +524,11 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   const store = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(dir));
   await store.open();
   const platform = fakePlatform();
-  const rt = runtimeFor(dir, store, platform, { platformApi: false });
+  const rt = runtimeFor(dir, store, platform, {
+    platformApi: false,
+    target: { type: "url", value: "http://127.0.0.1:8080/" },
+    scope: { allow: ["http://127.0.0.1:8080"] },
+  });
 
   const pending = await emitHttpPending(rt, {
     method: "GET",
@@ -608,6 +658,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
       source: "shell",
     },
     null,
+    { allowedHosts: new Set(["lab.example"]) },
   );
   assert.equal(plan.settle, true);
   if (!plan.settle) throw new Error("expected settle");
@@ -627,6 +678,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
       purpose: "browse",
     },
     null,
+    { allowedHosts: new Set(["lab.example"]) },
   );
   assert.equal(browse.settle, true);
   if (!browse.settle) throw new Error("expected settle");
@@ -644,6 +696,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
       purpose: "browse",
     },
     { status: "seen", methods: ["GET"] },
+    { allowedHosts: new Set(["lab.example"]) },
   );
   assert.equal(browse2.settle, true);
   if (!browse2.settle) throw new Error("expected settle");
@@ -662,6 +715,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
       purpose: "test",
     },
     null,
+    { allowedHosts: new Set(["lab.example"]) },
   );
   assert.equal(forced.settle, true);
   if (!forced.settle) throw new Error("expected settle");
@@ -673,7 +727,11 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   const store = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(dir));
   await store.open();
   const platform = fakePlatform();
-  const rt = runtimeFor(dir, store, platform, { platformApi: true });
+  const rt = runtimeFor(dir, store, platform, {
+    platformApi: true,
+    target: { type: "url", value: "https://lab.example/" },
+    scope: { allow: ["https://lab.example"] },
+  });
   resetSurfacePlatformSyncTracking();
 
   // Browse-only traffic: settle without case_tested

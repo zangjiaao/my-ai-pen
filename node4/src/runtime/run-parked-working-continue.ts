@@ -22,6 +22,7 @@ import {
 } from "./pdca-settlement.js";
 import { joinHarnessPrefixes } from "./harness-channel.js";
 import { registerActiveSession } from "./active-session-registry.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
 import {
   attachNode4SessionObservability,
   CheckpointThrottle,
@@ -42,6 +43,7 @@ import {
   applyCaptainEndDisposition,
   decideCaptainEndDisposition,
   harnessStatusAfterParkedContinue,
+  rebindParkedRuntimeTask,
   type ParkedWorkingRuntime,
   type WorkingWorkMode,
 } from "./working-session-park.js";
@@ -109,7 +111,7 @@ export async function runParkedWorkingContinue(options: {
 
   // Rebind live task/platform onto stored runtime when present.
   if (parked.runtime) {
-    parked.runtime.task = task;
+    rebindParkedRuntimeTask(parked, task);
     parked.runtime.platform = platform;
     if (parked.runtime.lifecycle) {
       parked.runtime.lifecycle.abortSignal = signal;
@@ -195,6 +197,7 @@ export async function runParkedWorkingContinue(options: {
     taskId: task.taskId,
     steer: (text) => session.steer(text),
     followUp: (text) => session.followUp(text),
+    applyScope: (scope) => applyServerScopeToTask(task, scope),
   });
 
   const sessionObs = attachNode4SessionObservability({
@@ -280,50 +283,20 @@ export async function runParkedWorkingContinue(options: {
       throw err;
     }
   } finally {
-    try {
-      unregister();
-    } catch {
-      /* ignore */
-    }
-    try {
-      sessionObs.unsubscribe();
-    } catch {
-      /* ignore */
-    }
-    await textStream.dispose().catch(() => {});
-
-    const aborted = stop === "aborted" || cancelled();
+    const abortedEarly = stop === "aborted" || cancelled();
     let openTodoCount = 0;
     try {
       openTodoCount = parked.todo.openCount();
     } catch {
       openTodoCount = 0;
     }
-    // Spec #354: package complete still re-parks; dispose only via pending whitelist.
     harnessStatus = harnessStatusAfterParkedContinue({
-      aborted,
+      aborted: abortedEarly,
       workMode,
       openTodoCount,
     });
-    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
-      try {
-        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
-        const pdca = settleParticipantTurn({
-          overlay: overlayNow,
-          previousOverlay: pdcaPreviousOverlay,
-          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
-          aborted,
-        });
-        persistPdcaOnRuntime(parked.runtime, pdca);
-        pdcaLast = pdca;
-        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
-      } catch {
-        // Overlay read failed: do not complete from empty Todo / missing snapshot.
-        if (harnessStatus === "completed") harnessStatus = "incomplete";
-      }
-    }
     const decision = decideCaptainEndDisposition({
-      aborted,
+      aborted: abortedEarly,
     });
     const applied = applyCaptainEndDisposition({
       decision,
@@ -343,6 +316,36 @@ export async function runParkedWorkingContinue(options: {
       },
     });
     reparked = applied.parked;
+    try {
+      unregister();
+    } catch {
+      /* ignore */
+    }
+    try {
+      sessionObs.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+    await textStream.dispose().catch(() => {});
+
+    const aborted = stop === "aborted" || cancelled();
+    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
+      try {
+        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
+        const pdca = settleParticipantTurn({
+          overlay: overlayNow,
+          previousOverlay: pdcaPreviousOverlay,
+          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
+          aborted,
+        });
+        persistPdcaOnRuntime(parked.runtime, pdca);
+        pdcaLast = pdca;
+        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
+      } catch {
+        // Overlay read failed: do not complete from empty Todo / missing snapshot.
+        if (harnessStatus === "completed") harnessStatus = "incomplete";
+      }
+    }
   }
 
   const endTime = new Date().toISOString();

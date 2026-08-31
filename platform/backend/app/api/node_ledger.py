@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.base import get_db
 from app.models.conversation import Conversation
@@ -423,6 +425,84 @@ async def conversation_workset_node(
     return out
 
 
+@router.post("/conversations/{conversation_id}/workset/adopt")
+async def conversation_workset_adopt_node(
+    conversation_id: str,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """User named or selected hosts; Agent 代管 the same 0/1/2+ admit as Surface 纳入.
+
+    Does not scan chat/card prose. Caller passes hostnames and/or Workset item ids.
+    """
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    from app.services.case_workset import (
+        get_workset,
+        live_admission_from_context,
+        parse_agent_adopt_request,
+        project_workset_for_api,
+        resolve_and_admit_workset_hosts,
+    )
+    from app.services.conversation_access import conversation_for_update_stmt
+
+    hosts, item_ids, err = parse_agent_adopt_request(body if isinstance(body, dict) else {})
+    if err:
+        raise HTTPException(400, err)
+    result = await db.execute(conversation_for_update_stmt(cid))
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(404, "conversation not found")
+    require_conversation_bound_to_node(conv, node)
+    ctx = dict(conv.context or {}) if isinstance(conv.context, dict) else {}
+    admitted = await resolve_and_admit_workset_hosts(
+        db,
+        user_id=conv.user_id,
+        conversation_id=conv.id,
+        context=ctx,
+        workset_item_ids=item_ids or None,
+        host_keys=hosts or None,
+        allow_create=True,
+        match_resolved_hosts=True,
+    )
+    ctx = admitted["context"]
+    adopted = list(admitted.get("adopted_t_host_ids") or [])
+    ambiguous = list(admitted.get("admission_ambiguous") or [])
+    if adopted:
+        conv.context = ctx
+        flag_modified(conv, "context")
+        await db.commit()
+        try:
+            from app.ws import router as ws_router
+
+            await ws_router._broadcast_to_conversation(
+                str(conv.id),
+                json.dumps(
+                    {
+                        "type": "workset_updated",
+                        "conversation_id": str(conv.id),
+                        "workset": project_workset_for_api(get_workset(ctx)),
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as be:
+            print(f"[node-ledger] workset adopt broadcast error: {be}")
+    live = live_admission_from_context(ctx)
+    return {
+        "ok": bool(adopted),
+        "adopted_t_host_ids": adopted,
+        "live_adopted_t_host_ids": live.get("adopted_t_host_ids") or [],
+        "scope": live.get("scope") or {},
+        "admission_ambiguous": ambiguous,
+        "asset_id_by_host": admitted.get("asset_id_by_host") or {},
+        "workset": project_workset_for_api(get_workset(ctx)),
+    }
+
+
 @router.put("/conversations/{conversation_id}/asset-intake")
 async def conversation_asset_intake_node(
     conversation_id: str,
@@ -439,7 +519,13 @@ async def conversation_asset_intake_node(
         cid = uuid.UUID(conversation_id)
     except ValueError as e:
         raise HTTPException(400, "invalid conversation id") from e
-    result = await db.execute(select(Conversation).where(Conversation.id == cid))
+    from app.services.case_workset import (
+        get_asset_intake,
+        put_agent_asset_intake,
+    )
+    from app.services.conversation_access import conversation_for_update_stmt
+
+    result = await db.execute(conversation_for_update_stmt(cid))
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(404, "conversation not found")
@@ -452,11 +538,6 @@ async def conversation_asset_intake_node(
     group_name = str(payload.get("group_name") or payload.get("group") or "").strip()
     if mode == "enroll_group" and not group_id and not group_name:
         raise HTTPException(400, "enroll_group requires group_id or group_name")
-    from app.services.case_workset import (
-        get_asset_intake,
-        put_agent_asset_intake,
-    )
-
     if mode == "enroll_group" and not group_id and group_name:
         try:
             group = await ledger.resolve_group(
@@ -476,6 +557,7 @@ async def conversation_asset_intake_node(
         },
     )
     conv.context = ctx
+    flag_modified(conv, "context")
     await db.commit()
     return {"ok": True, "asset_intake": get_asset_intake(ctx)}
 

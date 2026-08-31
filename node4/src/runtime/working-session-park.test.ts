@@ -26,6 +26,8 @@ import {
   parkedSessionHasHistory,
   parkedTodoNonEmpty,
   peekParkedSession,
+  applyScopeToParkedRuntimes,
+  rebindParkedRuntimeTask,
   resetWorkingSessionMemory,
   resolveWorkingSessionContinue,
   takeParkedSession,
@@ -37,6 +39,7 @@ import {
   type IdleSubagentHandle,
 } from "./subagent-idle-pool.js";
 import type { ToolRuntime } from "../types.js";
+import { enqueuePendingScope } from "./active-session-registry.js";
 import {
   isContinueInEnvelopeExecution,
   parseGraphExecution,
@@ -1168,6 +1171,45 @@ function runtimeWithPool(pool: SubagentIdlePool): ToolRuntime {
 
   clearWorkingSessionParksForTests();
   clearRegisteredIdlePoolsForTests();
+}
+
+{
+  clearWorkingSessionParksForTests();
+  const task = { scope: { allow: [] as string[] } };
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-scope",
+      expertId: "exp",
+      runtime: { task } as ToolRuntime,
+    }),
+  );
+  const n = applyScopeToParkedRuntimes("c-scope", (t) => {
+    t.scope = { allow: ["www.example.com"] };
+  });
+  assert.equal(n, 1);
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  const dispatch = { scope: { allow: [] as string[] } };
+  const parked = peekParkedSession("c-scope", "exp");
+  assert.ok(parked);
+  rebindParkedRuntimeTask(parked, dispatch);
+  assert.deepEqual(dispatch.scope.allow, ["www.example.com"]);
+  assert.equal(parked.runtime?.task, dispatch);
+  clearWorkingSessionParksForTests();
+}
+
+{
+  clearWorkingSessionParksForTests();
+  enqueuePendingScope("c-teardown", { allow: ["www.example.com"] });
+  const task = { scope: { allow: [] as string[] } };
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-teardown",
+      expertId: "exp",
+      runtime: { task } as ToolRuntime,
+    }),
+  );
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  clearWorkingSessionParksForTests();
 }
 
 clearWorkingSessionParksForTests();

@@ -10,22 +10,20 @@ import {
 } from "./AgentCollaborationTree";
 import { formatCaseMeteringDetail, formatCaseMeteringHeader } from "../lib/caseMetering";
 import {
-  SurfaceTreeView,
-  attachFindingsToSurface,
-  projectSurfaceEntriesFromLedger,
   ensureSurfaceLedger,
-  buildSurfaceTree,
+  projectSurfaceEntriesFromLedger,
   resolveFindingSurfaceKey,
   surfaceKeyToDisplay,
   groupFindingsByKind,
   findingsTabHoverTitle,
   attackSurfaceItems,
-  type SurfaceEntry,
   type SurfaceLedger,
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
-import { IntelList } from "./IntelList";
 import type { IntelRow } from "../lib/intelView";
+import SurfaceHostCards from "./SurfaceHostCards";
+import { hostCardIdForFinding, projectHostCards } from "../lib/hostCardProjection";
+import type { WorksetProjection } from "../lib/workset";
 import { GraphAwareTodoList, GraphAwareTodoListSkeleton } from "./TasksPlanList";
 import TasksMapHeader, { TasksMapHeaderSkeleton } from "./TasksMapHeader";
 import ConfirmDialog from "./ConfirmDialog";
@@ -126,15 +124,19 @@ interface Props {
   caseRun?: CaseRunSummary;
   /** Spec #309: Case traffic audit store projection (replaces Activity timeline). */
   trafficExchanges?: TrafficExchange[];
-  /** Spec #368 / #375: Case surface_ledger (snapshot + live upserts) — sole Surface inventory SoT. */
+  /** Spec #368 / #375: Case surface_ledger (snapshot + live upserts) — path tree under admitted Hosts. */
   surfaceLedger?: SurfaceLedger | null;
   findings?: Array<Record<string, unknown>>;
-  /** Living notebook clues for Case Scope ∩ Host/Service. */
+  /** Living notebook clues for Host detail (not the Findings tab). */
   intel?: IntelRow[];
-  intelForgotten?: IntelRow[];
-  intelSealed?: IntelRow[];
   currentTaskId?: string | null;
+  /** Case-scoped Hosts (admitted cards). */
   assets?: Array<Record<string, unknown>>;
+  /** Owner-ledger Hosts for path-tree 已纳入 chips. */
+  ownerLedgerAssets?: Array<Record<string, unknown>>;
+  /** Spec #541: pending Workset t_host cards. */
+  workset?: WorksetProjection | Record<string, unknown> | null;
+  onWorksetUpdated?: (workset: WorksetProjection) => void;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
   taskContext?: Record<string, unknown>;
   /** Spec #321 Task Map history (product-state; FE view-only for archives). */
@@ -202,10 +204,11 @@ export default function RightPanel({
   surfaceLedger = null,
   findings = [],
   intel = [],
-  intelForgotten = [],
-  intelSealed = [],
   currentTaskId = null,
   assets = [],
+  ownerLedgerAssets = [],
+  workset = null,
+  onWorksetUpdated,
   taskContext,
   taskMapRevisions = [],
   liveRevisionId = null,
@@ -227,6 +230,7 @@ export default function RightPanel({
   useRenderAudit("RightPanel");
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
+  const [selectedHostCardId, setSelectedHostCardId] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
   const [sessionConfirm, setSessionConfirm] = useState<null | {
     kind: "reset" | "delete" | "end-worker";
@@ -280,64 +284,62 @@ export default function RightPanel({
       (row) => String(row.exchange_id || "") === selectedTrafficId,
     ) || null;
   }, [selectedTrafficId, trafficExchanges]);
-  // Spec #375 D10: Surface inventory from Case surface_ledger only (empty ledger ⇒ empty panel).
+  // Spec #375 D10 / #541: path identities still come from Case surface_ledger.
   const surfaceEntries = useMemo(
     () => projectSurfaceEntriesFromLedger(ensureSurfaceLedger(surfaceLedger)),
     [surfaceLedger],
   );
   const surfaceKeyList = useMemo(() => surfaceEntries.map((e) => e.key), [surfaceEntries]);
-  const findingAttachment = useMemo(
-    () => attachFindingsToSurface(findings, surfaceKeyList, surfaceEntries),
-    [findings, surfaceKeyList, surfaceEntries],
-  );
-  const findingsByPath = findingAttachment.byPath;
-  const unlinkedFindings = findingAttachment.unlinked;
-  const surfaceTree = useMemo(() => buildSurfaceTree(surfaceEntries, findingsByPath), [surfaceEntries, findingsByPath]);
-  const surfaceItems = surfaceEntries;
-  // Unique findings on routes (1:1 with Findings list items that have a path).
-  const surfaceLinkedCount = findingAttachment.linkedUnique;
-  const surfaceFindingsTotal = findings.length;
-  // Kind chip counts — exclusive, matches Findings group sizes (Vuln / Key / Flags).
-  const surfaceKindCounts = findingAttachment.kindCounts;
-  const knownSurfaceAssets = useMemo(
+  const hostCards = useMemo(
     () =>
-      assets.map((raw) => {
-        const rec = raw || {};
-        const props = (rec.properties && typeof rec.properties === "object" ? rec.properties : {}) as Record<
-          string,
-          unknown
-        >;
-        const aliasRaw = rec.aliases || props.aliases;
-        const aliases = Array.isArray(aliasRaw)
-          ? aliasRaw
-              .map((item) => {
-                if (typeof item === "string") return item.trim();
-                if (item && typeof item === "object") {
-                  const row = item as Record<string, unknown>;
-                  return String(row.value || row.address || row.host || "").trim();
-                }
-                return "";
-              })
-              .filter(Boolean)
-          : [];
-        const services = Array.isArray(rec.services) ? rec.services : Array.isArray(props.services) ? props.services : [];
-        const ports = services
-          .map((svc) => (svc && typeof svc === "object" ? String((svc as { port?: unknown }).port || "") : ""))
-          .filter(Boolean);
-        // AssetOut exposes open_ports at top level; snapshot/properties may nest them.
-        const openPortRaw = [
-          ...(Array.isArray(rec.open_ports) ? rec.open_ports : []),
-          ...(Array.isArray(props.open_ports) ? props.open_ports : []),
-        ];
-        const extraPorts = openPortRaw.map((p) => String(p || "").trim()).filter(Boolean);
-        return {
-          address: String(rec.address || rec.host || rec.name || ""),
-          aliases,
-          ports: [...new Set([...ports, ...extraPorts])],
-        };
+      projectHostCards({
+        workset,
+        surfaceLedger,
+        assets,
+        ownerAssets: ownerLedgerAssets,
+        taskContext,
+        findings,
+        intel,
       }),
-    [assets],
+    [workset, surfaceLedger, assets, ownerLedgerAssets, taskContext, findings, intel],
   );
+  const knownSurfaceAssets = useMemo(() => {
+    const rows = ownerLedgerAssets.length ? ownerLedgerAssets : assets;
+    return rows.map((raw) => {
+      const rec = raw || {};
+      const props = (rec.properties && typeof rec.properties === "object" ? rec.properties : {}) as Record<
+        string,
+        unknown
+      >;
+      const aliasRaw = rec.aliases || props.aliases;
+      const aliases = Array.isArray(aliasRaw)
+        ? aliasRaw
+            .map((item) => {
+              if (typeof item === "string") return item.trim();
+              if (item && typeof item === "object") {
+                const row = item as Record<string, unknown>;
+                return String(row.value || row.address || row.host || "").trim();
+              }
+              return "";
+            })
+            .filter(Boolean)
+        : [];
+      const services = Array.isArray(rec.services) ? rec.services : Array.isArray(props.services) ? props.services : [];
+      const ports = services
+        .map((svc) => (svc && typeof svc === "object" ? String((svc as { port?: unknown }).port || "") : ""))
+        .filter(Boolean);
+      const openPortRaw = [
+        ...(Array.isArray(rec.open_ports) ? rec.open_ports : []),
+        ...(Array.isArray(props.open_ports) ? props.open_ports : []),
+      ];
+      const extraPorts = openPortRaw.map((p) => String(p || "").trim()).filter(Boolean);
+      return {
+        address: String(rec.address || rec.host || rec.name || ""),
+        aliases,
+        ports: [...new Set([...ports, ...extraPorts])],
+      };
+    });
+  }, [assets, ownerLedgerAssets]);
   const orderedStrixAgents = orderStrixAgents(strixAgents);
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
@@ -427,7 +429,7 @@ export default function RightPanel({
   const findingsTabTitle = findingsTabHoverTitle(findingGroups);
   const tabs: { key: Tab; label: string; title?: string }[] = [
     { key: "status", label: "Status" },
-    { key: "surface", label: countLabel("Surface", surfaceItems.length) },
+    { key: "surface", label: countLabel("Surface", hostCards.length) },
     { key: "findings", label: countLabel("Findings", findings.length), title: findingsTabTitle },
     { key: "traffic", label: countLabel("Traffic", trafficRows.length) },
   ];
@@ -590,23 +592,17 @@ export default function RightPanel({
           </div>
         )}
         {tab === "surface" && (
-          surfaceItems.length === 0 ? (
-            <p className="text-sm text-ink-muted" data-testid="surface-empty">
-              No attack surface recorded yet
-            </p>
-          ) : (
-            <SurfaceTreeView
-              roots={surfaceTree}
-              total={surfaceItems.length}
-              linkedCount={surfaceLinkedCount}
-              findingsTotal={surfaceFindingsTotal}
-              kindCounts={surfaceKindCounts}
-              unlinked={unlinkedFindings}
-              knownAssets={knownSurfaceAssets}
-              onOpenVulnerability={onOpenVulnerability}
-              onEnrolledAsset={onEnrolledAsset}
-            />
-          )
+          <SurfaceHostCards
+            cards={hostCards}
+            knownAssets={knownSurfaceAssets}
+            conversationId={conversationId}
+            currentTaskId={currentTaskId}
+            selectedId={selectedHostCardId}
+            onSelect={setSelectedHostCardId}
+            onOpenVulnerability={onOpenVulnerability}
+            onEnrolledAsset={onEnrolledAsset}
+            onWorksetUpdated={onWorksetUpdated}
+          />
         )}
         {tab === "findings" && (
           <div className="space-y-6">
@@ -623,9 +619,11 @@ export default function RightPanel({
                         </p>
                         <span className="font-mono text-[10px] text-ink-muted">{group.hint}</span>
                       </div>
-                      {group.items.map((finding, index) => (
+                      {group.items.map((finding, index) => {
+                        const hostCardId = hostCardIdForFinding(hostCards, finding);
+                        return (
+                        <div key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`} className="space-y-1">
                         <FindingCard
-                          key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
                           caseStartedAt={caseRun?.started_at || strixRun?.start_time}
                           finding={{
                             ...finding,
@@ -653,22 +651,27 @@ export default function RightPanel({
                             } as Partial<SecurityVulnerability>);
                           }}
                         />
-                      ))}
+                        {hostCardId ? (
+                          <button
+                            type="button"
+                            data-testid="finding-host-link"
+                            onClick={() => {
+                              setTab("surface");
+                              setSelectedHostCardId(hostCardId);
+                            }}
+                            className="text-[11px] text-ink-muted hover:text-ink"
+                          >
+                            Host card
+                          </button>
+                        ) : null}
+                        </div>
+                        );
+                      })}
                     </section>
                   ),
                 )}
               </div>
             )}
-            <section data-testid="intel-clues-section" className="space-y-2 border-t border-hairline-soft pt-4">
-              <p className="text-xs font-medium text-ink-muted">线索</p>
-              <IntelList
-                rows={[...intel, ...intelForgotten, ...intelSealed]}
-                currentTaskId={currentTaskId}
-                conversationId={conversationId}
-                emptyCopy="还没有线索。Agent 笔记本会把值得记住的东西记在这里。"
-                showHang
-              />
-            </section>
           </div>
         )}
         {tab === "traffic" && (

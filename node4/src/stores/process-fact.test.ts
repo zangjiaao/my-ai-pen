@@ -55,6 +55,7 @@ try {
   assert(!inject.includes("Failed probe"), "inject does not include body detail");
   assert(inject.includes("Do not invent"), "anti-hallucination guidance");
   assert(inject.includes("user-created only"), "asset ownership note");
+  assert(inject.includes("Intel-source HTTP failures"), "source HTTP fail belongs in facts");
 
   // Second fact + finding separation is conceptual; store stays facts only
   await store.upsert({

@@ -20,6 +20,8 @@
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { ToolRuntime } from "../types.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
+import { takePendingScope } from "./active-session-registry.js";
 import {
   disposeBrowserSandboxForCase,
   disposeBrowserSandboxForSeat,
@@ -329,6 +331,10 @@ export function parkWorkingSession(entry: ParkedWorkingRuntime): string {
     void Promise.resolve(prev.dispose()).catch(() => {});
   }
   parks.set(key, { ...entry, parkedAt: entry.parkedAt || Date.now() });
+  const pending = takePendingScope(entry.conversationId);
+  if (pending && entry.runtime?.task) {
+    applyServerScopeToTask(entry.runtime.task, pending);
+  }
   return key;
 }
 
@@ -396,6 +402,42 @@ export function peekParkedSession(
   const key = parkSessionKey(conversationId, expertId);
   if (!key) return undefined;
   return parks.get(key);
+}
+
+/** HTTP Surface 纳入: refresh parked captain TaskEnvelope Scope without attach. */
+export function applyScopeToParkedRuntimes(
+  conversationId: string,
+  apply: (task: { scope?: Record<string, unknown> }) => void,
+): number {
+  const cid = String(conversationId || "").trim();
+  if (!cid) return 0;
+  let n = 0;
+  for (const entry of parks.values()) {
+    if (String(entry.conversationId || "").trim() !== cid) continue;
+    if (!entry.runtime?.task) continue;
+    apply(entry.runtime.task);
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * Attach replaces `runtime.task` with the dispatch envelope. `normalizeTask`
+ * defaults omitted Scope to empty `allow`; keep hosts admitted while parked.
+ */
+export function rebindParkedRuntimeTask(
+  parked: ParkedWorkingRuntime,
+  task: { scope?: Record<string, unknown> },
+): void {
+  if (!parked.runtime) return;
+  const parkedScope = parked.runtime.task?.scope;
+  parked.runtime.task = task as ToolRuntime["task"];
+  const dispatchAllow = Array.isArray(task.scope?.allow)
+    ? task.scope.allow.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  if (dispatchAllow.length === 0) {
+    applyServerScopeToTask(task, parkedScope);
+  }
 }
 
 /**

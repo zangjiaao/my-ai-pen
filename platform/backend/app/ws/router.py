@@ -296,6 +296,13 @@ async def _conversation_owner(conv_id: str) -> tuple[uuid.UUID | None, uuid.UUID
         return None, None
 
 
+async def _user_owns_conversation(conv_id: str, client_id: str) -> bool:
+    from app.services.conversation_access import actor_owns_case
+
+    owner_id, _ = await _conversation_owner(conv_id)
+    return actor_owns_case(owner_id, client_id)
+
+
 async def _conversation_context(conv_id: str) -> dict:
     try:
         from app.db.base import async_session
@@ -4014,13 +4021,13 @@ async def _remember_conversation_task(
 ):
     try:
         from app.db.base import async_session
-        from app.models.conversation import Conversation
         from app.services.case_engagement import merge_case_into_context, resolve_allow_postex
         from app.services.case_workset import get_workset, put_workset, set_in_progress
+        from app.services.conversation_access import conversation_for_update_stmt
         from app.services.participant_session import merge_session_into_context
 
         async with async_session() as db:
-            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            r = await db.execute(conversation_for_update_stmt(uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
             if not c:
                 return
@@ -4034,9 +4041,7 @@ async def _remember_conversation_task(
             )
             if remembered_target:
                 task_blob["target"] = remembered_target
-            remembered_scope = _structured_scope_dict(scope) or _structured_scope_dict(
-                prev_task.get("scope")
-            )
+            remembered_scope = _remembered_task_scope(prev_task.get("scope"), scope)
             if remembered_scope:
                 task_blob["scope"] = remembered_scope
             aid = str(asset_id or prev_task.get("asset_id") or "").strip()
@@ -4306,18 +4311,48 @@ async def _stamp_owned_host_labels_on_decision(msg: dict, conv_id: str) -> None:
         print(f"[WS] stamp host_labels error: {e}")
 
 
-async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]) -> None:
-    """Write user-allowed Host ids as Case Scope. Does not invent task.target."""
+def _admission_keys_from_assets(assets: list) -> tuple[list[str], dict[str, str]]:
+    """Unique primary∪alias keys only. Ambiguous keys omitted (never first-match)."""
+    from app.services.asset_ledger import unique_asset_id_by_identity_keys
+
+    rows = [
+        {
+            "id": str(getattr(a, "id", "") or ""),
+            "address": getattr(a, "address", None),
+            "properties": getattr(a, "properties", None) or {},
+        }
+        for a in assets
+    ]
+    by_host = unique_asset_id_by_identity_keys(rows)
+    return list(by_host.keys()), by_host
+
+
+async def _adopt_authorized_workset_on_user_decision(
+    conv_id: str,
+    *,
+    actor_user_id: str | None,
+    asset_ids: list[str],
+    workset_item_ids: list[str] | None = None,
+) -> dict:
+    """User authorize / next_steps binds: resolve Host first, then adopt matching t_host."""
     from sqlalchemy.orm.attributes import flag_modified
 
     from app.db.base import async_session
     from app.models.asset import Asset
-    from app.models.conversation import Conversation
-    from app.services.asset_ledger import build_scope_allow
+    from app.services.case_workset import (
+        get_workset,
+        merge_authorized_hosts_into_scope,
+        project_workset_for_api,
+        put_workset,
+        resolve_and_admit_workset_hosts,
+    )
+    from app.services.conversation_access import actor_owns_case, conversation_for_update_stmt
 
+    empty = {"adopted_t_host_ids": [], "scope": {}, "admission_ambiguous": []}
+    binds = [str(x).strip() for x in (workset_item_ids or []) if str(x or "").strip()]
     ids: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
-    for raw in asset_ids:
+    for raw in asset_ids or []:
         try:
             guid = uuid.UUID(str(raw))
         except ValueError:
@@ -4326,64 +4361,124 @@ async def _patch_conversation_task_host_scope(conv_id: str, asset_ids: list[str]
             continue
         seen.add(guid)
         ids.append(guid)
-    if not ids:
-        return
+    if not ids and not binds:
+        return empty
     owner_id, _ = await _conversation_owner(conv_id)
-    if not owner_id:
-        return
+    if not actor_owns_case(owner_id, actor_user_id):
+        return empty
+    try:
+        cid = uuid.UUID(conv_id)
+    except ValueError:
+        return empty
     try:
         async with async_session() as db:
-            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            r = await db.execute(conversation_for_update_stmt(cid))
             c = r.scalar_one_or_none()
             if not c:
-                return
-            assets = list(
-                (
-                    await db.execute(
-                        select(Asset).where(Asset.user_id == owner_id, Asset.id.in_(ids))
-                    )
-                ).scalars().all()
-            )
-            if not assets:
-                return
-            by_id = {a.id: a for a in assets}
-            ordered = [by_id[i] for i in ids if i in by_id]
-            allow = build_scope_allow(
-                [
-                    {"address": a.address, "properties": a.properties or {}}
-                    for a in ordered
-                ]
-            )
-            found_ids = [str(a.id) for a in ordered]
+                return empty
+            assets: list = []
+            if ids:
+                assets = list(
+                    (
+                        await db.execute(
+                            select(Asset).where(Asset.user_id == owner_id, Asset.id.in_(ids))
+                        )
+                    ).scalars().all()
+                )
+            host_keys, by_host = _admission_keys_from_assets(assets)
             context = dict(c.context or {}) if isinstance(c.context, dict) else {}
-            task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
-            from app.services.choice_card import merge_authorized_host_scope, sync_task_asset_id_from_scope
-
-            task["scope"] = merge_authorized_host_scope(
-                task.get("scope") if isinstance(task.get("scope"), dict) else {},
-                allow=allow,
-                asset_ids=found_ids,
+            before_task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
+            before_scope = (
+                dict(before_task.get("scope") or {})
+                if isinstance(before_task.get("scope"), dict)
+                else {}
             )
-            sync_task_asset_id_from_scope(task)
-            context["task"] = task
+            before_ws = [
+                (str(i.get("id") or ""), str(i.get("status") or ""))
+                for i in (get_workset(context).get("items") or [])
+                if isinstance(i, dict)
+            ]
+            admitted = await resolve_and_admit_workset_hosts(
+                db,
+                user_id=owner_id,
+                conversation_id=c.id,
+                context=context,
+                workset_item_ids=binds,
+                host_keys=host_keys,
+                seed_by_host=by_host,
+                allow_create=True,
+                match_resolved_hosts=True,
+            )
+            context = merge_authorized_hosts_into_scope(
+                admitted["context"],
+                asset_rows=[
+                    {
+                        "id": str(getattr(a, "id", "") or ""),
+                        "address": getattr(a, "address", None),
+                        "properties": getattr(a, "properties", None) or {},
+                    }
+                    for a in assets
+                ],
+            )
+            adopted = admitted["adopted_t_host_ids"]
+            ambiguous = admitted["admission_ambiguous"]
+            task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
+            scope = dict(task.get("scope") or {}) if isinstance(task.get("scope"), dict) else {}
+            after_ws = [
+                (str(i.get("id") or ""), str(i.get("status") or ""))
+                for i in (get_workset(context).get("items") or [])
+                if isinstance(i, dict)
+            ]
+            dirty = bool(adopted) or scope != before_scope or after_ws != before_ws
+            out = {
+                "adopted_t_host_ids": adopted,
+                "scope": scope,
+                "admission_ambiguous": ambiguous,
+            }
+            if not dirty:
+                print(
+                    f"[WS] authorized workset adopt empty conv={conv_id[:8]} "
+                    f"binds={len(binds)} assets={len(ids)}"
+                )
+                return out
+            context = put_workset(context, get_workset(context))
             c.context = context
             flag_modified(c, "context")
             await db.commit()
             print(
-                f"[WS] authorized host scope conv={conv_id[:8]} "
-                f"hosts={len(found_ids)} allow={len(allow)}"
+                f"[WS] authorized host persist conv={conv_id[:8]} "
+                f"adopted={len(adopted)} scope_hosts={len(scope.get('asset_ids') or [])}"
             )
+            if adopted:
+                try:
+                    await _broadcast_to_conversation(
+                        conv_id,
+                        json.dumps(
+                            {
+                                "type": "workset_updated",
+                                "conversation_id": conv_id,
+                                "workset": project_workset_for_api(get_workset(context)),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                except Exception as be:
+                    print(f"[WS] authorized workset broadcast error: {be}")
+            return out
     except Exception as e:
-        print(f"[WS] authorized host scope error: {e}")
+        print(f"[WS] authorized workset adopt error: {e}")
+        return empty
 
 
 async def _maybe_persist_authorized_host_scope(
     conv_id: str,
     *,
+    actor_user_id: str | None,
     decision: str,
     card: dict | None,
     selected_option_ids: list | None,
-) -> list[str]:
+    workset_item_ids: list[str] | None = None,
+) -> dict:
     from app.services.choice_card import collect_authorized_asset_ids
 
     ids = collect_authorized_asset_ids(
@@ -4391,9 +4486,18 @@ async def _maybe_persist_authorized_host_scope(
         card=card,
         selected_option_ids=selected_option_ids,
     )
-    if ids:
-        await _patch_conversation_task_host_scope(conv_id, ids)
-    return ids
+    adopted = await _adopt_authorized_workset_on_user_decision(
+        conv_id,
+        actor_user_id=actor_user_id,
+        asset_ids=ids,
+        workset_item_ids=workset_item_ids,
+    )
+    return {
+        "asset_ids": ids,
+        "adopted_t_host_ids": adopted.get("adopted_t_host_ids") or [],
+        "scope": adopted.get("scope") or {},
+        "admission_ambiguous": adopted.get("admission_ambiguous") or [],
+    }
 
 
 async def _latest_persisted_confirm_matches(conv_id: str, request_id: object) -> bool:
@@ -4551,9 +4655,11 @@ async def _continue_after_orphaned_confirm_options(
     try:
         await _maybe_persist_authorized_host_scope(
             conv_id,
+            actor_user_id=client_id,
             decision="confirm_options",
             card=_choice_card_snap_for_request(str(msg.get("request_id") or "")) or {},
             selected_option_ids=selected_option_ids if isinstance(selected_option_ids, list) else [],
+            workset_item_ids=workset_item_ids,
         )
     except Exception as e:
         print(f"[WS] orphaned confirm host scope: {e}")
@@ -5648,10 +5754,10 @@ async def _remember_conversation_expert(
         return
     try:
         from app.db.base import async_session
-        from app.models.conversation import Conversation
+        from app.services.conversation_access import conversation_for_update_stmt
 
         async with async_session() as db:
-            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            r = await db.execute(conversation_for_update_stmt(uuid.UUID(str(conv_id))))
             c = r.scalar_one_or_none()
             if not c:
                 return
@@ -5921,7 +6027,6 @@ async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None 
         return None
     try:
         from app.db.base import async_session
-        from app.models.conversation import Conversation
         from app.services.case_workset import (
             get_asset_intake,
             get_workset,
@@ -5929,10 +6034,11 @@ async def _persist_workset_propose(msg: dict, conv_id: str, node_id: str | None 
             merge_proposed_into_context,
             project_workset_for_api,
         )
+        from app.services.conversation_access import conversation_for_update_stmt
         from app.services.node_ledger import conversation_bound_to_node_id
 
         async with async_session() as db:
-            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            r = await db.execute(conversation_for_update_stmt(uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
             if not c:
                 return None
@@ -5987,11 +6093,11 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
     free_land: dict | None = None
     try:
         from app.db.base import async_session
-        from app.models.conversation import Conversation
         from app.services.case_workset import apply_settle_to_context, get_workset, project_workset_for_api
+        from app.services.conversation_access import conversation_for_update_stmt
 
         async with async_session() as db:
-            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            r = await db.execute(conversation_for_update_stmt(uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
             if not c:
                 return
@@ -6310,6 +6416,11 @@ def _structured_scope_dict(raw: object) -> dict | None:
     if not has_allow and not has_deny and not has_ids:
         return None
     return dict(raw)
+
+
+def _remembered_task_scope(persisted: object, incoming: object) -> dict | None:
+    """Sticky Scope: persisted Case Scope wins over a stale dispatch envelope."""
+    return _structured_scope_dict(persisted) or _structured_scope_dict(incoming)
 
 
 def _message_has_task_target(msg: dict) -> bool:
@@ -7557,6 +7668,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     print(f"[WS] node message handler error type={msg.get('type')}: {e}")
 
             elif client_type == "user":
+                if conv_id and not await _user_owns_conversation(conv_id, client_id):
+                    continue
                 if msg.get("type") == "subscribe" and conv_id:
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
                     continue
@@ -7775,17 +7888,46 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             workset_item_ids = list(expanded.get("workset_item_ids") or [])
                         except Exception:
                             workset_item_ids = []
+                    persist = {
+                        "adopted_t_host_ids": [],
+                        "scope": {},
+                        "admission_ambiguous": [],
+                    }
                     try:
-                        await _maybe_persist_authorized_host_scope(
+                        persist = await _maybe_persist_authorized_host_scope(
                             conv_id,
+                            actor_user_id=client_id,
                             decision=str(decision or ""),
                             card=card_source if isinstance(card_source, dict) else {},
                             selected_option_ids=(
                                 selected_option_ids if isinstance(selected_option_ids, list) else []
                             ),
+                            workset_item_ids=workset_item_ids,
                         )
                     except Exception as e:
                         print(f"[WS] persist authorized host scope: {e}")
+                    live_adopted: list[str] = []
+                    live_scope: dict = {}
+                    try:
+                        from app.db.base import async_session
+                        from app.models.conversation import Conversation
+                        from app.services.case_workset import live_admission_from_context
+
+                        async with async_session() as db:
+                            r = await db.execute(
+                                select(Conversation).where(Conversation.id == uuid.UUID(conv_id))
+                            )
+                            c = r.scalar_one_or_none()
+                            if c:
+                                live = live_admission_from_context(c.context)
+                                live_adopted = list(live.get("adopted_t_host_ids") or [])
+                                live_scope = (
+                                    dict(live["scope"])
+                                    if isinstance(live.get("scope"), dict)
+                                    else {}
+                                )
+                    except Exception as e:
+                        print(f"[WS] live admission snapshot: {e}")
                     # Spec #313 L3: structured replace permission only (not free-text NLP).
                     replace_perm = _is_todo_replace_user_permission(msg, selected_option_ids)
                     node_msg = {
@@ -7801,6 +7943,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         ]
                     if workset_item_ids:
                         node_msg["workset_item_ids"] = workset_item_ids
+                    adopted_ids = persist.get("adopted_t_host_ids") or []
+                    if adopted_ids:
+                        node_msg["adopted_t_host_ids"] = adopted_ids
+                    if live_adopted:
+                        node_msg["live_adopted_t_host_ids"] = live_adopted
+                    scope = persist.get("scope") if isinstance(persist.get("scope"), dict) else {}
+                    if live_scope:
+                        node_msg["scope"] = live_scope
+                    elif scope:
+                        node_msg["scope"] = scope
+                    ambiguous = persist.get("admission_ambiguous") or []
+                    if ambiguous:
+                        node_msg["admission_ambiguous"] = ambiguous
                     if msg.get("text"):
                         node_msg["text"] = str(msg.get("text"))
                     custom_text = str(msg.get("custom_text") or "").strip()

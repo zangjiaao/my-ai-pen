@@ -4,7 +4,7 @@
 **Issue:** [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)  
 **Related:** Product state → UI passive projection ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280)); Case traffic audit ([#309](https://github.com/zangjiaao/my-ai-pen/issues/309)); base booking / finding id ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279)); task-graph ([`task-graph.md`](task-graph.md)); Owner ledger ([#454](https://github.com/zangjiaao/my-ai-pen/issues/454)); ADR 0001 Graph × Pi
 
-**Product path:** Node4 Agent Runtime (Traffic collect → Surface settle + SQLite working store) · Platform Case `surface_ledger` + WS · Conversation right-panel Surface tab  
+**Product path:** Node4 Agent Runtime (Traffic collect → Surface settle + SQLite working store) · Platform Case `surface_ledger` + WS · Conversation right-panel Surface **Host cards** (Spec [#541](https://github.com/zangjiaao/my-ai-pen/issues/541))  
 
 **Does not implement product code in this document** — normative contracts only.
 
@@ -17,6 +17,7 @@
 | 2026-08-10 | Field failure: Case finished with Findings + Traffic, Surface empty; Agent recon = prior path lists + curl, not scientific crawl; finding→booked failed on non-URL `location` |
 | 2026-08-10 | **v2 grill (this amendment):** Surface is **Agent working memory**, **Runtime-passive from Traffic**, completion via **finding confirm**; no complete-tag without test traffic |
 | 2026-08-10 | **v3 operator model (amend):** [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) — UI **NEW** (inventory novelty) + **TESTED** + finding tags; no BOOK/SEEN/PRIOR chips; method chips off tree; priors ≠ coverage. **v4 (#518):** TESTED is Agent coverage work-state, not this-Case traffic. Internal settle may keep seen/touched/booked expand–contract. |
+| 2026-08-30 | `surface(op=mark|unmark|skip)` accepts `location` (one) or `locations[]` (many, same coverage / skip reason). Cap = upsert batch max. Mixed fail-closed: admitted rows write; foreign origins return per-item errors. |
 
 ---
 
@@ -64,7 +65,7 @@ Surface ledger (Case + Node SQLite)
   booked  = finding(confirm) success on that identity
         │
         ├─► Agent read-only summary / list (management view)
-        ├─► Operator UI Surface tab (project only)
+        ├─► Operator UI Surface Host cards (Workset + admitted Hosts; path tree in detail)
         └─► finding(confirm) → complete tag (booked); no traffic ⇒ no complete
 ```
 
@@ -75,7 +76,7 @@ Surface ledger (Case + Node SQLite)
 | **Agent** | Explore and test (guess + real use OK); **read** Surface to manage work; **confirm** findings (drives booked). Does **not** own “register every path” as a primary task. Must **not** mark complete without traffic evidence. |
 | **Node Runtime** | Collect Traffic; **settle** Traffic (+ TARGET seed) into Surface; dual-write Platform; apply booked on confirm; enforce no-complete-without-traffic; optional short Surface summary into Agent context |
 | **Platform** | Case `surface_ledger` SoT for UI/import; WS `surface_upsert`; booked side-effect on `vuln_found` |
-| **Frontend** | Project Case ledger only; honest empty when empty |
+| **Frontend** | Project Host cards (Workset + Case Hosts); path tree from ledger under admitted Hosts; honest empty when no Hosts |
 
 ### Primary audience
 
@@ -223,9 +224,9 @@ seen  →  touched  →  booked
 - Default: in-scope http(s) exchanges with a path become/update a Surface row.
 - **Static suffix denylist** — do **not** create Surface rows for the asset path itself, e.g. `.js`, `.css`, `.map`, common image/font extensions (exact list is an implementation knob; keep conservative).
 - **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
-- **Scope gate (product amend):** do **not** settle Surface for origins outside TARGET / `scope.allow` (Traffic audit may still keep the exchange). See [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md).
+- **Scope gate (product amend, Spec #541):** do **not** settle Surface for origins outside TARGET / `scope.allow`. **Empty or missing structured Scope is fail-closed** (do not settle). Traffic audit may still keep the exchange. `surface` write ops (mark / upsert) on a non-admitted origin fail closed — when Scope names an explicit port **on that host**, host+port must match (default `:443` in the allow string is still explicit). Host-only siblings in a mixed allow list stay whole-host. No hostname denylist of intel vendors.
 - **Garbage path:** unexpanded `${…}` / `{{…}}` in path → do not settle.
-- **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
+- **TESTED / purpose:** operator TESTED is Agent coverage work-state (`surface` mark: `location` or `locations[]`), **not** a test-purpose exchange. Traffic purpose remains audit/noise — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md) and v4 [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md).
 
 **Status vocabulary (locked):** keep **`seen` / `touched` / `booked`** (not collapsed). First observation → `seen`; later real request on same identity → `touched`; finding confirm → `booked`.
 
@@ -302,7 +303,7 @@ WS: `surface_upsert` by identity (retain).
 
 ### D10 — Frontend
 
-- Surface tab = Case `surface_ledger` only (v1 #375 stands).
+- Surface **home** is Host cards (Workset `t_host` + admitted Case Hosts). Admitted = Scope `asset_ids` or a **unique** primary∪alias match on `target` / `scope.allow` (ambiguous keys admit no one), or a user-adopted Workset `t_host` (Surface 纳入 HTTP PATCH, authorize `asset_ids`, or next_steps `workset_item_ids` — same 0 create / 1 reuse / 2+ stay proposed; no Host id → not adopted). Same machine (alias) is one card. Path tree = `surface_ledger` identities **for that host** (v1 #375 path SoT still stands). Tool-platform origins are omitted from the card list (Spec #541).
 - Empty with zero traffic may still be honest at t0; empty after heavy traffic is a settle bug.
 
 ### D11 — Graph gates
@@ -429,7 +430,7 @@ These are **not** locked; resolve before/during v2 implementation tickets:
 |------|----------|
 | Audience | Agent working memory first |
 | Row birth | Runtime Traffic settle + TARGET seed |
-| Noise | Default settle + static suffix denylist |
+| Noise | Default settle + static suffix denylist; empty/missing Scope fail-closed (#541) |
 | JS/SPA mining | Capture enrichment later (D6.2); feed Agent; optional Surface bridge later |
 | Status (v2 internal) | seen → touched → booked |
 | Status (v3/v4 operator UI) | **NEW** (inventory) + **TESTED** (coverage work-state) + finding tags — see [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) |

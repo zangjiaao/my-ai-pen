@@ -5,7 +5,8 @@
  * into the live Agent (steer/followUp) instead of rejecting as "still working".
  *
  * Race: busy is set before the Free/Graph session registers. Pending steers
- * queue until registerActiveSession flushes them via steer/followUp.
+ * and case_scope_updated (busy-only) queue until registerActiveSession flushes them.
+ * Do not queue Scope while idle — that snapshot can overwrite a later dispatch.
  */
 
 export type ActiveSessionHandle = {
@@ -15,11 +16,15 @@ export type ActiveSessionHandle = {
   steer: (text: string) => void;
   /** Fallback: inject after agent would stop (pi Agent.followUp). */
   followUp: (text: string) => void;
+  /** HTTP Surface 纳入 / live Scope push — mutate the burst TaskEnvelope. */
+  applyScope?: (scope: unknown) => void;
 };
 
 const byConversation = new Map<string, ActiveSessionHandle>();
 /** Steers that arrived while busy but before any session registered. */
 const pendingByConversation = new Map<string, string[]>();
+/** Last case_scope_updated during busy-before-register or teardown-before-park. */
+const pendingScopeByConversation = new Map<string, unknown>();
 
 function injectIntoHandle(
   handle: ActiveSessionHandle,
@@ -51,11 +56,19 @@ function flushPending(conversationId: string, handle: ActiveSessionHandle): void
   }
 }
 
+function flushPendingScope(conversationId: string, handle: ActiveSessionHandle): void {
+  if (!pendingScopeByConversation.has(conversationId)) return;
+  const pending = pendingScopeByConversation.get(conversationId);
+  pendingScopeByConversation.delete(conversationId);
+  if (handle.applyScope) handle.applyScope(pending);
+}
+
 export function registerActiveSession(handle: ActiveSessionHandle): () => void {
   const id = String(handle.conversationId || "").trim();
   if (!id) return () => {};
   byConversation.set(id, handle);
   flushPending(id, handle);
+  flushPendingScope(id, handle);
   return () => {
     const cur = byConversation.get(id);
     if (cur === handle) byConversation.delete(id);
@@ -64,6 +77,43 @@ export function registerActiveSession(handle: ActiveSessionHandle): () => void {
 
 export function getActiveSession(conversationId: string): ActiveSessionHandle | undefined {
   return byConversation.get(String(conversationId || "").trim());
+}
+
+/** Apply Case Scope onto the live burst envelope (HTTP Surface 纳入). */
+export function applyScopeToLiveSession(conversationId: string, scope: unknown): boolean {
+  const id = String(conversationId || "").trim();
+  if (!id) return false;
+  const handle = getActiveSession(id);
+  if (!handle?.applyScope) return false;
+  handle.applyScope(scope);
+  pendingScopeByConversation.delete(id);
+  return true;
+}
+
+/**
+ * Queue Scope until a session registers (busy race), or apply now if live.
+ * Caller must only enqueue while the conversation is busy and neither live nor
+ * parked. Park consumes this via takePendingScope.
+ */
+export function enqueuePendingScope(conversationId: string, scope: unknown): void {
+  const id = String(conversationId || "").trim();
+  if (!id) return;
+  const handle = byConversation.get(id);
+  if (handle?.applyScope) {
+    handle.applyScope(scope);
+    pendingScopeByConversation.delete(id);
+    return;
+  }
+  pendingScopeByConversation.set(id, scope);
+}
+
+/** Park / attach: take queued Scope so teardown cannot drop an in-flight 纳入. */
+export function takePendingScope(conversationId: string): unknown | undefined {
+  const id = String(conversationId || "").trim();
+  if (!id || !pendingScopeByConversation.has(id)) return undefined;
+  const pending = pendingScopeByConversation.get(id);
+  pendingScopeByConversation.delete(id);
+  return pending;
 }
 
 /**
@@ -93,6 +143,11 @@ export function clearPendingSteers(conversationId: string): void {
   pendingByConversation.delete(String(conversationId || "").trim());
 }
 
+/** Drop queued Scope so a later dispatch is not overwritten by an idle snapshot. */
+export function clearPendingScope(conversationId: string): void {
+  pendingScopeByConversation.delete(String(conversationId || "").trim());
+}
+
 /**
  * Deliver mid-run user text. Returns true if injected into a live session.
  * Prefer steer (next turn boundary after tools); fall back to followUp.
@@ -115,4 +170,5 @@ export function deliverUserSteerToActiveSession(
 export function clearActiveSessionsForTests(): void {
   byConversation.clear();
   pendingByConversation.clear();
+  pendingScopeByConversation.clear();
 }

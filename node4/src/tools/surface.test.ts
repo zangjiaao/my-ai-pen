@@ -20,12 +20,16 @@ function minimalRuntime(
     surfaceLedger?: SurfaceLedgerStore;
     workerAudit?: { agentId: string; packageTurnId: string } | null;
     subagentDepth?: number;
+    target?: Record<string, unknown>;
+    scope?: Record<string, unknown>;
   },
 ): ToolRuntime {
   const task = {
     taskId: "t-surface-370",
     conversationId: "c1",
     instruction: "test",
+    target: opts?.target ?? { type: "url", value: "https://Host.Example/" },
+    scope: opts?.scope ?? { allow: ["https://Host.Example"] },
   } as TaskEnvelope;
   return {
     task,
@@ -286,6 +290,8 @@ const tool = createSurfaceTool(runtime);
     surfaceLedger: legacy,
     workerAudit: { agentId: "sub_42", packageTurnId: "pkg_1" },
     subagentDepth: 1,
+    target: { type: "url", value: "ssh://10.0.0.5/" },
+    scope: { allow: ["10.0.0.5"] },
   });
   const workerTool = createSurfaceTool(workerRt);
   const r = await toolJson(workerTool, {
@@ -322,7 +328,11 @@ const tool = createSurfaceTool(runtime);
   }
   assert.equal(await capStore.count(), SURFACE_WRITE_HARD_CAP);
 
-  const capRt = minimalRuntime(capDir, { surfaceSqlite: capStore });
+  const capRt = minimalRuntime(capDir, {
+    surfaceSqlite: capStore,
+    target: { type: "url", value: "https://cap.test/" },
+    scope: { allow: ["https://cap.test"] },
+  });
   const capTool = createSurfaceTool(capRt);
   const blocked = await toolJson(capTool, {
     op: "upsert",

@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MarkdownText from "../MarkdownText";
 import {
+  choiceCardHistoryFooter,
   isNextStepsChoice,
   isQuestionAnswerValid,
   mapAuthorizeDecision,
@@ -28,6 +29,7 @@ export default function ChoiceCard({
   onAuthorize,
   onCancel,
   onConfirmOptions,
+  onAnswered,
   highlighted = false,
   decision,
   disabled = false,
@@ -39,6 +41,7 @@ export default function ChoiceCard({
   onAuthorize?: (text?: string) => void;
   onCancel?: () => void;
   onConfirmOptions?: (selectedOptionIds: string[], extras?: ConfirmOptionsExtras) => void;
+  onAnswered?: (text?: string) => void;
   highlighted?: boolean;
   decision?: ApprovalDecision;
   disabled?: boolean;
@@ -67,6 +70,7 @@ export default function ChoiceCard({
       onConfirmOptions={onConfirmOptions}
       onAuthorize={onAuthorize}
       onCancel={onCancel}
+      onAnswered={onAnswered}
     />
   );
 }
@@ -118,6 +122,7 @@ function ApprovalWizardBody({
   onConfirmOptions,
   onAuthorize,
   onCancel,
+  onAnswered,
 }: {
   content: Record<string, unknown>;
   requestId: string;
@@ -130,6 +135,7 @@ function ApprovalWizardBody({
   onConfirmOptions?: (selectedOptionIds: string[], extras?: ConfirmOptionsExtras) => void;
   onAuthorize?: (text?: string) => void;
   onCancel?: () => void;
+  onAnswered?: (text?: string) => void;
 }) {
   const nextSteps = isNextStepsChoice(content);
   const kind = String(content.kind || (nextSteps ? "next_steps" : "confirm"));
@@ -155,9 +161,7 @@ function ApprovalWizardBody({
     setDrafts(draftsFromHydration(questions, hydrateIds, customText, answers));
   }, [readOnly, questions, hydrateIds, customText, answers]);
 
-  const confirmed =
-    decision === "confirm_options" || decision === "answered" || decision === "authorize";
-  const canceled = decision === "cancel";
+  const confirmed = decision === "confirm_options" || decision === "authorize";
   const safeIndex = Math.min(Math.max(0, qi), Math.max(0, questions.length - 1));
   const question = questions[safeIndex];
   const last = safeIndex === questions.length - 1;
@@ -233,6 +237,10 @@ function ApprovalWizardBody({
       }
       if (mapped === "authorize") {
         onAuthorize?.(reduced.custom_text);
+        return;
+      }
+      if (mapped === "answered") {
+        onAnswered?.(reduced.custom_text);
         return;
       }
       return;
@@ -422,7 +430,7 @@ function ApprovalWizardBody({
           </button>
         ) : (
           <span className="text-[12px] text-ink-muted">
-            {confirmed ? "已选择" : canceled ? "已取消" : decision === "answered" ? "已通过对话继续" : ""}
+            {choiceCardHistoryFooter(decision)}
           </span>
         )}
       </div>

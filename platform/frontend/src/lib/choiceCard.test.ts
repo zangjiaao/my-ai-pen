@@ -8,6 +8,7 @@ import {
   buildConfirmOptionsText,
   expandSelectedOptions,
   formatSelectedSummary,
+  choiceCardHistoryFooter,
   isChoiceDecisionFinal,
   isNextStepsChoice,
   isQuestionAnswerValid,
@@ -64,7 +65,8 @@ assert.match(authHostPrompt[0].prompt, /app\.example\.com/);
 assert.match(authHostPrompt[0].prompt, /10\.0\.0\.2/);
 assert.equal(mapAuthorizeDecision(["authorize"]), "authorize");
 assert.equal(mapAuthorizeDecision(["cancel"]), "cancel");
-assert.equal(mapAuthorizeDecision([], "先扫 login"), "authorize");
+assert.equal(mapAuthorizeDecision([], "先扫 login"), "answered");
+assert.equal(mapAuthorizeDecision(["authorize"], "限制在 lab"), "authorize");
 assert.equal(mapAuthorizeDecision([]), null);
 const authReduced = reduceChoiceDecision(
   { kind: "confirm", question: "Authorize scan?" },
@@ -382,5 +384,11 @@ assert.equal(
 assert.equal(isChoiceDecisionFinal("confirm_options"), true);
 assert.equal(isChoiceDecisionFinal("answered"), true);
 assert.equal(isChoiceDecisionFinal("maybe"), false);
+
+assert.equal(choiceCardHistoryFooter("confirm_options"), "已选择");
+assert.equal(choiceCardHistoryFooter("authorize"), "已选择");
+assert.equal(choiceCardHistoryFooter("cancel"), "已取消");
+assert.equal(choiceCardHistoryFooter("answered"), "已通过对话继续");
+assert.equal(choiceCardHistoryFooter(undefined), "");
 
 console.log("choiceCard.test.ts ok");
