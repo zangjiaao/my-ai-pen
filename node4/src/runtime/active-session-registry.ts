@@ -5,7 +5,7 @@
  * into the live Agent (steer/followUp) instead of rejecting as "still working".
  *
  * Race: busy is set before the Free/Graph session registers. Pending steers
- * queue until registerActiveSession flushes them via steer/followUp.
+ * and case_scope_updated pushes queue until registerActiveSession flushes them.
  */
 
 export type ActiveSessionHandle = {
@@ -22,6 +22,8 @@ export type ActiveSessionHandle = {
 const byConversation = new Map<string, ActiveSessionHandle>();
 /** Steers that arrived while busy but before any session registered. */
 const pendingByConversation = new Map<string, string[]>();
+/** Last case_scope_updated while busy-before-register (or idle before next burst). */
+const pendingScopeByConversation = new Map<string, unknown>();
 
 function injectIntoHandle(
   handle: ActiveSessionHandle,
@@ -53,11 +55,19 @@ function flushPending(conversationId: string, handle: ActiveSessionHandle): void
   }
 }
 
+function flushPendingScope(conversationId: string, handle: ActiveSessionHandle): void {
+  if (!pendingScopeByConversation.has(conversationId)) return;
+  const pending = pendingScopeByConversation.get(conversationId);
+  pendingScopeByConversation.delete(conversationId);
+  if (handle.applyScope) handle.applyScope(pending);
+}
+
 export function registerActiveSession(handle: ActiveSessionHandle): () => void {
   const id = String(handle.conversationId || "").trim();
   if (!id) return () => {};
   byConversation.set(id, handle);
   flushPending(id, handle);
+  flushPendingScope(id, handle);
   return () => {
     const cur = byConversation.get(id);
     if (cur === handle) byConversation.delete(id);
@@ -70,10 +80,16 @@ export function getActiveSession(conversationId: string): ActiveSessionHandle | 
 
 /** Apply Case Scope onto the live burst envelope (HTTP Surface 纳入). */
 export function applyScopeToLiveSession(conversationId: string, scope: unknown): boolean {
-  const handle = getActiveSession(conversationId);
-  if (!handle?.applyScope) return false;
-  handle.applyScope(scope);
-  return true;
+  const id = String(conversationId || "").trim();
+  if (!id) return false;
+  const handle = getActiveSession(id);
+  if (handle?.applyScope) {
+    handle.applyScope(scope);
+    pendingScopeByConversation.delete(id);
+    return true;
+  }
+  pendingScopeByConversation.set(id, scope);
+  return false;
 }
 
 /**
@@ -125,4 +141,5 @@ export function deliverUserSteerToActiveSession(
 export function clearActiveSessionsForTests(): void {
   byConversation.clear();
   pendingByConversation.clear();
+  pendingScopeByConversation.clear();
 }

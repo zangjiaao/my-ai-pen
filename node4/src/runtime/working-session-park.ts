@@ -20,6 +20,7 @@
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { ToolRuntime } from "../types.js";
+import { applyServerScopeToTask } from "../tools/decision.js";
 import {
   disposeBrowserSandboxForCase,
   disposeBrowserSandboxForSeat,
@@ -413,6 +414,25 @@ export function applyScopeToParkedRuntimes(
     n += 1;
   }
   return n;
+}
+
+/**
+ * Attach replaces `runtime.task` with the dispatch envelope. `normalizeTask`
+ * defaults omitted Scope to empty `allow`; keep hosts admitted while parked.
+ */
+export function rebindParkedRuntimeTask(
+  parked: ParkedWorkingRuntime,
+  task: { scope?: Record<string, unknown> },
+): void {
+  if (!parked.runtime) return;
+  const parkedScope = parked.runtime.task?.scope;
+  parked.runtime.task = task as ToolRuntime["task"];
+  const dispatchAllow = Array.isArray(task.scope?.allow)
+    ? task.scope.allow.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  if (dispatchAllow.length === 0) {
+    applyServerScopeToTask(task, parkedScope);
+  }
 }
 
 /**

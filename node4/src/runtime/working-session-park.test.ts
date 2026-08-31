@@ -27,6 +27,7 @@ import {
   parkedTodoNonEmpty,
   peekParkedSession,
   applyScopeToParkedRuntimes,
+  rebindParkedRuntimeTask,
   resetWorkingSessionMemory,
   resolveWorkingSessionContinue,
   takeParkedSession,
@@ -1186,6 +1187,12 @@ function runtimeWithPool(pool: SubagentIdlePool): ToolRuntime {
   });
   assert.equal(n, 1);
   assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  const dispatch = { scope: { allow: [] as string[] } };
+  const parked = peekParkedSession("c-scope", "exp");
+  assert.ok(parked);
+  rebindParkedRuntimeTask(parked, dispatch);
+  assert.deepEqual(dispatch.scope.allow, ["www.example.com"]);
+  assert.equal(parked.runtime?.task, dispatch);
   clearWorkingSessionParksForTests();
 }
 

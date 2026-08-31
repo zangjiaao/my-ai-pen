@@ -185,4 +185,21 @@ clearActiveSessionsForTests();
   clearActiveSessionsForTests();
 }
 
+{
+  const task = { scope: { allow: [] as string[] } };
+  applyScopeToLiveSession("c-scope-race", { allow: ["www.example.com"] });
+  registerActiveSession({
+    conversationId: "c-scope-race",
+    taskId: "t-race",
+    steer: () => {},
+    followUp: () => {},
+    applyScope: (scope) => {
+      const incoming = scope && typeof scope === "object" ? (scope as { allow?: string[] }) : {};
+      task.scope = { allow: incoming.allow || [] };
+    },
+  });
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
+  clearActiveSessionsForTests();
+}
+
 console.log("active-session-registry.test.ts: ok");

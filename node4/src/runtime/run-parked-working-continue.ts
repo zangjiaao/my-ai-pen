@@ -43,6 +43,7 @@ import {
   applyCaptainEndDisposition,
   decideCaptainEndDisposition,
   harnessStatusAfterParkedContinue,
+  rebindParkedRuntimeTask,
   type ParkedWorkingRuntime,
   type WorkingWorkMode,
 } from "./working-session-park.js";
@@ -110,7 +111,7 @@ export async function runParkedWorkingContinue(options: {
 
   // Rebind live task/platform onto stored runtime when present.
   if (parked.runtime) {
-    parked.runtime.task = task;
+    rebindParkedRuntimeTask(parked, task);
     parked.runtime.platform = platform;
     if (parked.runtime.lifecycle) {
       parked.runtime.lifecycle.abortSignal = signal;
