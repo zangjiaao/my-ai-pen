@@ -103,6 +103,12 @@ export type CaseScopeIntel = {
     known_paths?: string[];
     sample_urls?: string[];
     this_case_surface_count?: number;
+    /** Agent coverage work-state counts (not Traffic purpose=test). */
+    new?: number;
+    untested?: number;
+    tested?: number;
+    skipped?: number;
+    untested_samples?: string[];
   };
 };
 
@@ -177,6 +183,7 @@ function appendLivingNotebook(lines: string[], ctx: CaseContext): void {
 const MAX_FINDINGS = 25;
 const MAX_EVIDENCE = 12;
 const MAX_TOTAL_CHARS = 18000;
+const COVERAGE_SAMPLE_CAP = 5;
 
 function parseNextWork(raw: unknown): CaseNextWork | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
@@ -333,7 +340,7 @@ export function formatCaseContextInjection(
       intel.discipline ||
         "Host already on owner ledger. Expand untested surface and NEW findings as primary work. " +
           "Open priors = interleaved re-verify (fresh proof → confirm), not a checklist to finish first. " +
-          "Deep-dive selectively via platform_get_asset / platform_list_vulnerabilities / platform_get_vulnerability.",
+          "Deep-dive selectively via finding(get) / fact(get) / surface(get) when you are on that path.",
     );
     for (const h of (intel.hosts || []).slice(0, 5)) {
       const addr = String(h.address || "").trim() || "?";
@@ -372,7 +379,7 @@ export function formatCaseContextInjection(
           portBit,
       );
       lines.push(
-        "  → samples below are refs only; use platform_list_vulnerabilities / get for details you need.",
+        "  → samples below are refs only; finding(get) when you approach that path.",
       );
     }
     const samples = (intel.high_priority_sample || []).slice(0, 8);
@@ -400,6 +407,24 @@ export function formatCaseContextInjection(
       }
       if (sk.this_case_surface_count != null) {
         lines.push(`- This Case surface_ledger rows: ${sk.this_case_surface_count}`);
+      }
+      const hasCoverage =
+        sk.new != null || sk.untested != null || sk.tested != null || sk.skipped != null;
+      if (hasCoverage) {
+        const bits = [
+          sk.new != null ? `NEW=${sk.new}` : null,
+          sk.untested != null ? `untested=${sk.untested}` : null,
+          sk.tested != null ? `tested=${sk.tested}` : null,
+          sk.skipped != null ? `skipped=${sk.skipped}` : null,
+        ].filter(Boolean);
+        lines.push(`- Coverage (Agent mark/skip): ${bits.join(" ")}`);
+        const samples = (sk.untested_samples || []).filter(Boolean).slice(0, COVERAGE_SAMPLE_CAP);
+        if (samples.length) {
+          lines.push(`- Untested samples: ${samples.join(" · ")}`);
+        }
+        lines.push(
+          "  Counts are already here — do not surface(summary|list) as kickoff. Who tests, marks.",
+        );
       }
     }
   }

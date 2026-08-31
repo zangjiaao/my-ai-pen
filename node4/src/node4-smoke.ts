@@ -175,13 +175,13 @@ async function main() {
     panelProbe.list()[0]!.current_detail?.includes("分析") || panelProbe.list()[0]!.current_detail?.includes("漏洞"),
     `panel detail after tool: ${panelProbe.list()[0]!.current_detail}`,
   );
-  // Model B: citizen tools/mission injected on every expert pack at load
+  // Model B: citizen kit split at pack load (act_expert vs ledger_assist)
   assert(
     mergePlatformCitizenTools(["shell", "platform_list_assets"]).filter((n) => n === "platform_list_assets")
       .length === 1,
     "citizen tools de-dupe",
   );
-  assert(mergePlatformCitizenTools(["shell"])[0] === "platform_list_assets", "citizen tools prepend");
+  assert(mergePlatformCitizenTools(["shell"], "ledger_assist")[0] === "platform_list_assets", "citizen tools prepend");
   assert(
     mergePlatformCitizenMission(["x"]).some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
     "citizen mission inject",
@@ -193,7 +193,8 @@ async function main() {
     "citizen mission idempotent",
   );
   const pentestLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "pentest"));
-  assert(pentestLoaded.toolNames.includes("platform_list_assets"), "pentest has list_assets (citizen)");
+  assert(pentestLoaded.toolNames.includes("http"), "pentest keeps http");
+  assert(!pentestLoaded.toolNames.includes("platform_list_assets"), "pentest has no list_assets (citizen kit split)");
   assert(pentestLoaded.toolNames.includes("shell"), "pentest keeps shell");
   assert(pentestLoaded.toolNames.includes("finding"), "pentest keeps finding");
   assert(
@@ -201,7 +202,7 @@ async function main() {
     "pentest mission has citizen layer",
   );
   const ctfLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "ctf"));
-  assert(ctfLoaded.toolNames.includes("platform_list_assets"), "ctf has list_assets (citizen)");
+  assert(!ctfLoaded.toolNames.includes("platform_list_assets"), "ctf has no list_assets (citizen kit split)");
   assert(ctfLoaded.toolNames.includes("captcha"), "ctf keeps captcha");
   // Persona template: product expert name injected into default-seat system prompt
   const {
@@ -305,7 +306,14 @@ async function main() {
   const bare = resolveRolePack({ engagement: BARE_RUNTIME_ID });
   assert(bare.pack.id === BARE_RUNTIME_ID && !bare.blocked, "explicit runtime → bare pack");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("finding"), "pentest has finding");
-  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("traffic_list"), "pentest has traffic_list (#378)");
+  assert(
+    !toolNamesForPack(PENTEST_ROLE_PACK).includes("traffic_list"),
+    "pentest loop omits traffic_list (#543 Wave 1; Surface is the structured ledger)",
+  );
+  assert(
+    !toolNamesForPack(PENTEST_ROLE_PACK).includes("goal"),
+    "pentest loop omits goal (#543 Wave 1)",
+  );
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("surface"), "pentest has surface (#370)");
   assert(!toolNamesForPack(CONSULT_STUB_ROLE_PACK).includes("finding"), "consult stub has no finding");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("subagent"), "pentest has subagent");

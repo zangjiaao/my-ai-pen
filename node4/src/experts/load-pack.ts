@@ -52,18 +52,18 @@ function packFromParts(packDir: string, manifest: PackManifest, missionRaw: stri
   const missionLines = linesFromMarkdown(missionRaw);
   const workLines = linesFromMarkdown(workRaw);
   const bookingMode: BookingMode = manifest.bookingMode === "none" ? "none" : "finding";
-  // Model B: every expert pack gets platform citizen tools + Scope/ledger rules.
+  // Model B: act-expert Citizen kit (mission + fact/decision/title). Inventory stays on Default.
   const baseMission = missionLines.length
     ? missionLines
     : [`You are Node4 in the **${manifest.id}** role pack.`];
   return {
     id: String(manifest.id).toLowerCase().trim(),
     label: manifest.label || manifest.id,
-    missionLines: mergePlatformCitizenMission(baseMission),
+    missionLines: mergePlatformCitizenMission(baseMission, "act_expert"),
     workLines: workLines.length
       ? workLines
       : ["Work within authorized scope. No finish tool; harness settles."],
-    toolNames: mergePlatformCitizenTools(manifest.toolNames.map(String)),
+    toolNames: mergePlatformCitizenTools(manifest.toolNames.map(String), "act_expert"),
     bookingMode,
     settlementNote: manifest.settlementNote || "Harness settles the session.",
     defaultGoalObjective: manifest.defaultGoalObjective,

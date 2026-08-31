@@ -17,9 +17,7 @@
     "fact",
     "surface",
     "subagent",
-    "goal",
-    "skill",
-    "traffic_list"
+    "skill"
   ],
   "skillIds": ["ctf-web-recon", "ctf-flag-verify", "ctf-stuck-rotation"],
   "bookingMode": "finding",

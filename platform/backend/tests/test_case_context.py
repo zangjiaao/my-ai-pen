@@ -5,6 +5,7 @@ from app.services.case_context import (
     build_evidence_snippets,
     build_findings_summary,
     build_scope_intel_card,
+    coverage_sketch_from_surfaces,
     build_speech_from_messages,
     build_thread_from_messages,
     case_intel_port_scope,
@@ -502,6 +503,44 @@ def test_scope_intel_card_is_thin_and_disciplined():
     assert "interleaved" not in card["discipline"].lower()
     # No PoC field in sample
     assert "poc" not in card["high_priority_sample"][0]
+
+
+def test_scope_intel_card_coverage_counts_and_samples():
+    card = build_scope_intel_card(
+        hosts=[{"id": "a1", "address": "lab.example", "on_ledger": True}],
+        coverage={
+            "new": 1,
+            "untested": 2,
+            "tested": 1,
+            "skipped": 1,
+            "untested_samples": ["/login", "/api"],
+        },
+    )
+    assert card is not None
+    sketch = card["surface_sketch"]
+    assert sketch["untested"] == 2
+    assert sketch["tested"] == 1
+    assert sketch["skipped"] == 1
+    assert sketch["untested_samples"][0] == "/login"
+    assert "finding(get)" in card["discipline"]
+    assert "platform_get_vulnerability" not in card["discipline"]
+
+
+def test_coverage_sketch_from_surfaces_caps_untested_samples():
+    rows = [
+        {"coverage": "tested", "path_key": "/ok"},
+        {"coverage": "skipped", "path_key": "/skip"},
+        {"coverage": "untested", "status": "seen", "path_key": "/login"},
+        {"coverage": "untested", "location": "/api"},
+        *[{"coverage": "untested", "path_key": f"/extra{i}"} for i in range(6)],
+    ]
+    sketch = coverage_sketch_from_surfaces(rows)
+    assert sketch["tested"] == 1
+    assert sketch["skipped"] == 1
+    assert sketch["untested"] == 8
+    assert sketch["new"] == 1
+    assert "/login" in sketch["untested_samples"]
+    assert len(sketch["untested_samples"]) == 5
 
 
 def test_prior_index_module_key_folds_dvwa_paths():

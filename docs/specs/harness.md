@@ -83,12 +83,12 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 
 | Pack / seat | Tools (summary) | Booking |
 |-------------|-----------------|---------|
-| **`default`** (built-in) | **platform citizen** (full ledger R/W + report) + light assist; no shell/finding | **none** |
-| `pentest` | **citizen read layer** + todo, shell, fs, http, session, browser, script, finding, subagent, goal, skill | finding+evidence |
-| `ctf` | **citizen read layer** + captcha + CTF skills | finding+evidence |
+| **`default`** (built-in) | **ledger_assist Citizen** (full ledger R/W + report) + light assist; no shell/finding | **none** |
+| `pentest` | **act_expert Citizen** (mission + fact/decision/title) + todo, shell, fs, http, session, browser, script, finding, workset, surface, subagent, skill, create_report | finding+evidence |
+| `ctf` | **act_expert Citizen** + captcha + CTF skills | finding+evidence |
 | `consult` | **alias → `default`** during migration | none |
 
-**Model B (platform citizen base):** every pack loaded via `experts/load-pack` gets injected read tools (`platform_list_assets`, `platform_get_asset`, `platform_list_vulnerabilities`, `platform_get_vulnerability`, `platform_conversation_snapshot`) + Scope/ledger mission lines (`node4/src/roles/platform-citizen.ts`). Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page only).
+**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerk tools. `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` / title (Wave 1) — not inventory reads. Host identity and coverage counts live in `### Case`. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only).
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
 Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/specs/ctf-role.md`.  
@@ -152,9 +152,9 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 
 | Tier | Examples | Expectation |
 |------|----------|-------------|
-| **Read-ish free** | `todo`, `read`, `skill list/load`, platform list vulns/reports, fact list/get | No authorize card by default |
+| **Read-ish free** | `todo`, `read`, `skill list/load`, Default list vulns/reports, fact list/get | No authorize card by default |
 | **Act in scope** | `shell`/`http`/`session`/`browser` against user-authorized Scope hosts | Proceed under task RoE; no card per probe |
-| **High-risk / handoff** | Start another expert (`kind=handoff`), multi-agent transfer, destructive/out-of-scope proposal | **One** `request_user_decision` card with full plan; wait Authorize/Cancel. Preflight: `platform_list_experts` — no pack peer → refuse card. |
+| **High-risk / handoff** | Start another expert (`kind=handoff`), multi-agent transfer, destructive/out-of-scope proposal | **One** `request_user_decision` card with full plan; wait Authorize/Cancel. Preflight: Runtime Addressable Experts line (Default may `platform_list_experts`) — no pack peer → refuse card. |
 | **Not implemented** | CyberStrike-style automated `audit_agent` reviewer | Deferred — human cards only |
 
 ### Process facts (A2 / A3 / A5)

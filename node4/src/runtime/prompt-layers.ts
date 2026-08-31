@@ -31,6 +31,8 @@ import { formatSubagentReturnContractPrompt } from "./subagent-result.js";
 import { formatSessionTitleHint } from "./session-title.js";
 import { eagerTodoInjection } from "./todo-harness.js";
 import { eagerBookingInjection } from "./booking-harness.js";
+import { loadCatalogIndexSync } from "../experts/load-pack.js";
+import { expertsCatalogRoot } from "../experts/paths.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -265,7 +267,29 @@ const MISSION_IDENTITY_LINE_RE =
   /You are|Your job|role pack|NOT a software|penetration testing|Do not invent|at most one/i;
 
 const PLATFORM_CITIZEN_MISSION_SKIP_RE =
-  /\[platform-citizen\]|platform_list_|request_user_decision|kind=next_steps|todo_replace|Honest counts:|Cross-pack handoff|Open priors on this Scope|Read inventory\/priors/i;
+  /\[platform-citizen\]|platform_list_|request_user_decision|kind=next_steps|todo_replace|Honest counts:|Honest wrap|Cross-pack handoff|Open priors|Read inventory\/priors|blackboard/i;
+
+/**
+ * One-line Runtime catalog so act-experts do not kickoff `platform_list_experts`.
+ * `consult` is a legacy alias of Default — omit it.
+ * Default still has the list_experts tool; do not forbid it on that seat.
+ */
+export function formatAddressableExpertCatalogLine(
+  entries: readonly { id: string }[],
+  options?: { forbidListExpertsKickoff?: boolean },
+): string {
+  const ids: string[] = ["default"];
+  for (const e of entries) {
+    const id = String(e.id || "").toLowerCase().trim();
+    if (!id || id === "default" || id === "consult") continue;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  const handoff =
+    options?.forbidListExpertsKickoff === false
+      ? "Handoff = platform_list_experts then one request_user_decision(kind=handoff)."
+      : "Handoff = one request_user_decision(kind=handoff) — do not platform_list_experts as kickoff.";
+  return `Addressable Experts: ${ids.join(", ")}. ${handoff}`;
+}
 
 /**
  * Filter mission+work to compact Profession for Graph stage captains (#394)
@@ -332,6 +356,9 @@ export function buildPromptLayers(
   const runtimeParts: string[] = [
     `Tools: ${tools}.`,
     `Booking mode: ${pack.bookingMode}. ${render(pack.settlementNote)}`,
+    formatAddressableExpertCatalogLine(loadCatalogIndexSync(expertsCatalogRoot()), {
+      forbidListExpertsKickoff: !(pack.toolNames ?? []).includes("platform_list_experts"),
+    }),
   ];
   if (options?.workModeInjection) {
     runtimeParts.push(options.workModeInjection);
@@ -365,17 +392,17 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("fact")) {
     runtimeParts.push(
-      "Process facts (fact tool): write confirmed cognition now (ports/auth/deadends); ≠ finding; list=index — get body for detail.",
+      "Process facts (fact tool): write confirmed cognition now (ports/auth/deadends); ≠ finding; ### Case living notebook is the index — fact(get) for a body, never fact(list) at start.",
     );
   }
   if (pack.toolNames.includes("surface")) {
     runtimeParts.push(
-      "Attack surface (surface tool): summary|list|get; coverage via mark/unmark/skip (not purpose=test); ledger from Traffic settle + TARGET seed; disclose remaining untested; upsert optional (cannot write coverage).",
+      "Attack surface (surface tool): coverage via mark/unmark/skip (not purpose=test). Counts and untested samples are in ### Case — do not surface(summary|list) as kickoff. get by id when on a path. upsert optional (cannot write coverage).",
     );
   }
   if (pack.toolNames.includes("workset")) {
     runtimeParts.push(
-      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). list/get read Case SoT (capped; status=pending means proposed). set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake, adopts a Surface card, or confirms a Choice Card that binds those rows (workset_item_ids / authorize asset_ids). Remaining proposed t_host is waiting on the user — not Agent unresolved work. After propose: one next_steps with binds, one operator summary, then stop. Do not list/get to prove adoption; do not narrate runtime continues. Do not platform_create_asset or emit a second authorize card to clear them. No Host means no Intel hang. A missing optional intel source is not a failure.",
+      "Workset (workset tool): pending admission (CT/DNS/Shodan-class and OOS hosts). Openings and intake are in ### Case — do not list/get as kickoff. set_intake records a user-asked Group enroll policy; Hosts enroll after the user confirms Case intake, adopts a Surface card, or confirms a Choice Card that binds those rows (workset_item_ids / authorize asset_ids). Remaining proposed t_host is waiting on the user — not Agent unresolved work. After propose: one next_steps with binds, one operator summary, then stop. Do not list/get to prove adoption; do not narrate runtime continues. Do not platform_create_asset or emit a second authorize card to clear them. No Host means no Intel hang. A missing optional intel source is not a failure.",
     );
   }
   if (pack.recipeDir) {
@@ -504,12 +531,15 @@ export function buildStagePromptLayers(
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
     `Allowed tools for this stage: ${toolList}`,
+    formatAddressableExpertCatalogLine(loadCatalogIndexSync(expertsCatalogRoot()), {
+      forbidListExpertsKickoff: !(pack.toolNames ?? []).includes("platform_list_experts"),
+    }),
     intentLines,
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     // #399: one host-settlement hard rule (no multi-paraphrase of the result.json ban).
     "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel — host projects outcome from Finding Store, package terminals, and surface ledger.",
     "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only.",
+    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger. Coverage counts and untested samples are in ### Case — do not surface(summary|list) as kickoff. get by id when on a path. Optional surface(upsert) is non-primary corrective only.",
     allowFinding
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",

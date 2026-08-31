@@ -26,13 +26,13 @@ Independent **expert pack** units maintained outside the Node harness.
 
 The product Node (**Node4 lineage / Graph × Pi**) runs **Expert packs** (one caste). Built-in `default` is a pack that currently declares **no** Graphs (ledger assist). Other catalog packs add tools/skills and may declare `graphs/hard/*.json`. **Pentest DoD** = **Graph × Pi** when the user permits a declared graph (`app_assessment`, `redteam_deep`; thin lab alias for assessment only). **Every Expert Session defaults to Free** (UI Graph **不指定**). **Soft scenario graphs are retired** (#68 / #76). After Graph complete, continue-chat stays in-envelope without auto full re-run (C1 / #78). Graph stages use pi inside a product-owned runner. ADR 0001 B1: fallback B retired; no live Node5 tree.
 
-**Model B — platform citizen base + specialist overlay:**
+**Model B — platform citizen kits + specialist overlay:**
 
-- At pack load (`node4/src/experts/load-pack.ts`), every expert pack is injected with **read** ledger tools + Scope/asset rules (`roles/platform-citizen.ts`). You do **not** need to list those tools in every `pack.json` (optional for docs; runtime de-dupes).
-- Hard Graph stage tools are the pack file `graphs/hard/*.json` `tools.allow`. Pentest graphs list inventory reads (`platform_list_assets` / `platform_get_asset` / `platform_list_groups`) on every stage; create/enrich/assemble stay off that list. Node only filters pack tools by the JSON.
+- At pack load (`node4/src/experts/load-pack.ts`), **act-expert** packs get Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` / title (Wave 1). Inventory list/create/enrich is **not** prepended. Default keeps the full clerk kit (`ledger_assist`).
+- Hard Graph stage tools are the pack file `graphs/hard/*.json` `tools.allow`. Pentest graphs do **not** list inventory reads; create/enrich/assemble stay off that list. Node only filters pack tools by the JSON. Scope Hosts and coverage counts come from `### Case`.
 - After a stage L0 pass, Node prompts the run’s **one Feedback Agent** (same pi session + panel row; not configured per-stage in the JSON). It judges refine vs pass and whether to open **this hop’s** next stage. Captains do not self-vote stage-advance. Graph **Main** is also one pi session for the run (next stage = next turn, tools rebound); **Workers** may mint a new session per package.
 - **default** = full citizen (R/W ledger, reports, handoff orchestration).
-- **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
+- **pentest / ctf / …** = slim Citizen + act tools. Session isolation remains; platform knowledge is shared via inject.
 - Host **create** is never a free agent tool from recon — user asset page, open-task Authorize, next-scope / promote, Workset **adopt**, or this Case **asset-intake `enroll_group` after the owner confirms** (Agent `set_intake` only records policy). Passive exposure (CT/DNS/Shodan-class) parks on Workset until adopt or that confirmed policy.
 
 1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking.

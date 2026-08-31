@@ -57,6 +57,7 @@ SCOPE_INTEL_PATH_SAMPLE = 16
 SCOPE_INTEL_URL_SAMPLE = 12
 SCOPE_INTEL_SERVICE_SAMPLE = 8
 SCOPE_INTEL_SUMMARY_CHARS = 140
+COVERAGE_SAMPLE_CAP = 5
 
 # Meta tools that should not dominate collab context (unless finding-linked).
 # Note: source_tool "finding" is *book-time product proof* (emitCaseEvidence) — not meta noise.
@@ -905,6 +906,36 @@ def vuln_scope_sql_clause(port_scope: dict[str, set[str] | None]):
     return or_(*parts) if parts else false()
 
 
+def coverage_sketch_from_surfaces(surfaces: list[Any] | None) -> dict[str, Any]:
+    """Capped coverage counts + untested samples from Case surface_ledger rows."""
+    rows = [s for s in (surfaces or []) if isinstance(s, dict)]
+    tested = untested = skipped = new = 0
+    samples: list[str] = []
+    for s in rows:
+        cov = str(s.get("coverage") or "untested").strip().lower()
+        if cov == "tested":
+            tested += 1
+        elif cov == "skipped":
+            skipped += 1
+        else:
+            untested += 1
+            loc = str(s.get("path_key") or s.get("location") or s.get("path") or "").strip()
+            if loc and loc not in samples and len(samples) < COVERAGE_SAMPLE_CAP:
+                samples.append(loc[:160])
+        status = str(s.get("status") or "").strip().lower()
+        if cov not in ("tested", "skipped") and status in ("seen", "new"):
+            new += 1
+    out: dict[str, Any] = {
+        "new": new,
+        "untested": untested,
+        "tested": tested,
+        "skipped": skipped,
+    }
+    if samples:
+        out["untested_samples"] = samples
+    return out
+
+
 def build_scope_intel_card(
     *,
     hosts: list[dict[str, Any]],
@@ -913,9 +944,10 @@ def build_scope_intel_card(
     surface_paths: list[str] | None = None,
     sample_urls: list[str] | None = None,
     this_case_surface_n: int | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Pure thin Scope intel card for injection (no PoC bodies)."""
-    if not hosts and not prior_counts and not high_sample and not surface_paths:
+    if not hosts and not prior_counts and not high_sample and not surface_paths and not coverage:
         return None
     card: dict[str, Any] = {
         "version": 1,
@@ -924,8 +956,7 @@ def build_scope_intel_card(
             "Primary work remains attack-surface expansion and NEW ledger identities. "
             "Open priors are an index (title + one-line summary), not a start-of-turn work queue. "
             "Do not host-wide dump platform_list_vulnerabilities at kickoff. "
-            "When you approach a path/module, look up that row "
-            "(asset_id + port/q, or platform_get_vulnerability). "
+            "When you approach a path/module, look up that row with finding(get). "
             "Same path/module merges (再次发现). Ledger presence ≠ skip and ≠ must-finish. "
             "Honest counts: 重新验证 N = confirms this session only."
         ),
@@ -943,6 +974,13 @@ def build_scope_intel_card(
         surface["sample_urls"] = sample_urls[:SCOPE_INTEL_URL_SAMPLE]
     if this_case_surface_n is not None:
         surface["this_case_surface_count"] = int(this_case_surface_n)
+    if isinstance(coverage, dict) and coverage:
+        for key in ("new", "untested", "tested", "skipped"):
+            if key in coverage and coverage[key] is not None:
+                surface[key] = int(coverage[key])
+        samples = coverage.get("untested_samples")
+        if isinstance(samples, list) and samples:
+            surface["untested_samples"] = [str(x)[:160] for x in samples[:COVERAGE_SAMPLE_CAP] if str(x).strip()]
     if surface:
         card["surface_sketch"] = surface
     return card
@@ -1330,10 +1368,12 @@ async def _load_scope_intel(
             surface_paths = []
 
     this_case_surface_n = None
+    coverage = None
     if isinstance(conv_context, dict):
         sl = conv_context.get("surface_ledger")
         if isinstance(sl, dict) and isinstance(sl.get("surfaces"), list):
             this_case_surface_n = len(sl["surfaces"])
+            coverage = coverage_sketch_from_surfaces(sl["surfaces"])
             # Mix a few this-Case surface paths into sketch if we still have room
             for s in sl["surfaces"][:8]:
                 if not isinstance(s, dict):
@@ -1368,6 +1408,7 @@ async def _load_scope_intel(
         surface_paths=(surface_paths + url_paths)[:SCOPE_INTEL_PATH_SAMPLE] or None,
         sample_urls=short_urls or None,
         this_case_surface_n=this_case_surface_n,
+        coverage=coverage,
     )
 
 

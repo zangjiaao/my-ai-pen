@@ -2,7 +2,7 @@
   "id": "consult",
   "label": "Consult (legacy alias → default)",
   "aliases": [],
-  "toolNames": ["todo", "shell", "read", "goal"],
+  "toolNames": ["todo", "shell", "read"],
   "skillIds": [],
   "bookingMode": "none",
   "settlementNote": "LEGACY alias of built-in default seat — not product Profession SoT. Runtime resolve maps consult→default. Do not expand this pack as a parallel assistant. Harness settles incomplete/completed by policy without requiring findings."

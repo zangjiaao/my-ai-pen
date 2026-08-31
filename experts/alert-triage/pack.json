@@ -12,9 +12,7 @@
     "script",
     "finding",
     "surface",
-    "goal",
-    "skill",
-    "traffic_list"
+    "skill"
   ],
   "skillIds": [
     "alert-enrichment",

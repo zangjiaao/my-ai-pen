@@ -63,7 +63,7 @@ _Avoid_: dual product kernel, resurrecting node5 as bind target
 ### Runtime shape
 
 **Expert Graph** (implementation synonym: **Hard Graph**):
-Normative Task-stage control of **Expert** work (esp. pentest): ordered stages, fail-closed Feedback gates, stage tool profiles (pack `graphs/hard/*.json` `tools.allow` is the stage surface — include owner-ledger inventory reads; create/enrich stay off the list), Agent Graph fan-out on probe stages. Runner owns scheduling — not Main-as-scheduler. **Main** and **Feedback** are one pi session each for the Graph run (next stage / hop = next turn); **Workers** mint a session per package. Product Expert DoD = Graph × Pi (mature graph primary; thin = lab alias only). Experts may offer **multiple Graphs**.
+Normative Task-stage control of **Expert** work (esp. pentest): ordered stages, fail-closed Feedback gates, stage tool profiles (pack `graphs/hard/*.json` `tools.allow` is the stage surface — Host identity comes from Case inject, not owner-ledger inventory reads; create/enrich stay off the list), Agent Graph fan-out on probe stages. Runner owns scheduling — not Main-as-scheduler. **Main** and **Feedback** are one pi session each for the Graph run (next stage / hop = next turn); **Workers** mint a session per package. Product Expert DoD = Graph × Pi (mature graph primary; thin = lab alias only). Experts may offer **multiple Graphs**.
 _Avoid_: soft scenario menu as product mode; prompt-only workflow; force_order as hints only; treating thin stub as full Expert DoD
 
 **Soft scenario graph**:

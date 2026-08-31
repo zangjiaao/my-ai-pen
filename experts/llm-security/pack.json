@@ -14,9 +14,7 @@
     "finding",
     "surface",
     "subagent",
-    "goal",
-    "skill",
-    "traffic_list"
+    "skill"
   ],
   "skillIds": [
     "llm-threat-model-roe",

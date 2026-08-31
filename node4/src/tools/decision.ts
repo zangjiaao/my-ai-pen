@@ -116,12 +116,12 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       "Show ONE choice/authorization card and wait for user feedback (button OR free-text reply). " +
       "Click and type are the same path — the tool unblocks with the user's response. " +
       "When legal entity, Host identity, Group member set, active-testing authorization, or Scope is insufficient, ask here and wait — do not invent Scope or Target. " +
-      "Group / Hosts: pass asset_ids (and/or options[].asset_id = Host id from platform_list_groups / platform_list_assets). " +
+      "Group / Hosts: pass asset_ids (and/or options[].asset_id = Host id from ### Case blackboard or, on Default, platform_list_groups / platform_list_assets). " +
       "After the user allows, the platform writes those Hosts as Case Scope and adopts matching Workset t_host rows in the same persist; continue the user's original task — do not invent a scan workflow, do not platform_list_assets or platform_create_asset to prove or re-settle admission, do not emit another decision card. " +
       "If the tool result says rows stay proposed or admission_ambiguous, tell the user once; remaining hosts wait for workset(adopt) of a uniquely resolvable name or Surface 纳入 — do not ask for a Host id and do not re-show this card. " +
       "For multi-agent handoff to any listed colleague (default/assistant, pentest, CTF, …): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + proposed_action=short authorized scope (target + restatement of what the user asked). " +
       "Do not write method, RoE, playbook, or ledger-dump instructions in proposed_action — those live in Profession/Runtime. " +
-      "Call platform_list_experts first when unsure who can receive the work. " +
+      "Use the Runtime Addressable Experts line (Default may platform_list_experts if that line is absent) then one request_user_decision(kind=handoff, …). Do not list_experts as pentest kickoff. " +
       "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
       "Never silent-switch Free↔Graph — always card or user composer Workflow. " +
       "Spec #312 next_steps: at stoppable settle / empty-continue with open Case Workset, emit kind=next_steps + options[2–5] " +
@@ -167,7 +167,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         Type.Array(
           Type.String({
             description:
-              "Host ids to authorize as Case Scope (confirm = all listed). From platform_list_groups members / platform_list_assets. Not a Target.",
+              "Host ids to authorize as Case Scope (confirm = all listed). From ### Case blackboard or, on Default, platform_list_groups / platform_list_assets. Not a Target.",
           }),
         ),
       ),

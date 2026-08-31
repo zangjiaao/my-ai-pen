@@ -17,7 +17,11 @@ export {
   PLATFORM_CITIZEN_MARKER,
   PLATFORM_CITIZEN_TOOL_NAMES,
   PLATFORM_CITIZEN_MISSION_LINES,
+  LEDGER_ASSIST_CITIZEN_TOOL_NAMES,
+  ACT_EXPERT_CITIZEN_TOOL_NAMES,
+  GRAPH_STAGE_CITIZEN_INVENTORY_TOOLS,
   mergePlatformCitizenTools,
   mergePlatformCitizenMission,
 } from "./platform-citizen.js";
+export type { CitizenKit } from "./platform-citizen.js";
 export { resolveRolePack } from "./resolve.js";

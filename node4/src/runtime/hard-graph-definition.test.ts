@@ -148,15 +148,15 @@ assert.deepEqual(
   "filter is the JSON allowlist; runner does not sneak tools back",
 );
 
-// Pack graph JSON is the stage tool surface (inventory reads listed there).
+// Pack graph JSON is the stage tool surface (inventory reads are inject, not stage tools).
 for (const id of await listHardGraphIds(repoExperts)) {
   const g = await loadHardGraphFile(repoExperts, id);
   assert.ok(g);
   for (const st of g!.stages) {
     for (const t of GRAPH_STAGE_CITIZEN_INVENTORY_TOOLS) {
       assert.ok(
-        st.tools?.allow?.includes(t),
-        `${id}/${st.id} tools.allow includes ${t}`,
+        !st.tools?.allow?.includes(t),
+        `${id}/${st.id} tools.allow omits ${t}`,
       );
     }
     assert.ok(
@@ -165,6 +165,18 @@ for (const id of await listHardGraphIds(repoExperts)) {
     );
   }
 }
+
+const assessTools = await loadHardGraphFile(repoExperts, "app_assessment");
+const initAllow = assessTools!.stages.find((s) => s.id === "init")!;
+const surfaceAllow = assessTools!.stages.find((s) => s.id === "surface")!;
+assert.ok(surfaceAllow.tools?.allow?.includes("http"), "surface probe keeps http");
+assert.ok(surfaceAllow.tools?.allow?.includes("shell"), "surface probe keeps shell");
+assert.ok(surfaceAllow.tools?.allow?.includes("workset"), "surface probe keeps workset");
+assert.ok(surfaceAllow.tools?.allow?.includes("surface"), "surface probe keeps surface");
+assert.ok(surfaceAllow.tools?.allow?.includes("fact"), "surface probe keeps fact");
+assert.ok(initAllow.tools?.allow?.includes("workset"), "init keeps workset");
+assert.ok(surfaceAllow.hypothesis_work_mode === true, "surface is a hypothesis-mode stage");
+assert.ok(surfaceAllow.tools?.allow?.includes("hypothesis"), "hypothesis-mode stage keeps hypothesis");
 
 // Spec #125: write is optional — not a result.json handoff prerequisite
 assert.equal(

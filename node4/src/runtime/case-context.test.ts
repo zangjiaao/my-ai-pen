@@ -153,6 +153,56 @@ assert.ok(credAt < credsVsPriors.indexOf("instructions.php"), "credential kind b
 assert.match(credsVsPriors, /Use first \(try these creds/);
 
 {
+  const withCoverage = formatCaseContextInjection({
+    scope_intel: {
+      hosts: [{ id: "asset-1", address: "lab.example", ports: ["443"], on_ledger: true }],
+      surface_sketch: {
+        this_case_surface_count: 4,
+        new: 1,
+        untested: 2,
+        tested: 1,
+        skipped: 1,
+        untested_samples: ["/login", "/api/Users"],
+      },
+      prior_findings: { total: 3, open_or_retest: 2 },
+    },
+    next_work: {
+      workset_open_count: 1,
+      workset_open: [{ id: "ws_1", family: "t_host", title: "side.lab", status: "proposed" }],
+      asset_intake: { mode: "enroll_group", group_name: "lab", set_by: "user" },
+    },
+    intel_summary: [{ id: "i1", summary: "cookie session", kind: "credential_status" }],
+  });
+  assert.match(withCoverage, /id=asset-1/);
+  assert.match(withCoverage, /Coverage/);
+  assert.match(withCoverage, /untested=2/);
+  assert.match(withCoverage, /tested=1/);
+  assert.match(withCoverage, /skipped=1/);
+  assert.match(withCoverage, /\/login/);
+  assert.match(withCoverage, /Living notebook/);
+  assert.match(withCoverage, /enroll_group/);
+  assert.match(withCoverage, /ws_1|side\.lab/);
+  assert.match(withCoverage, /Prior findings/);
+  assert.doesNotMatch(withCoverage, /platform_list_assets first/i);
+  assert.doesNotMatch(withCoverage, /list_assets first/i);
+}
+
+{
+  const capped = formatCaseContextInjection({
+    scope_intel: {
+      hosts: [{ id: "asset-1", address: "lab.example", on_ledger: true }],
+      surface_sketch: {
+        untested: 8,
+        untested_samples: ["/a", "/b", "/c", "/d", "/e", "/f", "/g"],
+      },
+    },
+  });
+  assert.match(capped, /\/a/);
+  assert.match(capped, /\/e/);
+  assert.doesNotMatch(capped, /\/f/);
+}
+
+{
   const mixed = formatCaseContextInjection(
     {
       scope_intel: {

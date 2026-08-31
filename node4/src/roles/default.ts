@@ -2,9 +2,9 @@
  * Built-in product seat: workspace assistant (default).
  * Always available — not a commercial expert pack, not bare lab runtime.
  *
- * Model B: default = platform citizen (full ledger tools) + workspace orchestration
- * (report, handoff). Expert packs load the same citizen *read* base via
- * roles/platform-citizen.ts, then add act tools.
+ * Model B: default = ledger_assist Citizen kit (full Owner Ledger tools) +
+ * workspace orchestration (report, handoff). Act-expert packs load the slim
+ * Citizen kit (mission + fact/decision) via roles/platform-citizen.ts.
  *
  * Spec #397: handoff/report each single-home — mission = identity/non-act/ledger;
  * work = intent→action (report once, execution→handoff once). Citizen owns the
@@ -69,8 +69,8 @@ const DEFAULT_TOOL_NAMES = [
 export const DEFAULT_SEAT_PACK: RolePack = {
   id: DEFAULT_SEAT_ID,
   label: "Workspace assistant",
-  missionLines: mergePlatformCitizenMission(DEFAULT_MISSION_LINES),
-  toolNames: mergePlatformCitizenTools(DEFAULT_TOOL_NAMES),
+  missionLines: mergePlatformCitizenMission(DEFAULT_MISSION_LINES, "ledger_assist"),
+  toolNames: mergePlatformCitizenTools(DEFAULT_TOOL_NAMES, "ledger_assist"),
   workLines: [
     "How to work (intent → action):",
     "- **Greet / small talk:** brief reply as {{ expert_name }}; offer help with assets, findings, reports, or expert handoff. Then stop.",

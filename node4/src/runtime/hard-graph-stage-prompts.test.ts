@@ -60,6 +60,10 @@ assert.doesNotMatch(sys, /DVWA/i, "no answer-key target names");
 assert.doesNotMatch(sys, /Feedback reads result\.json only/i);
 assert.match(sys, /host-owned|Finding Store|host settlement/i);
 assert.match(sys, /process-chore|Write result\.json/i);
+assert.match(sys, /Addressable Experts:/, "Graph Runtime has Expert catalog (#546)");
+assert.match(sys, /do not platform_list_experts as kickoff/);
+assert.match(sys, /do not surface\(summary\|list\) as kickoff/);
+assert.doesNotMatch(sys, /surface\(op=summary\|list\|get\) for coverage/);
 // #137 / #352: unset language → auto Standing-first on stage prompts
 assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
 assert.ok(sys.startsWith("## Standing node policies"), "stage unset Standing-first");

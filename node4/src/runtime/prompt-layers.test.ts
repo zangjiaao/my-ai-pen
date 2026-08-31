@@ -102,7 +102,10 @@ const baseTask: TaskEnvelope = {
   ok(layers.runtime.includes("Booking mode:"), "Runtime has booking mode");
   ok(PENTEST_ROLE_PACK.toolNames.includes("workset"), "pentest pack registers workset");
   ok(/workset tool/i.test(layers.runtime), "Runtime has workset gated one-liner (#532)");
-  ok(/status=pending means proposed/.test(layers.runtime), "Runtime maps Agent pending to proposed");
+  ok(/Addressable Experts:/.test(layers.runtime), "Runtime has one-line Expert catalog");
+  ok(/do not platform_list_experts as kickoff/.test(layers.runtime), "Runtime forbids list_experts kickoff");
+  ok(layers.runtime.includes("pentest"), "Runtime catalog names pentest");
+  ok(/do not surface\(summary\|list\) as kickoff/.test(layers.runtime), "Runtime forbids surface summary kickoff");
   ok(/one next_steps with binds/.test(layers.runtime), "Runtime: one next_steps then stop");
   ok(!DEFAULT_SEAT_PACK.toolNames.includes("workset"), "default seat has no workset");
   ok(layers.runtime.includes("allow_postex"), "Runtime has RoE injection");
@@ -226,6 +229,11 @@ const baseTask: TaskEnvelope = {
 
   ok(prompt.startsWith(STANDING_HEADING), "Default Standing-first");
   ok(prompt.includes("平台助理"), "Default includes product persona");
+  ok(/Addressable Experts:/.test(layers.runtime), "Default Runtime still has Expert catalog");
+  ok(
+    !/do not platform_list_experts as kickoff/.test(layers.runtime),
+    "Default may still list_experts for handoff",
+  );
   ok(
     prompt.includes("No shell, no finding(confirm), no recon.") ||
       prompt.includes("no finding(confirm)"),
