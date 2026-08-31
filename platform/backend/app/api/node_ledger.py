@@ -213,6 +213,28 @@ async def list_groups(
     return {"ok": True, "groups": items, "count": len(items)}
 
 
+@router.get("/groups/{group_id}")
+async def get_group(
+    group_id: str,
+    conversation_id: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+    x_conversation_id: str | None = Header(default=None, alias="X-Conversation-Id"),
+):
+    """Get one owner Group by id (not a name search)."""
+    _ = node
+    cid = conversation_id or x_conversation_id
+    user_id = await _user_for_conversation(db, cid)
+    if not user_id:
+        raise HTTPException(400, "conversation_id required to resolve owner")
+    items = await ledger.list_groups_for_user(
+        db, user_id=user_id, group_id=group_id, limit=1
+    )
+    if not items:
+        raise HTTPException(404, "group not found")
+    return {"ok": True, "group": items[0]}
+
+
 @router.post("/groups")
 async def create_group(
     body: dict | None = None,

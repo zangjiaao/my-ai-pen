@@ -93,10 +93,10 @@ export function citizenMissionLinesForKit(kit: CitizenKit): readonly string[] {
   return kit === "ledger_assist" ? LEDGER_ASSIST_CITIZEN_MISSION_LINES : ACT_EXPERT_CITIZEN_MISSION_LINES;
 }
 
-/** Prepend citizen tools; de-dupe while preserving first-seen order. */
+/** Prepend citizen tools; de-dupe while preserving first-seen order. Kit is required. */
 export function mergePlatformCitizenTools(
   toolNames: readonly string[],
-  kit: CitizenKit = "ledger_assist",
+  kit: CitizenKit,
 ): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -109,10 +109,10 @@ export function mergePlatformCitizenTools(
   return out;
 }
 
-/** Prepend citizen mission once (skip if marker already present). */
+/** Prepend citizen mission once (skip if marker already present). Kit is required. */
 export function mergePlatformCitizenMission(
   missionLines: readonly string[],
-  kit: CitizenKit = "ledger_assist",
+  kit: CitizenKit,
 ): string[] {
   const existing = missionLines.map(String);
   if (existing.some((l) => l.includes(PLATFORM_CITIZEN_MARKER))) {

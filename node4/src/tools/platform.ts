@@ -61,7 +61,7 @@ export async function platformLedgerFetch(
   return { ok: res.ok, status: res.status, data };
 }
 
-function convQuery(runtime: ToolRuntime): string {
+export function convQuery(runtime: ToolRuntime): string {
   const id = String(runtime.task.conversationId || "").trim();
   return id ? `?conversation_id=${encodeURIComponent(id)}` : "";
 }

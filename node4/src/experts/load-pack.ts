@@ -52,7 +52,8 @@ function packFromParts(packDir: string, manifest: PackManifest, missionRaw: stri
   const missionLines = linesFromMarkdown(missionRaw);
   const workLines = linesFromMarkdown(workRaw);
   const bookingMode: BookingMode = manifest.bookingMode === "none" ? "none" : "finding";
-  // Model B: act-expert Citizen kit (mission + fact/decision/title). Inventory stays on Default.
+  // Model B: act-expert Citizen kit (mission + fact/decision). Inventory stays on Default.
+  // Auto-title is a harness write (#548) — packs do not prepend the title tool.
   const baseMission = missionLines.length
     ? missionLines
     : [`You are Node4 in the **${manifest.id}** role pack.`];

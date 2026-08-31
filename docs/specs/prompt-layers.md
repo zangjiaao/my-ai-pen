@@ -210,7 +210,7 @@ Package:        Base(trimmed) + Profession(compact) + Runtime(worker tools + opt
 |------|--------|
 | **Default Main** | Same Free / Graph recipes **if** that pack declares graphs; today `default` has no Graph Runtime block; ledger-oriented tools; RoE via `formatRoeInjection` in Runtime (§3.3.1). |
 | **Expert Free Main** | Runtime Free is **thin**; Graph L1 catalog allowed; no Graph settlement long text; full RoE inject in Runtime. |
-| **Expert Graph stage** | Profession core/compact **required** after P3; Runtime is stage contract + stage tools/skills + fail-closed destructive line (not full Free RoE block). |
+| **Expert Graph stage** | Profession core/compact **required** after P3; Runtime is stage contract + stage tools/skills + fail-closed destructive line (not full Free RoE block). **Task** includes the same `formatCaseContextInjection` blackboard as Free (Host ids, coverage, Workset, living Intel) plus handoff/prior seed. |
 | **Package worker** | Same seam; thinner Profession; optional single skill body (and, when shipped, Package profile overlay) in Runtime; return contract. Independent of whether Main is Free or Graph. |
 
 **After P3:** Graph stage captains must not be methodology-poorer than Package workers on profession-core contract markers.
@@ -327,7 +327,7 @@ Test **`assemble system prompt → string`** as the highest seam. Assert presenc
 1. **Order:** Base (Standing first) → Profession → Runtime → Task — all paths.  
 2. **Default:** non-act; no Expert recon/booking doctrine; no Graph stage law.  
 3. **Expert Free:** profession core + thin Free Runtime + skills progressive + RoE; Graph L1 catalog without stage dump when pack declares product graphs.  
-4. **Expert Graph stage:** profession core/compact markers + stage Runtime + tool/skill gating + handoff Task facts.  
+4. **Expert Graph stage:** profession core/compact markers + stage Runtime + tool/skill gating + handoff Task facts + the same Case blackboard inject as Free.  
 5. **RoE:** post-ex skill ids withheld when post-ex false.  
 6. **Capability gating:** tool one-liners only if tools present.  
 7. **Package worker:** same seam; return contract; optional single skill body.  
@@ -408,3 +408,4 @@ Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai
 | 2026-08-16 | Harness channel (#481): outer continue / persist-pass / checkpoint are `role=harness`, not fake user turns. Mid-run nudges stay on the tool result. |
 | 2026-08-21 | Case speech isSelf = pi `session_id` (not Expert id). Same Expert new working runtime still sees prior visible talk. |
 | 2026-08-16 | Case group speech: `case_context.speech` log + Session cursor; harness `### Case speech` is unread others only. System `### Thread` retired. |
+| 2026-08-31 | Spec #543: Graph stage Task injects the same `### Case` blackboard as Free (`formatCaseContextInjection`). |

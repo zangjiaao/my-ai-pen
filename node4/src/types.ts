@@ -121,7 +121,8 @@ export type TaskEnvelope = {
 };
 
 export type PlatformSink = {
-  send(message: PlatformMessage): Promise<void>;
+  /** May return a persist ack (e.g. `{ created: boolean }` on `vuln_found`). */
+  send(message: PlatformMessage): Promise<void | Record<string, unknown>>;
 };
 
 /** HTTP access to platform ledger APIs (Node token auth). */

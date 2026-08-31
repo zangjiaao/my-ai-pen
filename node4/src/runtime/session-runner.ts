@@ -225,7 +225,7 @@ export async function runNode4Task(
       } else {
         await appendFileInsideRoot(eventsPath, hostWriteRoot, line).catch(() => {});
       }
-      await platform.send(message);
+      return platform.send(message);
     },
   };
 

@@ -29,5 +29,5 @@ for (const name of [
 
 assert.ok(toolNamesForPack(DEFAULT_SEAT_PACK).includes("fact"), "notebook is fact");
 assert.ok(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_record_intel"));
-assert.ok(mergePlatformCitizenTools(["shell"]).includes("fact"));
+assert.ok(mergePlatformCitizenTools(["shell"], "ledger_assist").includes("fact"));
 console.log("platform-intel.test.ts ok");

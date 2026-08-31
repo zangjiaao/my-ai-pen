@@ -830,7 +830,6 @@ async function finalizeFinding(
     related_prior_id: input.relatedPriorId || undefined,
     created_at: new Date().toISOString(),
   };
-  noteSessionConfirm(runtime, !input.relatedPriorId);
 
   const caseRoot = runtime.caseDir || dirname(runtime.findingsDir);
   await writeFileInsideRoot(
@@ -838,7 +837,8 @@ async function finalizeFinding(
     caseRoot,
     JSON.stringify(record, null, 2),
   );
-  await runtime.platform.send({
+  let persistAck: Record<string, unknown> | undefined;
+  const ack = await runtime.platform.send({
     type: "vuln_found",
     conversation_id: runtime.task.conversationId,
     task_id: runtime.task.taskId,
@@ -864,6 +864,17 @@ async function finalizeFinding(
     finding_id: input.storeFindingId || id,
     related_prior_id: input.relatedPriorId || undefined,
   });
+  if (ack && typeof ack === "object") persistAck = ack as Record<string, unknown>;
+  const persistType = String(persistAck?.type || "vuln_found");
+  const persistFailed = persistType === "vuln_found_error";
+  const createdKnown =
+    persistAck && typeof persistAck.created === "boolean"
+      ? (persistAck.created as boolean)
+      : null;
+  // Wrap SoT is platform persist: do not guess new identity from !relatedPriorId.
+  if (!persistFailed) {
+    noteSessionConfirm(runtime, createdKnown === true);
+  }
 
   // Mirror Case-file confirm into the run Store so Worker list/get and PDCA overlay see it.
   // Store-first Graph confirm still markBooked(storeFindingId); Free confirm often has none.
@@ -908,8 +919,7 @@ async function finalizeFinding(
       "Do **not** claim 新增/新发现 from local finding(confirm) success count alone — rediscover updates an existing identity silently. " +
       "Identity = vuln_type + file-level location (title wording does not create a new row).",
     ledger: {
-      // Platform outcome is fire-and-forget on this path; created is unknown until list/query.
-      created: null as boolean | null,
+      created: createdKnown,
       vuln_type: input.vulnType,
     },
     chain_quality: {

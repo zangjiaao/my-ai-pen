@@ -2,6 +2,7 @@
 from app.services.case_context import (
     _normalize_finding_severity,
     build_case_context_payload,
+    session_booking_from_messages,
     build_evidence_snippets,
     build_findings_summary,
     build_scope_intel_card,
@@ -680,4 +681,44 @@ def test_evidence_snippets_include_book_time_finding_proof():
     assert snippets[0]["role"] == "proof"
     assert "SQL syntax" in (snippets[0].get("excerpt") or "")
     assert "sqli" in (snippets[0].get("path_or_url") or "").lower()
+
+
+def test_session_booking_counts_from_persisted_created_flag():
+    messages = [
+        {
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {
+                "title": "SQLi",
+                "status": "confirmed",
+                "created": True,
+            },
+        },
+        {
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {
+                "title": "XSS",
+                "status": "confirmed",
+                "created": False,
+            },
+        },
+        {
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {"type": "vuln_found_error", "error": "persist failed"},
+        },
+        {
+            "role": "agent",
+            "msg_type": "text",
+            "content": {"text": "not a finding"},
+        },
+    ]
+    confirms, new_ids = session_booking_from_messages(messages)
+    assert confirms == 2
+    assert new_ids == 1
+
+    payload = build_case_context_payload(messages=messages, conversation_id="conv-session")
+    assert payload["session_confirms"] == 2
+    assert payload["session_new_identities"] == 1
 

@@ -574,8 +574,12 @@ export function buildStagePromptLayers(
     hypMode ? hypothesisBlock : "",
   ]);
 
-  // Task: this-turn envelope + handoff / prior seed facts (no hyp dual-home)
+  // Task: this-turn envelope + Case blackboard + handoff / prior seed (no hyp dual-home)
+  const caseBlock = formatCaseContextInjection(task.caseContext, {
+    engagementPort: engagementPortFromTask(task) || undefined,
+  });
   const taskLayer = joinNonEmptyPromptParts([
+    caseBlock,
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,

@@ -8,6 +8,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import {
+  convQuery,
   createPlatformAssembleGroupTool,
   createPlatformBatchEnrichAssetsTool,
   createPlatformCreateAssetTool,
@@ -17,6 +18,7 @@ import {
   createPlatformListAssetsTool,
   createPlatformListGroupsTool,
   isHostCreateAttempt,
+  platformLedgerFetch,
 } from "./platform.js";
 
 const OPS = new Set(["list", "get", "create", "enrich", "assemble"]);
@@ -93,10 +95,22 @@ export function createInventoryTool(runtime: ToolRuntime): AgentTool<any> {
 
       if (op === "get") {
         if (kind === "group") {
-          const q = String(
-            params.q || params.name || params.group_name || params.group_id || params.id || "",
-          ).trim();
-          return listGroups.execute!(_id, { ...params, q });
+          const groupId = String(params.group_id || params.id || "").trim();
+          const nameQ = String(params.q || params.name || params.group_name || "").trim();
+          const byId =
+            groupId ||
+            (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameQ)
+              ? nameQ
+              : "");
+          if (byId) {
+            const res = await platformLedgerFetch(
+              runtime,
+              "GET",
+              `/api/node/ledger/groups/${encodeURIComponent(byId)}${convQuery(runtime)}`,
+            );
+            return jsonResult(res.data, { isError: !res.ok });
+          }
+          return listGroups.execute!(_id, { ...params, q: nameQ });
         }
         const asset_id = String(params.asset_id || params.id || "").trim();
         return getAsset.execute!(_id, { ...params, asset_id });
@@ -114,8 +128,10 @@ export function createInventoryTool(runtime: ToolRuntime): AgentTool<any> {
           ? params.asset_ids.map(String).map((s: string) => s.trim()).filter(Boolean)
           : [];
         const singleId = String(params.asset_id || params.id || "").trim();
+        const ids = [...assetIds];
+        if (singleId && !ids.includes(singleId)) ids.unshift(singleId);
         const body = {
-          asset_id: singleId,
+          asset_id: ids[0] || singleId,
           address: params.address,
           host: params.host,
           create: params.create,
@@ -131,18 +147,19 @@ export function createInventoryTool(runtime: ToolRuntime): AgentTool<any> {
             { isError: true },
           );
         }
+        const groupHint = String(params.group_name || params.group_id || "").trim();
         const batch =
           params.batch === true ||
-          assetIds.length > 1 ||
+          ids.length > 1 ||
           kind === "group" ||
-          Boolean(String(params.group_name || params.group_id || "").trim() && !singleId);
+          Boolean(groupHint && ids.length !== 1);
         if (batch) {
           return batchEnrich.execute!(_id, {
             ...params,
-            asset_ids: assetIds.length ? assetIds : singleId ? [singleId] : params.asset_ids,
+            asset_ids: ids,
           });
         }
-        return enrichAsset.execute!(_id, { ...params, asset_id: singleId });
+        return enrichAsset.execute!(_id, { ...params, asset_id: ids[0] || singleId });
       }
 
       return assembleGroup.execute!(_id, params);

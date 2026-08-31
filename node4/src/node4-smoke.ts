@@ -177,17 +177,17 @@ async function main() {
   );
   // Model B: citizen kit split at pack load (act_expert vs ledger_assist)
   assert(
-    mergePlatformCitizenTools(["shell", "inventory"]).filter((n) => n === "inventory")
+    mergePlatformCitizenTools(["shell", "inventory"], "ledger_assist").filter((n) => n === "inventory")
       .length === 1,
     "citizen tools de-dupe",
   );
   assert(mergePlatformCitizenTools(["shell"], "ledger_assist")[0] === "inventory", "citizen tools prepend");
   assert(
-    mergePlatformCitizenMission(["x"]).some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
+    mergePlatformCitizenMission(["x"], "ledger_assist").some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
     "citizen mission inject",
   );
   assert(
-    mergePlatformCitizenMission([`${PLATFORM_CITIZEN_MARKER} already`]).filter((l) =>
+    mergePlatformCitizenMission([`${PLATFORM_CITIZEN_MARKER} already`], "ledger_assist").filter((l) =>
       l.includes(PLATFORM_CITIZEN_MARKER),
     ).length === 1,
     "citizen mission idempotent",

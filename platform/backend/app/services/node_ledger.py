@@ -321,6 +321,7 @@ async def list_groups_for_user(
     *,
     user_id: uuid.UUID,
     q: str | None = None,
+    group_id: str | None = None,
     limit: int = 50,
     include_members: bool = False,
     member_sample: int = 20,
@@ -338,7 +339,14 @@ async def list_groups_for_user(
         .order_by(AssetGroup.name.asc())
         .limit(limit)
     )
-    if q and str(q).strip():
+    gid = str(group_id or "").strip()
+    if gid:
+        try:
+            guid = uuid.UUID(gid)
+        except ValueError:
+            return []
+        stmt = stmt.where(AssetGroup.id == guid)
+    elif q and str(q).strip():
         like = f"%{str(q).strip()}%"
         stmt = stmt.where(AssetGroup.name.ilike(like))
     groups = list((await db.execute(stmt)).scalars().all())

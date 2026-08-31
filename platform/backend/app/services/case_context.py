@@ -986,6 +986,31 @@ def build_scope_intel_card(
     return card
 
 
+def session_booking_from_messages(messages: list[dict] | None) -> tuple[int, int]:
+    """Count this-Case confirms vs new ledger identities from persisted vuln_found.
+
+    New identity is platform ``created is True`` only — never inferred from
+    missing related_prior_id. Persist errors are skipped.
+    """
+    confirms = 0
+    new_identities = 0
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        msg_type = str(m.get("msg_type") or m.get("type") or "").lower()
+        content = m.get("content") if isinstance(m.get("content"), dict) else {}
+        if not isinstance(content, dict):
+            content = {}
+        if msg_type not in {"vuln_found", "vuln_card"}:
+            continue
+        if str(content.get("type") or "").lower() == "vuln_found_error":
+            continue
+        confirms += 1
+        if content.get("created") is True:
+            new_identities += 1
+    return confirms, new_identities
+
+
 def build_case_context_payload(
     *,
     messages: list[dict],
@@ -1076,6 +1101,9 @@ def build_case_context_payload(
             "Large files are not fully inlined."
         ),
     }
+    session_confirms, session_new_identities = session_booking_from_messages(messages)
+    payload["session_confirms"] = session_confirms
+    payload["session_new_identities"] = session_new_identities
     if isinstance(scope_intel, dict) and scope_intel:
         payload["scope_intel"] = scope_intel
     if isinstance(intel_summary, list) and intel_summary:

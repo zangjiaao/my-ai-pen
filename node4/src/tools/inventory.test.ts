@@ -181,4 +181,64 @@ function mockFetch(handler: (req: { method: string; url: string; body?: unknown 
   }
 }
 
+{
+  const groupId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeee0001";
+  const runtime = makeRuntime();
+  const mock = mockFetch((req) => {
+    if (req.method === "GET" && req.url.includes(`/ledger/groups/${groupId}`)) {
+      return { ok: true, group: { id: groupId, name: "Acme" } };
+    }
+    if (req.method === "GET" && /\/ledger\/groups(\?|$)/.test(req.url)) {
+      return { ok: true, count: 0, groups: [] };
+    }
+    if (req.method === "POST" && req.url.includes("/ledger/assets/") && req.url.includes("/enrich")) {
+      return { ok: true, asset_id: "h1", ports: [80] };
+    }
+    if (req.method === "POST" && req.url.includes("/ledger/assets/batch-enrich")) {
+      return { ok: true, asset_ids: ["h1"] };
+    }
+    return { ok: false, error: `unexpected ${req.method} ${req.url}` };
+  });
+  try {
+    const tool = createInventoryTool(runtime);
+    const got = await tool.execute!("7", { op: "get", kind: "group", group_id: groupId });
+    assert.match(toolText(got), /Acme/);
+    assert.ok(
+      mock.calls.some(
+        (c) => c.method === "GET" && c.url.includes(`/api/node/ledger/groups/${groupId}`),
+      ),
+      "get(group) fetches Group by id, not name search",
+    );
+    assert.ok(
+      !mock.calls.some(
+        (c) =>
+          c.method === "GET" &&
+          c.url.includes("/api/node/ledger/groups") &&
+          c.url.includes(`q=${groupId}`),
+      ),
+      "get(group) must not pass Group id as q= name search",
+    );
+
+    const enriched = await tool.execute!("8", {
+      op: "enrich",
+      kind: "host",
+      asset_ids: ["h1"],
+      ports: [80],
+    });
+    assert.ok(!/^error:/i.test(toolText(enriched).trim()), `single asset_ids enrich: ${toolText(enriched).slice(0, 200)}`);
+    const enrichCall = mock.calls.find(
+      (c) =>
+        c.method === "POST" &&
+        (c.url.includes("/ledger/assets/h1/enrich") || c.url.includes("/ledger/assets/batch-enrich")),
+    );
+    assert.ok(enrichCall, "single asset_ids hits enrich or batch-enrich with that Host");
+    if (enrichCall?.url.includes("batch-enrich")) {
+      const ids = (enrichCall.body as { asset_ids?: string[] })?.asset_ids || [];
+      assert.ok(ids.includes("h1"), "batch-enrich body carries the single asset_ids entry");
+    }
+  } finally {
+    mock.restore();
+  }
+}
+
 console.log("inventory.test.ts ok");

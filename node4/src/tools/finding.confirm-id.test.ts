@@ -46,6 +46,9 @@ async function makeRuntime(opts: {
   hardGraph?: boolean;
   surfaceSqlite?: SurfaceSqliteStore;
   platformMessages: Array<Record<string, unknown>>;
+  platformSend?: (
+    msg: Record<string, unknown>,
+  ) => Promise<void | Record<string, unknown>>;
 }): Promise<ToolRuntime> {
   const pq = createProcessQualityState();
   if (opts.store) pq.findingStore = opts.store;
@@ -62,6 +65,7 @@ async function makeRuntime(opts: {
     platform: {
       send: async (msg: Record<string, unknown>) => {
         opts.platformMessages.push(msg);
+        if (opts.platformSend) return opts.platformSend(msg);
       },
     },
     todo: new TodoStore(),
@@ -315,6 +319,101 @@ try {
     const afterTraffic = await surfaceSqlite.get({ location: "http://host/login.php" });
     assert.equal(afterTraffic?.coverage, "untested", "Traffic purpose=test must not write TESTED");
     surfaceSqlite.close();
+  }
+
+  // --- 7) Session wrap counts follow platform persist SoT (#543) ---
+  {
+    platformMessages.length = 0;
+    const runtime = await makeRuntime({
+      dir: join(dir, "created-true"),
+      platformMessages,
+      platformSend: async () => ({ type: "vuln_found", created: true }),
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    const res = await exec("c7", { ...baseConfirm, related_prior_id: "6194731f-aaaa-bbbb-cccc-ddddeeee0002" });
+    const text = textOf(res);
+    assert.ok(!/^error:/i.test(text.trim()), `created=true confirm: ${text.slice(0, 280)}`);
+    assert.equal(runtime.lifecycle.sessionBooking?.confirms, 1, "confirm counts after persist");
+    assert.equal(
+      runtime.lifecycle.sessionBooking?.newIdentities,
+      1,
+      "new ledger identity is platform created=true, not !relatedPriorId",
+    );
+    const obj = parseJsonText(text);
+    const ledger = obj?.ledger as Record<string, unknown> | undefined;
+    assert.equal(ledger?.created, true, "tool result exposes platform created");
+  }
+
+  {
+    platformMessages.length = 0;
+    const runtime = await makeRuntime({
+      dir: join(dir, "created-false"),
+      platformMessages,
+      platformSend: async () => ({ type: "vuln_found", created: false }),
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    const res = await exec("c8", { ...baseConfirm });
+    assert.equal(runtime.lifecycle.sessionBooking?.confirms, 1);
+    assert.equal(
+      runtime.lifecycle.sessionBooking?.newIdentities,
+      0,
+      "rediscovery (created=false) is not a new ledger identity",
+    );
+    const ledger = parseJsonText(textOf(res))?.ledger as Record<string, unknown> | undefined;
+    assert.equal(ledger?.created, false);
+  }
+
+  {
+    platformMessages.length = 0;
+    const runtime = await makeRuntime({
+      dir: join(dir, "send-fail"),
+      platformMessages,
+      platformSend: async () => {
+        throw new Error("persist failed");
+      },
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    await assert.rejects(() => exec("c9", { ...baseConfirm }), /persist failed/);
+    assert.equal(
+      runtime.lifecycle.sessionBooking?.confirms ?? 0,
+      0,
+      "failed platform send must not increment session confirms",
+    );
+    assert.equal(runtime.lifecycle.sessionBooking?.newIdentities ?? 0, 0);
+  }
+
+  {
+    platformMessages.length = 0;
+    const runtime = await makeRuntime({
+      dir: join(dir, "void-send"),
+      platformMessages,
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    const res = await exec("c10", { ...baseConfirm });
+    const ledger = parseJsonText(textOf(res))?.ledger as Record<string, unknown> | undefined;
+    assert.equal(runtime.lifecycle.sessionBooking?.confirms, 1, "void ack still counts a successful send");
+    assert.equal(
+      runtime.lifecycle.sessionBooking?.newIdentities,
+      0,
+      "void ack must not guess a new ledger identity",
+    );
+    assert.equal(ledger?.created, null, "unknown persist outcome stays null");
   }
 
   // Sanity: at least one finding file written under no-id case

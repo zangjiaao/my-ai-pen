@@ -76,7 +76,7 @@ Do **not** auto-merge a vhost into an IP Host. Do **not** invent a Service clust
 |---|------|
 | **Host** | User create / authorize-register / promote, **or Agent `inventory(create)` when the user explicitly asked** (reason required; CIDR ≤256/call), **or Case asset-intake `enroll_group` after the owner confirms** (user PUT / Workset adopt; Agent `set_intake` only records policy). **Merge only when the address is already a member of the target Group**; otherwise always create a new Host (cross-unit same IP stays two cards). Agent enrich: `inventory(enrich)` (single or batch). Never invent Hosts from recon alone. `inventory(assemble)` ports = Group **view subset** only. |
 | **Service row** | User adds a port on a Host, **or** book / accepted HTTP(S) settle names that `host:port` on an existing Host. nmap-sized dumps do not become Service rows. |
-| **Group** | User create / rename / delete. Agent does **not** create Groups. |
+| **Group** | User create / rename / delete, **or Agent `inventory(create, kind=group)` when the user explicitly asked** (reason required). Do **not** invent Groups from recon. |
 | **Assembly** | User puts a Host into a Group and picks which Services belong there. Adding a Host to a Group does **not** imply every port. Removing the last Service from an assembly leaves a bare Host in the Group or removes the Host from the Group (UI: user chooses). |
 | **Tags** | User (and Agent, non-`sys`) on Host or Service. Editing a tag does **not** create or extend a Group. |
 | **Path onto Service 攻击面** | Book or accepted HTTP(S) settle only. Wave 2 — do not block Wave 1 tree on path persist. |
@@ -139,7 +139,7 @@ Do **not** auto-mirror Surface / #410 into Service 攻击面 except the Wave 2 a
 
 - Reviving #322 Service cluster / 分身 / `asset_clusters`.
 - Host-level cluster; auto-link `:80`↔`:443`; auto-merge vhost ↔ IP.
-- Agent silent Host create, Agent-authored Groups or assemblies.
+- Agent silent Host create from recon; silent Agent-authored Groups or assemblies (user-asked `inventory(create, kind=group)` with reason is allowed).
 - Admitting every scanned or SYN-open port as a Service.
 - Path Observation as a Service; Surface-tab inventory tree.
 - Inventory as Graph L0 / Feedback success.
@@ -210,7 +210,8 @@ Good tests assert **external seam behavior**. Do not assert ORM names or React c
 | 2026-08-28 | Host 详情编辑 `aliases[]`（`PATCH /api/assets/{id}`）；备注不是身份。 |
 | 2026-08-28 | Identity lookup: unique / none / **ambiguous (2+)** → `request_user_decision`; never first-match. |
 | 2026-08-31 | Spec #543 Wave 1: pentest Hard Graph `tools.allow` **drops** inventory reads; Host identity is Case inject. Runner still only filters. |
-| 2026-08-31 | Spec #543 Wave 3 / #547: Default clerk Host/Group list/get/create/enrich/assemble collapse into one `inventory` multi-op. Act-expert catalogs do not gain `inventory`. |
+| 2026-08-31 | Spec #543 Wave 3 / #547: Default clerk Host/Group list/get/create/enrich/assemble collapse into one `inventory` multi-op. Act-expert catalogs do not gain `inventory`. User-asked `inventory(create, kind=group)` is allowed (reason required). |
+| 2026-08-31 | Spec #543 gap-fix: wrap counts use platform `created=true` (not `!relatedPriorId`). Graph Task injects the same `### Case` blackboard as Free. |
 | 2026-08-29 | Case asset-intake `enroll_group`: user-asked Group policy may enroll eligible Workset `t_host` into that Group + this Case Scope; Group assembly still does not pull other members into Scope. |
 | 2026-08-30 | Agent `set_intake` records enroll_group only (`set_by=agent`). Host create + Scope expand wait for owner confirm (user PUT / adopt) or later propose/settle when `set_by=user`. Authorize cards show owned Host addresses. Agent restating the same Group keeps `set_by=user`; stamp lookup failure does not wipe authorize `asset_ids`. |
 | 2026-08-30 | User authorize / next_steps `workset_item_ids` adopts matching proposed `t_host` only after unique Host resolve/create (0=create, 1=reuse, 2+ stay proposed). JWT actor must own the Case. Live `user_input` carries server Scope + `adopted_t_host_ids` (this card) and `live_adopted_t_host_ids` (Case Workset, including Surface 纳入). Custom next_steps text is not adopt. HTTP Surface 纳入 (`PATCH …/workset/{id}`) uses the same 0/1/2+ resolve; only a Host id expands Scope and marks adopted — create failure / alias 2+ / `register_assets=false` with no unique hit stay proposed. Workset/Scope JSONB writers take Conversation `FOR UPDATE` (WS adopt/patch/propose/settle, `_remember_conversation_task`; HTTP Workset, Node `asset-intake`, next-scope). Sticky remember keeps persisted Scope when the dispatch envelope is stale. HTTP Surface 纳入 pushes `case_scope_updated` to the bound Node so live/parked `runtime.task.scope` matches the Case. Pushes that arrive after `busy` and before `registerActiveSession` queue like `user_steer` (not while idle). Captain end parks before unregister so a 纳入 during stream dispose hits the park map; park consumes any queued Scope. Park attach keeps parked Scope when the next dispatch omits `allow`. Mixed card: Hosts in Scope vs Workset rows not adopted are stated separately. |

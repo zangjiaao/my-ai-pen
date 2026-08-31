@@ -28,7 +28,7 @@ The product Node (**Node4 lineage / Graph × Pi**) runs **Expert packs** (one ca
 
 **Model B — platform citizen kits + specialist overlay:**
 
-- At pack load (`node4/src/experts/load-pack.ts`), **act-expert** packs get Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` / title (Wave 1). `inventory` is **not** prepended. Default is the **inventory clerk** (`ledger_assist`).
+- At pack load (`node4/src/experts/load-pack.ts`), **act-expert** packs get Citizen **mission** (blackboard first) plus `fact` / `request_user_decision`. Auto-title is a **harness write** (#548) — not a pack tool. `inventory` is **not** prepended. Default is the **inventory clerk** (`ledger_assist`).
 - Hard Graph stage tools are the pack file `graphs/hard/*.json` `tools.allow`. Pentest graphs do **not** list inventory reads; create/enrich/assemble stay off that list. Node only filters pack tools by the JSON. Scope Hosts and coverage counts come from `### Case`.
 - After a stage L0 pass, Node prompts the run’s **one Feedback Agent** (same pi session + panel row; not configured per-stage in the JSON). It judges refine vs pass and whether to open **this hop’s** next stage. Captains do not self-vote stage-advance. Graph **Main** is also one pi session for the run (next stage = next turn, tools rebound); **Workers** may mint a new session per package.
 - **default** = inventory clerk (R/W Host/Group via `inventory`, reports, handoff orchestration).

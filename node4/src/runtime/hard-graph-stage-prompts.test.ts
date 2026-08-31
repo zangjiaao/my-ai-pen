@@ -302,6 +302,46 @@ assert.notEqual(stageTw, stageCn);
     /hypothesis-queue/,
     "#394 hyp mode off: no hyp block in Runtime or Task",
   );
+
+  const layersCase = buildStagePromptLayers(
+    inputWithSub,
+    {
+      ...task,
+      caseContext: {
+        conversation_id: "c-case",
+        scope_intel: {
+          hosts: [{ id: "asset-graph-1", address: "lab.example", on_ledger: true }],
+          surface_sketch: {
+            new: 1,
+            untested: 2,
+            tested: 1,
+            skipped: 0,
+            untested_samples: ["/login"],
+          },
+        },
+        next_work: {
+          workset_open_count: 1,
+          workset_open: [{ id: "ws_g", family: "t_host", title: "side.lab", status: "proposed" }],
+        },
+        intel_summary: [{ id: "i-g", summary: "cookie session", kind: "credential_status" }],
+        session_confirms: 2,
+        session_new_identities: 1,
+      },
+    } as TaskEnvelope,
+    pack,
+  );
+  assert.match(layersCase.task, /### Case/, "Graph Task injects the same Case blackboard as Free");
+  assert.match(layersCase.task, /id=asset-graph-1/, "Graph Task has Host id");
+  assert.match(layersCase.task, /Coverage/, "Graph Task has coverage counts");
+  assert.match(layersCase.task, /ws_g|side\.lab/, "Graph Task has Workset");
+  assert.match(layersCase.task, /Living notebook|cookie session/, "Graph Task has living Intel");
+  assert.match(layersCase.task, /confirms=2 new_ledger_identities=1/);
+  assert.doesNotMatch(layersCase.task, /list_assets first/i);
+  assert.doesNotMatch(
+    layersCase.runtime,
+    /### Case live index/,
+    "#531: overlay stays harness, not Graph Runtime",
+  );
 }
 
 console.log("hard-graph-stage-prompts.test.ts: ok");
