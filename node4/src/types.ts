@@ -310,6 +310,11 @@ export type ToolRuntime = {
     }>;
     /** Spec #532: this-run Workset propose stash (settle also re-emits). */
     worksetProposed?: import("./runtime/workset-emit.js").WorksetCandidate[];
+    /**
+     * #548: this-session successful finding(confirm) vs new ledger identities.
+     * newIdentities ≈ created=true / first book of this identity (not related_prior).
+     */
+    sessionBooking?: { confirms: number; newIdentities: number };
   };
 };
 

@@ -4,8 +4,8 @@
  * Two kits (#543 / #546):
  * - `ledger_assist` — built-in Default: Owner Ledger clerk tools + clerk mission.
  * - `act_expert` — packs loaded from the experts catalog: rewritten mission plus
- *   fact + request_user_decision (+ title tool until Wave 2). Act tools stay on
- *   the pack manifest. Inventory reads are inject, not prepended tools.
+ *   fact + request_user_decision. Auto-title is a harness write (#548).
+ *   Act tools stay on the pack manifest. Inventory reads are inject, not prepended tools.
  *
  * Host asset *create* stays on user-authorized platform boundaries only
  * (handoff Authorize, next-scope, asset page, Workset adopt / enroll_group).
@@ -36,13 +36,12 @@ export const LEDGER_ASSIST_CITIZEN_TOOL_NAMES = [
 ] as const;
 
 /**
- * Act-expert Citizen prepend. Wave 1 keeps `platform_set_conversation_title`
- * until Wave 2 harness auto-title. Inventory / snapshot / list_experts stay off.
+ * Act-expert Citizen prepend. Title tool is gone — harness writes auto-title (#548).
+ * Inventory / snapshot / list_experts stay off.
  */
 export const ACT_EXPERT_CITIZEN_TOOL_NAMES = [
   "fact",
   "request_user_decision",
-  "platform_set_conversation_title",
 ] as const;
 
 /** @deprecated alias — Default / ledger_assist kit. Prefer LEDGER_ASSIST_CITIZEN_TOOL_NAMES. */

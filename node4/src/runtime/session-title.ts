@@ -1,10 +1,11 @@
 /**
- * Case session-title Task hint (Spec #457).
+ * Case session-title Task hint + harness auto-title write (Spec #457 / #548).
  *
- * Main (Default / Expert Free) owns auto-title via the assembled Task layer.
- * Not a separate Agent Session. Graph stages and Package workers do not own this.
+ * Auto path is a harness write on Free Main start — not an Agent tool turn.
+ * Graph stages and Package workers do not own this.
  */
-import { isDefaultConversationTitle } from "../tools/platform.js";
+import { isDefaultConversationTitle, writeConversationTitle } from "../tools/platform.js";
+import type { ConversationTitleWriteRuntime } from "../tools/platform.js";
 import type { TaskEnvelope } from "../types.js";
 
 export function taskHasStructuredTargetOrScope(
@@ -22,30 +23,74 @@ export function structuredTargetHint(task: Pick<TaskEnvelope, "target" | "scope"
   return "";
 }
 
+/** Title text from structured envelope only (no instruction NLP). */
+export function harnessAutoTitleFromEnvelope(
+  task: Pick<TaskEnvelope, "target" | "scope">,
+): string {
+  return structuredTargetHint(task).slice(0, 40);
+}
+
+export function shouldApplyHarnessAutoTitle(
+  task: Pick<TaskEnvelope, "conversationTitle" | "target" | "scope">,
+  opts?: { graphStage?: boolean; worker?: boolean },
+): boolean {
+  if (opts?.graphStage || opts?.worker) return false;
+  if (!isDefaultConversationTitle(task.conversationTitle)) return false;
+  return taskHasStructuredTargetOrScope(task);
+}
+
+export async function applyHarnessAutoTitle(
+  runtime: ConversationTitleWriteRuntime,
+  opts?: { graphStage?: boolean; worker?: boolean },
+): Promise<{ applied: boolean; skipped?: string; title?: string }> {
+  if (!shouldApplyHarnessAutoTitle(runtime.task, opts)) {
+    return { applied: false, skipped: "gate" };
+  }
+  const title = harnessAutoTitleFromEnvelope(runtime.task);
+  if (!title) return { applied: false, skipped: "no-hint" };
+  const written = await writeConversationTitle(runtime, title, { onlyIfDefault: true });
+  if (!written.ok || written.skipped) {
+    return { applied: false, skipped: written.skipped ? "only_if_default" : "write-failed" };
+  }
+  const next = String(written.title || title).trim();
+  if (next) runtime.task.conversationTitle = next;
+  return { applied: true, title: next };
+}
+
+export type SessionTitleHintOptions = {
+  /** Default Free still has the title tool for user-asked rename. */
+  titleToolAvailable?: boolean;
+};
+
 /**
- * Task-layer session title block. Auto-title only when the Case is still a
- * placeholder and this turn has a structured target/scope.
+ * Task-layer session title block. Auto-title is a harness write (#548).
+ * Hint does not tell act-expert packs to call a title tool.
  */
 export function formatSessionTitleHint(
   task: Pick<TaskEnvelope, "conversationTitle" | "target" | "scope">,
+  options?: SessionTitleHintOptions,
 ): string {
   const sessionTitle = String(task.conversationTitle ?? "").trim();
+  const tool = options?.titleToolAvailable === true;
+  const userAsked = tool
+    ? " If the user asks to rename: platform_set_conversation_title(only_if_default=false)."
+    : "";
   if (!isDefaultConversationTitle(sessionTitle)) {
     if (!sessionTitle) return "";
     return [
       "### Session title",
-      `Current title: «${sessionTitle}». Do not change unless the user asks to rename (then platform_set_conversation_title with only_if_default=false).`,
+      `Current title: «${sessionTitle}». Do not change unless the user asks to rename.${tool ? " Then platform_set_conversation_title with only_if_default=false." : ""}`,
     ].join("\n");
   }
   if (!taskHasStructuredTargetOrScope(task)) {
     return [
       "### Session title",
-      "Title is still the default. Do not auto-title greetings or ledger chat. If the user asks to rename: platform_set_conversation_title(only_if_default=false).",
+      `Title is still the default. Do not auto-title greetings or ledger chat.${userAsked}`,
     ].join("\n");
   }
   return [
     "### Session title",
-    "Title is still the default. This turn has a structured target/scope — call platform_set_conversation_title once with only_if_default=true and a short title (user focus + host/port; ≤~24 Chinese or ~40 Latin; no quotes, no trailing period). Do not announce the rename. Do not add a todo for this.",
+    "Title is still the default. Harness will name this Case from the structured target/scope. Do not announce the rename. Do not add a todo for this.",
   ].join("\n");
 }
 

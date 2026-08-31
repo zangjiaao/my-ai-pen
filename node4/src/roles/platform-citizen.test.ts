@@ -48,8 +48,8 @@ for (const name of ACT_LOOP_FORBIDDEN) {
 }
 assert.ok(pentest.toolNames.includes("platform_create_report"), "pentest keeps create_report");
 assert.ok(
-  pentest.toolNames.includes("platform_set_conversation_title"),
-  "Wave 1 keeps title tool until Wave 2",
+  !pentest.toolNames.includes("platform_set_conversation_title"),
+  "Wave 2 drops title tool from pentest; harness writes auto-title",
 );
 assert.ok(pentest.toolNames.includes("hypothesis"), "hypothesis stays on pack for Graph stages");
 

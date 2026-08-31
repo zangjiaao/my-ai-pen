@@ -718,63 +718,85 @@ const DEFAULT_CONVERSATION_TITLES = new Set([
   "",
 ]);
 
+export type ConversationTitleWriteRuntime = Pick<ToolRuntime, "task" | "platform"> & {
+  platformApi?: ToolRuntime["platformApi"];
+};
+
+/** Shared title PATCH (Default tool + harness auto-title). */
+export async function writeConversationTitle(
+  runtime: ConversationTitleWriteRuntime,
+  title: string,
+  opts?: { onlyIfDefault?: boolean },
+): Promise<{
+  ok: boolean;
+  skipped?: boolean;
+  title?: string;
+  data: unknown;
+}> {
+  const cid = String(runtime.task.conversationId || "").trim();
+  const next = String(title || "").trim();
+  if (!cid) return { ok: false, data: { error: "no conversation_id on task" } };
+  if (!next) return { ok: false, data: { error: "title required" } };
+  const onlyIfDefault = opts?.onlyIfDefault === true;
+  const res = await platformLedgerFetch(
+    runtime as ToolRuntime,
+    "PATCH",
+    `/api/node/ledger/conversations/${encodeURIComponent(cid)}/title`,
+    {
+      title: next.slice(0, 255),
+      only_if_default: onlyIfDefault,
+    },
+  );
+  const data = (res.data && typeof res.data === "object" ? res.data : {}) as {
+    title?: string;
+    skipped?: boolean;
+  };
+  if (res.ok) {
+    const nextTitle = String(data.title || next).trim();
+    if (!data.skipped && nextTitle) {
+      try {
+        await runtime.platform.send({
+          type: "conversation_title_updated",
+          conversation_id: cid,
+          task_id: runtime.task.taskId,
+          title: nextTitle,
+        } as any);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    return { ok: true, skipped: data.skipped === true, title: nextTitle || next, data: res.data };
+  }
+  return { ok: false, data: res.data };
+}
+
 export function createPlatformSetConversationTitleTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_set_conversation_title",
     label: "Set session title",
     description:
       "Rename **this** Case/session title (sidebar + top bar). " +
-      "When the title is still 新会话 and this turn has a structured target/scope, " +
-      "call once with only_if_default=true. " +
       "User-asked rename: only_if_default=false. " +
-
       "Titles: concise (≤~24 Chinese chars or ~40 Latin), no quotes, no trailing period. " +
-      "Prefer only_if_default=true for auto-naming so a user-chosen title is never overwritten. " +
       "Do not announce the rename in chat unless the user asked to rename.",
     parameters: Type.Object({
       title: Type.String({ description: "New session title" }),
       only_if_default: Type.Optional(
         Type.Boolean({
           description:
-            "If true, update only when current title is still a default placeholder (新会话 etc.). Prefer true for auto-naming.",
+            "If true, update only when current title is still a default placeholder (新会话 etc.).",
         }),
       ),
     }),
     async execute(_id: string, params: any) {
-      const cid = String(runtime.task.conversationId || "").trim();
-      if (!cid) return textResult("error: no conversation_id on task", { isError: true });
+      if (!String(runtime.task.conversationId || "").trim()) {
+        return textResult("error: no conversation_id on task", { isError: true });
+      }
       const title = String(params.title || "").trim();
       if (!title) return textResult("error: title required", { isError: true });
       const onlyIfDefault = params.only_if_default === true || params.only_if_default === "true";
-      const res = await platformLedgerFetch(
-        runtime,
-        "PATCH",
-        `/api/node/ledger/conversations/${encodeURIComponent(cid)}/title`,
-        {
-          title: title.slice(0, 255),
-          only_if_default: onlyIfDefault,
-        },
-      );
-      if (res.ok) {
-        const data = (res.data && typeof res.data === "object" ? res.data : {}) as {
-          title?: string;
-          skipped?: boolean;
-        };
-        const nextTitle = String(data.title || title).trim();
-        if (!data.skipped && nextTitle) {
-          try {
-            await runtime.platform.send({
-              type: "conversation_title_updated",
-              conversation_id: cid,
-              task_id: runtime.task.taskId,
-              title: nextTitle,
-            } as any);
-          } catch {
-            /* non-fatal */
-          }
-        }
-      }
-      return jsonResult(res.data, { isError: !res.ok });
+      const written = await writeConversationTitle(runtime, title, { onlyIfDefault });
+      return jsonResult(written.data, { isError: !written.ok });
     },
   };
 }

@@ -426,7 +426,9 @@ export function buildPromptLayers(
 
   // --- Task: this-turn facts only ---
   const taskParts: string[] = [];
-  const titleHint = formatSessionTitleHint(task);
+  const titleHint = formatSessionTitleHint(task, {
+    titleToolAvailable: pack.toolNames.includes("platform_set_conversation_title"),
+  });
   if (titleHint) taskParts.push(titleHint);
   const caseBlock = formatCaseContextInjection(task.caseContext, {
     engagementPort: engagementPortFromTask(task) || undefined,

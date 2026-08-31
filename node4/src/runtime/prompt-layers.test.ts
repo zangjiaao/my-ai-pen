@@ -117,8 +117,8 @@ const baseTask: TaskEnvelope = {
 
   ok(layers.task.includes("Scope:"), "Task has authorized Scope");
   ok(
-    layers.task.includes("only_if_default=true"),
-    "Task assigns auto-title when placeholder + structured target",
+    /harness/i.test(layers.task) && !layers.task.includes("only_if_default=true"),
+    "Task discloses harness auto-title when placeholder + structured target",
   );
   const titled = buildPromptLayers(
     { ...baseTask, conversationTitle: "Juice Shop 复测" },
@@ -516,9 +516,9 @@ const baseTask: TaskEnvelope = {
   );
   ok(
     /Coverage honesty/i.test(workBody) &&
-      /surface\(summary\)/i.test(workBody) &&
-      /disclose remaining NEW untested/i.test(workBody),
-    "T3 work.md: coverage honesty / disclose remaining NEW untested",
+      /disclose remaining NEW untested/i.test(workBody) &&
+      !/before next_steps \/ wrap,\s+\*\*`surface\(summary\)`\*\*/i.test(workBody),
+    "T3 work.md: coverage honesty / disclose remaining NEW untested (no ritual summary)",
   );
   ok(
     /Todo map complete ≠ surface coverage complete/i.test(workBody),

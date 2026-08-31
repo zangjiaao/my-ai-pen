@@ -18,6 +18,7 @@ import { GoalStore } from "../stores/goal.js";
 import { TodoStore } from "../stores/todo.js";
 import { FindingStore, ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 import { createProcessQualityState } from "../runtime/package-honesty-host.js";
+import { SurfaceSqliteStore } from "../stores/surface-sqlite.js";
 import { createFindingTool } from "./finding.js";
 
 const PROOF =
@@ -43,6 +44,7 @@ async function makeRuntime(opts: {
   dir: string;
   store?: FindingStore;
   hardGraph?: boolean;
+  surfaceSqlite?: SurfaceSqliteStore;
   platformMessages: Array<Record<string, unknown>>;
 }): Promise<ToolRuntime> {
   const pq = createProcessQualityState();
@@ -66,6 +68,7 @@ async function makeRuntime(opts: {
     evidence: new EvidenceStore(join(opts.dir, "evidence")),
     findingsDir: join(opts.dir, "findings"),
     goals: new GoalStore(),
+    surfaceSqlite: opts.surfaceSqlite,
     lifecycle: {
       subagentDepth: 0,
       processQuality: pq,
@@ -270,6 +273,48 @@ try {
       `Free+foreign must not invent-without-id: ${text.slice(0, 300)}`,
     );
     assert.ok(!/^error:/i.test(text.trim()), `Free foreign books: ${text.slice(0, 280)}`);
+  }
+
+  // --- 6) Path-bearing confirm stamps internal booked; must not flip TESTED (#548) ---
+  {
+    platformMessages.length = 0;
+    const bookDir = join(dir, "booked-stamp");
+    const surfaceSqlite = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(bookDir));
+    await surfaceSqlite.open();
+    await surfaceSqlite.upsert(
+      [{ location: "http://host/login.php", status: "seen" }],
+      { source: "traffic" },
+    );
+    const before = await surfaceSqlite.get({ location: "http://host/login.php" });
+    assert.equal(before?.status, "seen");
+    assert.equal(before?.coverage, "untested");
+
+    const runtime = await makeRuntime({
+      dir: bookDir,
+      surfaceSqlite,
+      platformMessages,
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    const res = await exec("c6", { ...baseConfirm });
+    const text = textOf(res);
+    assert.ok(!/^error:/i.test(text.trim()), `booked-stamp confirm should succeed: ${text.slice(0, 280)}`);
+
+    const after = await surfaceSqlite.get({ location: "http://host/login.php" });
+    assert.equal(after?.status, "booked", "path-bearing confirm must stamp internal booked");
+    assert.equal(after?.coverage, "untested", "confirm must not flip TESTED / coverage");
+
+    const traffic = await surfaceSqlite.upsert(
+      [{ location: "http://host/login.php", status: "touched", case_tested: true }],
+      { source: "traffic", allowTested: true, allowCaseTested: true },
+    );
+    assert.ok(traffic.ok);
+    const afterTraffic = await surfaceSqlite.get({ location: "http://host/login.php" });
+    assert.equal(afterTraffic?.coverage, "untested", "Traffic purpose=test must not write TESTED");
+    surfaceSqlite.close();
   }
 
   // Sanity: at least one finding file written under no-id case

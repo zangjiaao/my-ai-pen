@@ -29,6 +29,8 @@ export type CaseFindingLine = {
   description?: string;
   evidence_ids?: string[];
   proof_excerpt?: string;
+  created?: boolean;
+  is_new?: boolean;
 };
 
 export type CaseEvidenceSnippet = {
@@ -128,6 +130,9 @@ export type CaseContext = {
   scope_intel?: CaseScopeIntel;
   /** Living notebook clues (id + summary + hang). Distinct from scope_intel priors. */
   intel_summary?: CaseIntelLine[];
+  /** #548 this-session successful confirms vs new ledger identities. */
+  session_confirms?: number;
+  session_new_identities?: number;
 };
 
 export type CaseIntelLine = {
@@ -257,6 +262,10 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
       ? (o.scope_intel as CaseScopeIntel)
       : undefined;
   const intel_summary = parseIntelSummary(o.intel_summary);
+  const session_confirms =
+    typeof o.session_confirms === "number" ? o.session_confirms : undefined;
+  const session_new_identities =
+    typeof o.session_new_identities === "number" ? o.session_new_identities : undefined;
   if (
     !thread.length &&
     !speech.length &&
@@ -265,7 +274,9 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     !snippets.length &&
     !next_work &&
     !scope_intel &&
-    !intel_summary?.length
+    !intel_summary?.length &&
+    session_confirms == null &&
+    session_new_identities == null
   ) {
     if (!o.note && !o.conversation_id) return undefined;
   }
@@ -281,6 +292,8 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     next_work,
     scope_intel,
     intel_summary,
+    session_confirms,
+    session_new_identities,
   };
 }
 
@@ -427,6 +440,15 @@ export function formatCaseContextInjection(
         );
       }
     }
+  }
+
+  if (ctx.session_confirms != null || ctx.session_new_identities != null) {
+    const confirms = ctx.session_confirms ?? 0;
+    const neu = ctx.session_new_identities ?? 0;
+    lines.push(
+      "",
+      `This session: confirms=${confirms} new_ledger_identities=${neu}`,
+    );
   }
 
   const findings = (ctx.findings_summary || []).slice(0, MAX_FINDINGS);

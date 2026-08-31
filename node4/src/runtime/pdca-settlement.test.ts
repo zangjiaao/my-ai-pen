@@ -126,7 +126,8 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   const live = formatLiveStateHarness(snap);
   assert.match(live, /Pending admission/);
   assert.match(live, /not Agent work/);
-  assert.match(live, /workset\(list\|get\)/);
+  assert.doesNotMatch(live, /platform_list_vulnerabilities/);
+  assert.doesNotMatch(live, /surface\(list\|get\)/);
 }
 
 // --- Running Package / pending Worker / feedback_ok / active Hypothesis block completed ---
@@ -236,6 +237,8 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   const index = formatLiveStateHarness(snap);
   assert.match(index, /login/);
   assert.match(index, /untested=1/);
+  assert.match(index, /This session: confirms=0 new_ledger_identities=0/);
+  assert.doesNotMatch(index, /platform_list_vulnerabilities/);
   assert.doesNotMatch(index, /"actionable":\s*\[/);
 }
 
@@ -446,6 +449,22 @@ assert.equal(pdcaSettleEnabled({ NODE4_PDCA_SETTLE: "1" }), true);
   assert.equal(snap.admission.length, 1);
   assert.equal(snap.admission[0]!.id, "ws-open");
   assert.equal(settleParticipantTurn({ overlay: snap }).verdict, "completed");
+}
+
+{
+  const snap = overlay({
+    findings: {
+      booked: 2,
+      sessionConfirms: 3,
+      sessionNewIdentities: 1,
+      feedbackOkUnbooked: [],
+      omitted: 0,
+    },
+  });
+  const index = formatLiveStateHarness(snap);
+  assert.match(index, /This session: confirms=3 new_ledger_identities=1/);
+  assert.doesNotMatch(index, /platform_list_vulnerabilities/);
+  assert.doesNotMatch(index, /call platform_/i);
 }
 
 console.log("pdca-settlement.test.ts: ok");

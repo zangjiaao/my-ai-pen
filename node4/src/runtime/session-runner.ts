@@ -39,6 +39,7 @@ import {
 import { joinHarnessPrefixes } from "./harness-channel.js";
 import { selectNewUntestedSurfaces } from "./surface-harness.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { applyHarnessAutoTitle } from "./session-title.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { SubagentHost } from "./subagent.js";
 import { resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
@@ -394,6 +395,9 @@ export async function runNode4Task(
   }
   const graphCtx = buildPentestGraphContext(graphResolved, { graphCatalogBlock });
   runtime.lifecycle.pentestGraph = graphCtx;
+
+  // #548: auto-title is a harness write on Free Main start (not Graph / worker).
+  await applyHarnessAutoTitle(runtime).catch(() => {});
 
   const obsCounters = {
     toolCallCount: 0,

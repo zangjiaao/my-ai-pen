@@ -223,4 +223,18 @@ assert.match(credsVsPriors, /Use first \(try these creds/);
   assert.match(mixed, /:3000\//);
   assert.doesNotMatch(mixed, /vulnerabilities\/sqli/);
 }
+{
+  const sessionFacts = formatCaseContextInjection({
+    conversation_id: "c-sess",
+    session_confirms: 2,
+    session_new_identities: 1,
+    findings_summary: [
+      { title: "SQLi", status: "confirmed", location: "/login", created: true },
+      { title: "XSS", status: "confirmed", location: "/search", created: false },
+    ],
+  });
+  assert.match(sessionFacts, /This session: confirms=2 new_ledger_identities=1/);
+  assert.doesNotMatch(sessionFacts, /platform_list_vulnerabilities/);
+}
+
 console.log("case-context.test.ts ok");

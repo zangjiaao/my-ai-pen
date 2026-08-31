@@ -49,8 +49,8 @@ Long-lived `conversation_id + expert_id` work identity. Private work mode, parke
 _Avoid_: new amnesiac task_id as the only notion of “session”; equating UI chat continuity with per-stage pi workdirs alone
 
 **Housekeeping**:
-Retired as a separate thin Agent. Auto-title is a **Main Task-layer** duty (still「新会话」+ authorized `scope.allow` → `platform_set_conversation_title` with `only_if_default=true`). Not a Participant Session; not a Graph-stage or Package-worker duty.
-_Avoid_: a dedicated naming Session; putting title duty on Graph stage / Package workers
+Retired as a separate thin Agent. Auto-title is a **harness write** on Free Main start (still「新会话」+ structured Target / authorized `scope.allow` → PATCH title with `only_if_default=true`). Not an Agent tool turn; not a Participant Session; not a Graph-stage or Package-worker duty. Pentest / act-expert catalogs no longer include `platform_set_conversation_title`; Default keeps the tool for user-asked rename. Sidebar PATCH remains.
+_Avoid_: a dedicated naming Session; putting title duty on Graph stage / Package workers; asking the Agent to call a title tool for the auto path
 
 **Work mode Free**:
 Participant Session without Expert Graph runner (OMP-class Agent Runtime under the same Expert persona). UI Graph control **不指定**.

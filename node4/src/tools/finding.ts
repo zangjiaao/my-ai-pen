@@ -732,6 +732,13 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
   };
 }
 
+function noteSessionConfirm(runtime: ToolRuntime, newIdentity: boolean): void {
+  const slot = runtime.lifecycle.sessionBooking ?? { confirms: 0, newIdentities: 0 };
+  slot.confirms += 1;
+  if (newIdentity) slot.newIdentities += 1;
+  runtime.lifecycle.sessionBooking = slot;
+}
+
 /** Platform-style UUID (cross-Case prior); not a run-local Store find-* id. */
 export function looksLikePlatformUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -823,6 +830,8 @@ async function finalizeFinding(
     related_prior_id: input.relatedPriorId || undefined,
     created_at: new Date().toISOString(),
   };
+  noteSessionConfirm(runtime, !input.relatedPriorId);
+
   const caseRoot = runtime.caseDir || dirname(runtime.findingsDir);
   await writeFileInsideRoot(
     join(runtime.findingsDir, `${id}.json`),

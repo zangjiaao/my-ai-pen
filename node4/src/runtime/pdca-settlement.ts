@@ -60,6 +60,8 @@ export type LiveStateOverlay = {
   pendingWorkerOmitted: number;
   findings: {
     booked: number;
+    sessionConfirms: number;
+    sessionNewIdentities: number;
     feedbackOkUnbooked: PdcaIdentity[];
     omitted: number;
   };
@@ -94,6 +96,8 @@ export type OverlayProjectionInput = {
   runningPackages?: Array<{ id: string; summary?: string }>;
   pendingWorkers?: Array<{ id: string; summary?: string }>;
   findings?: Array<{ id: string; status: string; title?: string; location?: string }>;
+  /** #548 this-session confirm vs new ledger identity facts. */
+  sessionBooking?: { confirms?: number; newIdentities?: number };
   pendingUserDecision?: boolean;
   /** Spec #540 — Case Workset open refs (pending admission). */
   worksetOpen?: Array<{
@@ -132,7 +136,7 @@ export function emptyOverlay(): LiveStateOverlay {
     packages: { running: [], omitted: 0 },
     pendingWorkerReconciliation: [],
     pendingWorkerOmitted: 0,
-    findings: { booked: 0, feedbackOkUnbooked: [], omitted: 0 },
+    findings: { booked: 0, sessionConfirms: 0, sessionNewIdentities: 0, feedbackOkUnbooked: [], omitted: 0 },
     pendingUserDecision: false,
     admission: [],
     admissionOmitted: 0,
@@ -271,6 +275,8 @@ export function projectLiveStateOverlay(input: OverlayProjectionInput = {}): Liv
     pendingWorkerOmitted: pendingWorkers.omitted,
     findings: {
       booked,
+      sessionConfirms: Math.max(0, input.sessionBooking?.confirms ?? 0),
+      sessionNewIdentities: Math.max(0, input.sessionBooking?.newIdentities ?? 0),
       feedbackOkUnbooked: feedbackOk.kept,
       omitted: feedbackOk.omitted,
     },
@@ -436,6 +442,9 @@ export function formatLiveStateHarness(overlay: LiveStateOverlay, delta?: TurnDe
     lines.push(`  (hypotheses omitted=${overlay.hypotheses.omitted})`);
   }
   lines.push(`Findings booked=${overlay.findings.booked}`);
+  lines.push(
+    `This session: confirms=${overlay.findings.sessionConfirms ?? 0} new_ledger_identities=${overlay.findings.sessionNewIdentities ?? 0}`,
+  );
   if (overlay.findings.feedbackOkUnbooked.length) {
     lines.push("feedback_ok unbooked:");
     for (const f of overlay.findings.feedbackOkUnbooked) lines.push(`  - ${ident(f)}`);
@@ -462,9 +471,7 @@ export function formatLiveStateHarness(overlay: LiveStateOverlay, delta?: TurnDe
   if (overlay.admissionOmitted) {
     lines.push(`  (admission omitted=${overlay.admissionOmitted})`);
   }
-  lines.push(
-    "Full records stay on-demand: surface(list|get), finding(list|get), workset(list|get), platform_list_intel / platform_get_intel.",
-  );
+  lines.push("Full records stay on-demand by id when you are on that path — not a kickoff list.");
   if (delta && (delta.entries.length > 0 || delta.omitted > 0)) {
     lines.push("Turn changes:");
     for (const e of delta.entries) {
@@ -671,6 +678,7 @@ export async function projectOverlayFromRuntime(runtime: ToolRuntime): Promise<L
     runningPackages: runningPackagesFromRuntime(runtime),
     pendingWorkers: pendingWorkersFromRuntime(runtime),
     findings,
+    sessionBooking: runtime.lifecycle.sessionBooking,
     pendingUserDecision:
       Boolean(runtime.lifecycle.pendingUserDecision) ||
       hasOpenApproval(runtime.task?.conversationId),

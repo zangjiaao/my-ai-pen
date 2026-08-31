@@ -84,11 +84,11 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 | Pack / seat | Tools (summary) | Booking |
 |-------------|-----------------|---------|
 | **`default`** (built-in) | **ledger_assist Citizen** (full ledger R/W + report) + light assist; no shell/finding | **none** |
-| `pentest` | **act_expert Citizen** (mission + fact/decision/title) + todo, shell, fs, http, session, browser, script, finding, workset, surface, subagent, skill, create_report | finding+evidence |
+| `pentest` | **act_expert Citizen** (mission + fact/decision) + todo, shell, fs, http, session, browser, script, finding, workset, surface, subagent, skill, create_report | finding+evidence |
 | `ctf` | **act_expert Citizen** + captcha + CTF skills | finding+evidence |
 | `consult` | **alias → `default`** during migration | none |
 
-**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerk tools. `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` / title (Wave 1) — not inventory reads. Host identity and coverage counts live in `### Case`. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only).
+**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerk tools (including the title tool for user-asked rename). `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` — not inventory reads, not the title tool. Auto-title is a harness write on Free Main start (#548). Host identity and coverage counts live in `### Case`. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only).
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
 Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/specs/ctf-role.md`.  
