@@ -1048,22 +1048,10 @@ export async function runNode4Task(
   } finally {
     // Spec #333/#427/#354: seat hold release only; idle Workers + sandbox survive burst end.
     await cleanupTaskResources().catch(() => {});
-    // Tear down stream / active-session registration always.
-    // Spec #283 I0.9: on user interrupt, park Free Main captain (do not dispose).
+    // Park while the live handle still exists, then unregister. Awaiting dispose
+    // between unregister and park drops HTTP 纳入 (busy queue + clearPendingScope).
     try {
-      unregisterActiveSession();
-    } catch {
-      /* ignore */
-    }
-    try {
-      sessionObs.unsubscribe();
-    } catch {
-      /* ignore */
-    }
-    await textStream.dispose().catch(() => {});
-    // Spec #283 I0.9 + #354: shared captain end policy (package settle/interrupt → park;
-    // Session delete / Case close pending → dispose via applyCaptainEndDisposition).
-    applyCaptainEndDisposition({
+      applyCaptainEndDisposition({
       decision: decideParkOnEnd({
         aborted: cancelled(),
         expertTransfer: abortReasonIsHandoff(signal),
@@ -1087,6 +1075,20 @@ export async function runNode4Task(
         },
       },
     });
+    } catch {
+      /* ignore */
+    }
+    try {
+      unregisterActiveSession();
+    } catch {
+      /* ignore */
+    }
+    try {
+      sessionObs.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+    await textStream.dispose().catch(() => {});
   }
 }
 

@@ -39,6 +39,7 @@ import {
   type IdleSubagentHandle,
 } from "./subagent-idle-pool.js";
 import type { ToolRuntime } from "../types.js";
+import { enqueuePendingScope } from "./active-session-registry.js";
 import {
   isContinueInEnvelopeExecution,
   parseGraphExecution,
@@ -1193,6 +1194,21 @@ function runtimeWithPool(pool: SubagentIdlePool): ToolRuntime {
   rebindParkedRuntimeTask(parked, dispatch);
   assert.deepEqual(dispatch.scope.allow, ["www.example.com"]);
   assert.equal(parked.runtime?.task, dispatch);
+  clearWorkingSessionParksForTests();
+}
+
+{
+  clearWorkingSessionParksForTests();
+  enqueuePendingScope("c-teardown", { allow: ["www.example.com"] });
+  const task = { scope: { allow: [] as string[] } };
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-teardown",
+      expertId: "exp",
+      runtime: { task } as ToolRuntime,
+    }),
+  );
+  assert.deepEqual(task.scope.allow, ["www.example.com"]);
   clearWorkingSessionParksForTests();
 }
 

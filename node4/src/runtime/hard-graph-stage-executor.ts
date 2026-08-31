@@ -1050,21 +1050,9 @@ export function createHardGraphStageExecutor(options: {
         }
         throw err;
       } finally {
+        // Park before unregister so HTTP 纳入 during stream dispose hits the park map.
         try {
-          unregisterActiveSession();
-        } catch {
-          /* ignore */
-        }
-        await sessionObs.dispose();
-        // Merge stage usage into run-level ledger.
-        graphRun?.usage.mergeSnapshot(
-          stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-        );
-        // Spec #283 I0.9 + #354: interrupt/stage settle → park; Case/Session dispose pending → dispose.
-        // #282 mode wire remains: incomplete continue → Hard path; attach uses park when present.
-        // Spec #354 L4: park Session-owned Todo/TaskMap on parentRuntime (Graph plan lives there).
-        // Stage child TodoStore is stage-local tool scratch; Session continuity uses parent.
-        applyCaptainEndDisposition({
+          applyCaptainEndDisposition({
           decision: decideParkOnEnd({
             aborted: Boolean(abortSignal?.aborted),
           }),
@@ -1090,6 +1078,19 @@ export function createHardGraphStageExecutor(options: {
             },
           },
         });
+        } catch {
+          /* ignore */
+        }
+        try {
+          unregisterActiveSession();
+        } catch {
+          /* ignore */
+        }
+        await sessionObs.dispose();
+        // Merge stage usage into run-level ledger.
+        graphRun?.usage.mergeSnapshot(
+          stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+        );
       }
 
       // Spec #125: never load agent result.json; host settlement projects gate input.

@@ -283,50 +283,20 @@ export async function runParkedWorkingContinue(options: {
       throw err;
     }
   } finally {
-    try {
-      unregister();
-    } catch {
-      /* ignore */
-    }
-    try {
-      sessionObs.unsubscribe();
-    } catch {
-      /* ignore */
-    }
-    await textStream.dispose().catch(() => {});
-
-    const aborted = stop === "aborted" || cancelled();
+    const abortedEarly = stop === "aborted" || cancelled();
     let openTodoCount = 0;
     try {
       openTodoCount = parked.todo.openCount();
     } catch {
       openTodoCount = 0;
     }
-    // Spec #354: package complete still re-parks; dispose only via pending whitelist.
     harnessStatus = harnessStatusAfterParkedContinue({
-      aborted,
+      aborted: abortedEarly,
       workMode,
       openTodoCount,
     });
-    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
-      try {
-        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
-        const pdca = settleParticipantTurn({
-          overlay: overlayNow,
-          previousOverlay: pdcaPreviousOverlay,
-          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
-          aborted,
-        });
-        persistPdcaOnRuntime(parked.runtime, pdca);
-        pdcaLast = pdca;
-        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
-      } catch {
-        // Overlay read failed: do not complete from empty Todo / missing snapshot.
-        if (harnessStatus === "completed") harnessStatus = "incomplete";
-      }
-    }
     const decision = decideCaptainEndDisposition({
-      aborted,
+      aborted: abortedEarly,
     });
     const applied = applyCaptainEndDisposition({
       decision,
@@ -346,6 +316,36 @@ export async function runParkedWorkingContinue(options: {
       },
     });
     reparked = applied.parked;
+    try {
+      unregister();
+    } catch {
+      /* ignore */
+    }
+    try {
+      sessionObs.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+    await textStream.dispose().catch(() => {});
+
+    const aborted = stop === "aborted" || cancelled();
+    if (pdcaSettleEnabled() && workMode === "free" && parked.runtime) {
+      try {
+        const overlayNow = await projectOverlayFromRuntime(parked.runtime);
+        const pdca = settleParticipantTurn({
+          overlay: overlayNow,
+          previousOverlay: pdcaPreviousOverlay,
+          noProgressStreak: parked.runtime.lifecycle.pdcaNoProgressStreak ?? 0,
+          aborted,
+        });
+        persistPdcaOnRuntime(parked.runtime, pdca);
+        pdcaLast = pdca;
+        harnessStatus = mapPdcaVerdictToHarnessStatus(pdca.verdict);
+      } catch {
+        // Overlay read failed: do not complete from empty Todo / missing snapshot.
+        if (harnessStatus === "completed") harnessStatus = "incomplete";
+      }
+    }
   }
 
   const endTime = new Date().toISOString();

@@ -456,10 +456,13 @@ client.on("case_scope_updated", (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
   const scope = message.scope;
-  if (!applyScopeToLiveSession(conversationId, scope) && busy.has(conversationId)) {
+  const live = applyScopeToLiveSession(conversationId, scope);
+  const parked = applyScopeToParkedRuntimes(conversationId, (task) =>
+    applyServerScopeToTask(task, scope),
+  );
+  if (!live && parked === 0 && busy.has(conversationId)) {
     enqueuePendingScope(conversationId, scope);
   }
-  applyScopeToParkedRuntimes(conversationId, (task) => applyServerScopeToTask(task, scope));
 });
 
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */

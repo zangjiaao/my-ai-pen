@@ -21,6 +21,7 @@ import type { Node4AgentSession } from "./run-node4-agent.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { ToolRuntime } from "../types.js";
 import { applyServerScopeToTask } from "../tools/decision.js";
+import { takePendingScope } from "./active-session-registry.js";
 import {
   disposeBrowserSandboxForCase,
   disposeBrowserSandboxForSeat,
@@ -330,6 +331,10 @@ export function parkWorkingSession(entry: ParkedWorkingRuntime): string {
     void Promise.resolve(prev.dispose()).catch(() => {});
   }
   parks.set(key, { ...entry, parkedAt: entry.parkedAt || Date.now() });
+  const pending = takePendingScope(entry.conversationId);
+  if (pending && entry.runtime?.task) {
+    applyServerScopeToTask(entry.runtime.task, pending);
+  }
   return key;
 }
 

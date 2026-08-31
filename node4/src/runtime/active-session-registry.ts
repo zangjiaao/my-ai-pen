@@ -23,7 +23,7 @@ export type ActiveSessionHandle = {
 const byConversation = new Map<string, ActiveSessionHandle>();
 /** Steers that arrived while busy but before any session registered. */
 const pendingByConversation = new Map<string, string[]>();
-/** Last case_scope_updated during busy-before-register. Not queued while idle. */
+/** Last case_scope_updated during busy-before-register or teardown-before-park. */
 const pendingScopeByConversation = new Map<string, unknown>();
 
 function injectIntoHandle(
@@ -92,8 +92,8 @@ export function applyScopeToLiveSession(conversationId: string, scope: unknown):
 
 /**
  * Queue Scope until a session registers (busy race), or apply now if live.
- * Caller must only enqueue while the conversation is busy. Idle 纳入 is
- * parked via applyScopeToParkedRuntimes; do not survive into the next dispatch.
+ * Caller must only enqueue while the conversation is busy and neither live nor
+ * parked. Park consumes this via takePendingScope.
  */
 export function enqueuePendingScope(conversationId: string, scope: unknown): void {
   const id = String(conversationId || "").trim();
@@ -105,6 +105,15 @@ export function enqueuePendingScope(conversationId: string, scope: unknown): voi
     return;
   }
   pendingScopeByConversation.set(id, scope);
+}
+
+/** Park / attach: take queued Scope so teardown cannot drop an in-flight 纳入. */
+export function takePendingScope(conversationId: string): unknown | undefined {
+  const id = String(conversationId || "").trim();
+  if (!id || !pendingScopeByConversation.has(id)) return undefined;
+  const pending = pendingScopeByConversation.get(id);
+  pendingScopeByConversation.delete(id);
+  return pending;
 }
 
 /**

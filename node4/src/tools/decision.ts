@@ -511,8 +511,8 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
           ? hostScopeMsg
             ? hostScopeMsg
             : selectedBits
-            ? `User confirmed next_steps. Selected: ${selectedBits}. Bound options already persist when adopted_t_host_ids is set — do not call workset(adopt) to prove that. Call workset(adopt) only for still-proposed hosts they named. Do not platform_create_asset or ask for a Host id. Do not start unselected work; do not re-show the same card.`
-            : "User confirmed next_steps. Honor the selected option bodies. Call workset(adopt) only for still-proposed hosts they named. Do not start unselected work; do not re-show the same card."
+            ? `User confirmed next_steps. Selected: ${selectedBits}. Bound options already persist when adopted_t_host_ids is set — do not call workset(adopt) to prove that. Do not platform_create_asset or ask for a Host id. Do not start unselected work; do not re-show the same card.`
+            : "User confirmed next_steps. Honor the selected option bodies. Do not call workset(adopt) for this confirmation. Do not start unselected work; do not re-show the same card."
           : decision === "authorize" && hostScopeMsg
             ? hostScopeMsg
           : decision === "authorize" && kind === "next_steps"
