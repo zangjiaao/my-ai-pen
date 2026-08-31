@@ -83,12 +83,12 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 
 | Pack / seat | Tools (summary) | Booking |
 |-------------|-----------------|---------|
-| **`default`** (built-in) | **ledger_assist Citizen** (full ledger R/W + report) + light assist; no shell/finding | **none** |
+| **`default`** (built-in) | **ledger_assist Citizen** (`inventory` clerk + vuln/report/title/list_experts) + light assist; no shell/finding | **none** |
 | `pentest` | **act_expert Citizen** (mission + fact/decision) + todo, shell, fs, http, session, browser, script, finding, workset, surface, subagent, skill, create_report | finding+evidence |
 | `ctf` | **act_expert Citizen** + captcha + CTF skills | finding+evidence |
 | `consult` | **alias → `default`** during migration | none |
 
-**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerk tools (including the title tool for user-asked rename). `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` — not inventory reads, not the title tool. Auto-title is a harness write on Free Main start (#548). Host identity and coverage counts live in `### Case`. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only).
+**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerking as one `inventory` multi-op (list/get/create/enrich/assemble Hosts and Groups) plus vuln/report/title/list_experts. `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` — not `inventory`, not the title tool. Auto-title is a harness write on Free Main start (#548). Host identity and coverage counts live in `### Case`. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only). Catalog is fixed at session start — no NLP attach of clerk tools mid-session.
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
 Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/specs/ctf-role.md`.  
