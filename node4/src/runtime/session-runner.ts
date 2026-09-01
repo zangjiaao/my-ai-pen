@@ -296,6 +296,7 @@ export async function runNode4Task(
       midRunTodo: createMidRunTodoTracker(),
       subagentDepth: 0,
       processQuality: createProcessQualityState(),
+      agentSessionId: piSessionId,
     },
   };
   runtime.subagents = new SubagentHost({

@@ -986,12 +986,41 @@ def build_scope_intel_card(
     return card
 
 
-def session_booking_from_messages(messages: list[dict] | None) -> tuple[int, int]:
-    """Count this-Case confirms vs new ledger identities from persisted vuln_found.
+def booking_scope_from_assign(
+    conv_context: dict | None,
+    *,
+    expert_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve this Participant Session's wrap-count scope from the Case roster."""
+    eid = str(expert_id or "").strip() or None
+    sid = None
+    if eid:
+        try:
+            from app.services.case_participants import participants_map
 
-    New identity is platform ``created is True`` only — never inferred from
-    missing related_prior_id. Persist errors are skipped.
+            for row in participants_map(conv_context).values():
+                if str(row.get("expert_id") or "").strip() == eid:
+                    sid = str(row.get("session_instance_id") or "").strip() or None
+                    break
+        except Exception:
+            sid = None
+    return sid, eid
+
+
+def session_booking_from_messages(
+    messages: list[dict] | None,
+    *,
+    session_id: str | None = None,
+    expert_id: str | None = None,
+) -> tuple[int, int]:
+    """Count this Participant Session's confirms vs new ledger identities.
+
+    New identity is platform ``created is True`` only. Persist errors are skipped.
+    Scope is required: ``session_id`` (pi Agent.sessionId) preferred, else ``expert_id``.
+    Unscoped calls return (0, 0) so wrap never mixes another Expert/Session.
     """
+    want_sid = str(session_id or "").strip()
+    want_eid = str(expert_id or "").strip()
     confirms = 0
     new_identities = 0
     for m in messages or []:
@@ -1004,6 +1033,21 @@ def session_booking_from_messages(messages: list[dict] | None) -> tuple[int, int
         if msg_type not in {"vuln_found", "vuln_card"}:
             continue
         if str(content.get("type") or "").lower() == "vuln_found_error":
+            continue
+        msg_sid = str(
+            content.get("session_id")
+            or content.get("agent_session_id")
+            or m.get("session_id")
+            or ""
+        ).strip()
+        msg_eid = str(content.get("expert_id") or m.get("expert_id") or "").strip()
+        if want_sid:
+            if msg_sid != want_sid:
+                continue
+        elif want_eid:
+            if msg_eid != want_eid:
+                continue
+        else:
             continue
         confirms += 1
         if content.get("created") is True:
@@ -1024,6 +1068,8 @@ def build_case_context_payload(
     scope_intel: dict | None = None,
     intel_summary: list[dict] | None = None,
     asset_intake: dict | None = None,
+    booking_session_id: str | None = None,
+    booking_expert_id: str | None = None,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch.
 
@@ -1101,7 +1147,11 @@ def build_case_context_payload(
             "Large files are not fully inlined."
         ),
     }
-    session_confirms, session_new_identities = session_booking_from_messages(messages)
+    session_confirms, session_new_identities = session_booking_from_messages(
+        messages,
+        session_id=booking_session_id,
+        expert_id=booking_expert_id,
+    )
     payload["session_confirms"] = session_confirms
     payload["session_new_identities"] = session_new_identities
     if isinstance(scope_intel, dict) and scope_intel:
@@ -1643,6 +1693,8 @@ async def load_case_context_for_conversation(
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
     task: dict | None = None,
+    booking_session_id: str | None = None,
+    booking_expert_id: str | None = None,
 ) -> dict[str, Any]:
     """Load messages + this-Case findings + thin scope_intel + evidence snippets.
 
@@ -1789,4 +1841,6 @@ async def load_case_context_for_conversation(
         scope_intel=scope_intel,
         intel_summary=intel_summary,
         asset_intake=intake_blob,
+        booking_session_id=booking_session_id,
+        booking_expert_id=booking_expert_id,
     )

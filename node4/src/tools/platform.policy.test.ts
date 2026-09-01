@@ -2,7 +2,7 @@
  * Policy unit tests for platform ledger tools (host create denial + chat-only helpers).
  */
 import assert from "node:assert/strict";
-import { isDefaultConversationTitle, isHostCreateAttempt, resolveListVulnerabilitiesPort } from "./platform.js";
+import { isDefaultConversationTitle, isHostCreateAttempt, resolveListVulnerabilitiesPort, createPlatformCreateReportTool } from "./platform.js";
 import { isChatOnlyTask, isLedgerAssistSeat } from "../runtime/session-runner.js";
 import { resolveRolePack } from "../roles/index.js";
 import { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } from "../roles/default.js";
@@ -80,6 +80,18 @@ assert.ok(
   toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_create_report"),
   "default seat can persist delivery reports",
 );
+{
+  const report = createPlatformCreateReportTool({
+    task: { taskId: "t", conversationId: "c", instruction: "x", target: {}, scope: {} },
+    platform: { send: async () => {} },
+  } as never);
+  assert.doesNotMatch(
+    String(report.description),
+    /First platform_list_vulnerabilities/i,
+    "act Expert no longer has list_vulnerabilities — report body comes from Case blackboard",
+  );
+  assert.match(String(report.description), /Case|blackboard|findings board/i);
+}
 assert.ok(
   toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_list_reports"),
   "default seat can list reports",

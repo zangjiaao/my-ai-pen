@@ -56,6 +56,7 @@ async function makeRuntime(opts: {
     task: {
       taskId: "t-279",
       conversationId: "c-279",
+      expertId: "exp-543",
       instruction: "spec 279 confirm id",
       target: { type: "url", value: "http://host/login.php" },
       scope: { allow: ["host"] },
@@ -75,6 +76,7 @@ async function makeRuntime(opts: {
     surfaceSqlite: opts.surfaceSqlite,
     lifecycle: {
       subagentDepth: 0,
+      agentSessionId: "pi-sess-543",
       processQuality: pq,
       ...(opts.hardGraph
         ? { hardGraphRun: { plan: {} as any, usage: {} as any, panel: {} as any, stageId: "validate_book" } }
@@ -407,13 +409,37 @@ try {
     ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
     const res = await exec("c10", { ...baseConfirm });
     const ledger = parseJsonText(textOf(res))?.ledger as Record<string, unknown> | undefined;
-    assert.equal(runtime.lifecycle.sessionBooking?.confirms, 1, "void ack still counts a successful send");
     assert.equal(
-      runtime.lifecycle.sessionBooking?.newIdentities,
+      runtime.lifecycle.sessionBooking?.confirms ?? 0,
       0,
-      "void ack must not guess a new ledger identity",
+      "void ack is not persist SoT — do not count confirms",
     );
+    assert.equal(runtime.lifecycle.sessionBooking?.newIdentities ?? 0, 0);
     assert.equal(ledger?.created, null, "unknown persist outcome stays null");
+    const outbound = platformMessages.find((m) => m.type === "vuln_found");
+    assert.equal(outbound?.session_id, "pi-sess-543", "vuln_found stamps Participant Session id");
+    assert.equal(outbound?.expert_id, "exp-543", "vuln_found stamps expert_id");
+  }
+
+  {
+    platformMessages.length = 0;
+    const runtime = await makeRuntime({
+      dir: join(dir, "error-ack"),
+      platformMessages,
+      platformSend: async () => ({ type: "vuln_found_error", created: false, error: "rejected" }),
+    });
+    const tool = createFindingTool(runtime);
+    const exec = tool.execute as (
+      id: string,
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+    const res = await exec("c11", { ...baseConfirm });
+    assert.ok(!/^error:/i.test(textOf(res).trim()), "local file still writes; persist reject is ack SoT");
+    assert.equal(
+      runtime.lifecycle.sessionBooking?.confirms ?? 0,
+      0,
+      "vuln_found_error ack must not increment confirms",
+    );
   }
 
   // Sanity: at least one finding file written under no-id case

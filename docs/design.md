@@ -638,7 +638,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 - 「创建会话」黑色 pill (`button-primary`) 置顶，全宽。点击后立即进入对话页，不弹窗。
 - **会话列表**：所有会话统一放在同一个列表里，按最后活跃时间倒序排列。不使用"历史会话"等分组标签。折叠为 64px 图标轨时仍列出**全部** Case（状态圆点；区域可滚动），与展开列表同一顺序，**不得**再截成前 N 条（Spec [#490](https://github.com/zangjiaao/my-ai-pen/issues/490)）。
 - 会话列表项：默认 `{colors.ink-secondary}` weight 380；当前活跃项 `{colors.ink}` weight 500 + `{colors.accent-subtle}` 背景。每项显示 AI 自动生成的标题 + 状态圆点 + 活跃时间。
-- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题且任务信封有结构化 target/scope 时，当前 Main 经 `platform_set_conversation_title(only_if_default=true)` 生成短标题（如 "pentest · lab.example.com"），替换默认的"新会话"。无 target 不改名；用户手动重命名后不被自动覆盖。不另开命名 Session。**不**依赖平台会话 Agent 人格。
+- **会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482) / [#548](https://github.com/zangjiaao/my-ai-pen/issues/548)）：默认标题且任务信封有结构化 target/scope 时，**Harness** 在 Free Main 启动时 PATCH 短标题（`only_if_default=true`，如 "pentest · lab.example.com"），替换默认的"新会话"——不是 Agent 工具回合。无 target 不改名；用户手动重命名后不被自动覆盖。不另开命名 Session。Pentest / act-expert 不再挂 `platform_set_conversation_title`；Default 仅在用户点名改名时用该工具。**不**依赖平台会话 Agent 人格。
 - 次级导航入口（资产、漏洞、节点）放在会话列表下方，用 `divider` 隔开。
 - 底部放全局状态：在线节点数 / 活跃会话数 / 待确认高危漏洞数。
 
@@ -663,7 +663,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 | [权限] | "使用以下账号测试权限控制和越权漏洞：admin / ***（高权限），viewer / ***（低权限）。" |
 | [复测] | ~~prompt chip only~~ **not product intent** — retest is Case chat + Agent (map #81 N1); no `/retest` API. |
 
-**会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482)）：默认标题 + 结构化 target/scope 时当前 Main 调用 `platform_set_conversation_title` 自动生成短标题，替换 Sidebar 中的"新会话"（`only_if_default`，不覆盖用户已改名）。用户可点击标题手动重命名。
+**会话自动命名**（Spec [#457](https://github.com/zangjiaao/my-ai-pen/issues/457) / [#482](https://github.com/zangjiaao/my-ai-pen/issues/482) / [#548](https://github.com/zangjiaao/my-ai-pen/issues/548)）：默认标题 + 结构化 target/scope 时 **Harness** 在 Free Main 启动时自动 PATCH 短标题，替换 Sidebar 中的"新会话"（`only_if_default`，不覆盖用户已改名）。用户可点击标题手动重命名。Default 仅在用户点名改名时调用 `platform_set_conversation_title`。
 
 **`conversation-message-user`** — 用户消息：`{colors.surface-default}` 微暖灰背景 + `{rounded.lg}` 圆角，右对齐，最大宽 70%。这是"人说话"。
 **`conversation-message-agent`** — Agent 消息：白色背景（直接放在 canvas 上），左对齐，Markdown 渲染全宽。这是"系统说话"。

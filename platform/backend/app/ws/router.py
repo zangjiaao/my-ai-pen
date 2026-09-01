@@ -179,7 +179,7 @@ def _normalize_severity(value: object) -> str | None:
 def _vuln_found_error_frame(msg: dict | None, error: str) -> dict:
     """Structured fail-closed reject for live vuln booking (Spec #280)."""
     src = msg if isinstance(msg, dict) else {}
-    return {
+    out = {
         "type": "vuln_found_error",
         "conversation_id": src.get("conversation_id"),
         "task_id": src.get("task_id"),
@@ -187,6 +187,13 @@ def _vuln_found_error_frame(msg: dict | None, error: str) -> dict:
         "error": error,
         "created": False,
     }
+    nonce = str(src.get("persist_nonce") or "").strip()
+    if nonce:
+        out["persist_nonce"] = nonce
+    for key in ("session_id", "expert_id"):
+        if src.get(key) is not None:
+            out[key] = src.get(key)
+    return out
 
 
 def apply_vuln_persist_result(msg: dict, persisted: dict | None) -> dict:
@@ -208,7 +215,7 @@ def apply_vuln_persist_result(msg: dict, persisted: dict | None) -> dict:
             str(persisted.get("error") or "persist failed"),
         )
         # Prefer explicit fields from the structured reject when present.
-        for key in ("conversation_id", "task_id", "title", "error", "created"):
+        for key in ("conversation_id", "task_id", "title", "error", "created", "persist_nonce"):
             if key in persisted and persisted.get(key) is not None:
                 err[key] = persisted[key]
         err["type"] = "vuln_found_error"
@@ -1561,6 +1568,12 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         applied = apply_vuln_persist_result(msg, persisted)
         msg.clear()
         msg.update(applied)
+        # Spec #543: echo persist outcome to the originating Node (not the room).
+        # Node finding(confirm) waits on persist_nonce; conversation broadcast stays below.
+        try:
+            await ws.send_text(json.dumps(applied, ensure_ascii=False))
+        except Exception as echo_exc:
+            print(f"[WS] vuln persist ack to node failed: {echo_exc}")
         # Spec #368 D7 / #376 / #382: successful book → surface booked side-effect (non-fatal).
         side_conv = str(conv_id or applied.get("conversation_id") or "").strip()
         if str(applied.get("type") or "") == "vuln_found" and side_conv:
@@ -7225,7 +7238,10 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
-        from app.services.case_context import load_case_context_for_conversation
+        from app.services.case_context import (
+            booking_scope_from_assign,
+            load_case_context_for_conversation,
+        )
         from app.services.choice_card import (
             SOFT_GATE_CONTEXT_KEY,
             apply_soft_gate_note,
@@ -7237,6 +7253,11 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
             if not c:
                 return out
             user_id = getattr(c, "user_id", None)
+            conv_ctx_now = c.context if isinstance(c.context, dict) else {}
+            booking_sid, booking_eid = booking_scope_from_assign(
+                conv_ctx_now,
+                expert_id=str(out.get("expert_id") or out.get("expertId") or "") or None,
+            )
             this_turn_task: dict = {}
             if out.get("target"):
                 this_turn_task["target"] = out["target"]
@@ -7259,14 +7280,22 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
                     or not ctx.get("scope_intel")
                     or not ctx.get("intel_summary")
                 )
-                if needs_enrich:
-                    loaded = await load_case_context_for_conversation(
-                        db,
-                        c.id,
-                        user_id=user_id,
-                        task=this_turn_task or None,
+                loaded = await load_case_context_for_conversation(
+                    db,
+                    c.id,
+                    user_id=user_id,
+                    task=this_turn_task or None,
+                    booking_session_id=booking_sid,
+                    booking_expert_id=booking_eid,
+                )
+                if isinstance(loaded, dict):
+                    # Wrap counts are this Participant Session — never keep a
+                    # pre-attached Case-wide number.
+                    ctx["session_confirms"] = int(loaded.get("session_confirms") or 0)
+                    ctx["session_new_identities"] = int(
+                        loaded.get("session_new_identities") or 0
                     )
-                    if isinstance(loaded, dict):
+                    if needs_enrich:
                         if not isinstance(ctx.get("next_work"), dict) and isinstance(
                             loaded.get("next_work"), dict
                         ):
@@ -7297,6 +7326,8 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
                     c.id,
                     user_id=user_id,
                     task=this_turn_task or None,
+                    booking_session_id=booking_sid,
+                    booking_expert_id=booking_eid,
                 )
             # Soft gate always (pre-attached or loaded).
             try:

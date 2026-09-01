@@ -607,7 +607,9 @@ export function createPlatformCreateReportTool(runtime: ToolRuntime): AgentTool<
     label: "Platform create report",
     description:
       "REQUIRED when the user asks for a vulnerability/detection/delivery report. " +
-      "First platform_list_vulnerabilities, then pass a full professional markdown body " +
+      "Write a full professional markdown body from this Case blackboard " +
+      "(### Case findings board / finding(get) by id). Default clerk may also " +
+      "platform_list_vulnerabilities when answering ledger Q&A. " +
       "(## 1 summary … ## 6 disclaimer continuous; each finding: title/severity/location/description/PoC/impact/remediation). " +
       "Do NOT only paste the report in chat — this tool persists a Case report revision for the top-bar 报告 drawer. " +
       "Do not invent findings not on the ledger. Not for every booking — only on explicit report request.",

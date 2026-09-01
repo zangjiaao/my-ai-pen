@@ -1,4 +1,5 @@
 import type { PlatformMessage } from "../types.js";
+import { PersistAckHub, needsVulnPersistAck, stampPersistNonce } from "./persist-ack.js";
 
 type Handler = (message: PlatformMessage) => Promise<void> | void;
 
@@ -30,6 +31,7 @@ export class PlatformWSClient {
   private reconnect = true;
   /** Outbound buffer while socket is closed (prevents truncated chat). */
   private outboundQueue: PlatformMessage[] = [];
+  private readonly persistAcks = new PersistAckHub();
 
   constructor(
     private readonly url: string,
@@ -80,11 +82,16 @@ export class PlatformWSClient {
     }
   }
 
-  async send(message: PlatformMessage): Promise<void> {
+  async send(message: PlatformMessage): Promise<void | Record<string, unknown>> {
+    let ackPromise: Promise<Record<string, unknown>> | undefined;
+    if (needsVulnPersistAck(message)) {
+      const nonce = stampPersistNonce(message);
+      ackPromise = this.persistAcks.register(nonce);
+    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(message));
-        return;
+        return ackPromise;
       } catch (err) {
         console.warn(`[node4] send failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -99,7 +106,7 @@ export class PlatformWSClient {
       console.warn(`[node4] queued outbound message: ${typ} (queue=${this.outboundQueue.length})`);
     } else {
       console.warn(`[node4] dropped outbound message: ${typ}`);
-      return;
+      return ackPromise;
     }
 
     // Brief wait — common during platform-side replace/reconnect.
@@ -107,9 +114,10 @@ export class PlatformWSClient {
       await sleep(150 * (attempt + 1));
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.flushOutboundQueue();
-        return;
+        return ackPromise;
       }
     }
+    return ackPromise;
   }
 
   close(): void {
@@ -143,6 +151,7 @@ export class PlatformWSClient {
     } catch {
       return;
     }
+    if (this.persistAcks.take(message)) return;
     for (const handler of this.handlers.get(message.type) || []) {
       await handler(message);
     }

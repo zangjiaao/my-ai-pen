@@ -863,16 +863,18 @@ async function finalizeFinding(
     // Prefer this-run Store id when present; else host-minted local id (Spec #279).
     finding_id: input.storeFindingId || id,
     related_prior_id: input.relatedPriorId || undefined,
+    session_id: String(runtime.lifecycle.agentSessionId || "").trim() || undefined,
+    expert_id: String(runtime.task.expertId || "").trim() || undefined,
   });
   if (ack && typeof ack === "object") persistAck = ack as Record<string, unknown>;
-  const persistType = String(persistAck?.type || "vuln_found");
-  const persistFailed = persistType === "vuln_found_error";
+  const persistType = String(persistAck?.type || "");
+  const persistOk = persistType === "vuln_found";
   const createdKnown =
     persistAck && typeof persistAck.created === "boolean"
       ? (persistAck.created as boolean)
       : null;
-  // Wrap SoT is platform persist: do not guess new identity from !relatedPriorId.
-  if (!persistFailed) {
+  // Wrap SoT is platform persist ack only — void send / timeout / error do not count.
+  if (persistOk) {
     noteSessionConfirm(runtime, createdKnown === true);
   }
 

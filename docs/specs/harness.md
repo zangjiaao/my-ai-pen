@@ -88,7 +88,7 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 | `ctf` | **act_expert Citizen** + captcha + CTF skills | finding+evidence |
 | `consult` | **alias → `default`** during migration | none |
 
-**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerking as one `inventory` multi-op (list/get/create/enrich/assemble Hosts and Groups) plus vuln/report/title/list_experts. `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` — not `inventory`, not the title tool. Auto-title is a harness write on Free Main start (#548). Host identity and coverage counts live in `### Case` on **Free and Graph stage Task** (same `formatCaseContextInjection`). Wrap honest counts come from platform persist (`created=true`), not Node guessing. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only). Catalog is fixed at session start — no NLP attach of clerk tools mid-session.
+**Model B (platform citizen kits):** `ledger_assist` (built-in Default) keeps Owner Ledger clerking as one `inventory` multi-op (list/get/create/enrich/assemble Hosts and Groups) plus vuln/report/title/list_experts. `act_expert` packs loaded via `experts/load-pack` get rewritten Citizen **mission** (blackboard first) plus `fact` / `request_user_decision` — not `inventory`, not the title tool. Auto-title is a harness write on Free Main start (#548). Host identity and coverage counts live in `### Case` on **Free and Graph stage Task** (same `formatCaseContextInjection`). Wrap honest counts come from the platform persist ack (`created=true` echoed on the Node WS), scoped to this Participant Session — not Node guessing, not Case-wide. Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page / Workset adopt only). Catalog is fixed at session start — no NLP attach of clerk tools mid-session.
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
 Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/specs/ctf-role.md`.  
@@ -276,7 +276,7 @@ Exact rules live in runner settlement — docs must not invent stricter product 
 
 ### On-demand delivery reports
 
-When the user asks for a vulnerability/detection report, seats with platform report tools (`default`, pentest pack) may call `platform_list_vulnerabilities` then `platform_create_report` to persist a Case revision. Product UI lists revisions in the top-bar **报告** drawer (multi-report; MD/HTML download). Not a harness gate; not created on every booking.
+When the user asks for a vulnerability/detection report, write the markdown from this Case blackboard (`### Case` findings board / `finding(get)`). Seats with `platform_create_report` persist a Case revision (pentest pack does **not** have `platform_list_vulnerabilities` at kickoff). Default clerk may list the ledger when answering ledger Q&A. Product UI lists revisions in the top-bar **报告** drawer (multi-report; MD/HTML download). Not a harness gate; not created on every booking.
 
 Offline audit helpers (e.g. `node4` ctf-audit CLI) parse events for engineering — not for injecting answers.
 
@@ -307,7 +307,7 @@ Same conversation = shared Case. Joining experts receive `task_assign.case_conte
 | `findings_summary[]` | Conclusions + `evidence_ids` + short `proof_excerpt` |
 | `evidence_snippets[]` | Prefer **finding-linked** / `role=proof` rows: id, kind, path_or_url, excerpt |
 | `artifact_hints[]` | Path crumbs (not full trees) |
-| `session_confirms` / `session_new_identities` | This-Case wrap counts from persisted `vuln_found`; **new identity = `created=true` only** |
+| `session_confirms` / `session_new_identities` | This **Participant Session** wrap counts (pi `session_id`, else this `expert_id`; unscoped → 0). New identity = platform persist ack `created=true` echoed on the Node WS (`persist_nonce`). Void send / timeout / `vuln_found_error` do not count. |
 
 Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** a prior Task directory.  
 `write` of material files emits `file_artifact` (path + preview). `read` does not book Case evidence.  

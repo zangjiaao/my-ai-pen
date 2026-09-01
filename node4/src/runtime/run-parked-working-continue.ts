@@ -162,6 +162,15 @@ export async function runParkedWorkingContinue(options: {
     findingsDir: "",
     lifecycle: {},
   };
+  if (parked.runtime?.lifecycle) {
+    parked.runtime.lifecycle.agentSessionId =
+      String(
+        parked.runtime.lifecycle.agentSessionId ||
+          parked.agentSessionId ||
+          parked.session?.sessionId ||
+          "",
+      ).trim() || undefined;
+  }
   const obsCtx: ObservabilityContext = {
     platform,
     task,

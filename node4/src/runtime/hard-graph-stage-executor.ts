@@ -285,6 +285,7 @@ export function buildHardGraphStageChildRuntime(options: {
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
       processQuality,
+      agentSessionId: parent.lifecycle.agentSessionId,
       skillBodyFingerprints:
         parent.lifecycle.skillBodyFingerprints ||
         (parent.lifecycle.skillBodyFingerprints = {}),

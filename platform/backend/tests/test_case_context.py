@@ -1,6 +1,7 @@
 """Unit tests for case work-group context (thread + findings + evidence snippets)."""
 from app.services.case_context import (
     _normalize_finding_severity,
+    booking_scope_from_assign,
     build_case_context_payload,
     session_booking_from_messages,
     build_evidence_snippets,
@@ -692,6 +693,8 @@ def test_session_booking_counts_from_persisted_created_flag():
                 "title": "SQLi",
                 "status": "confirmed",
                 "created": True,
+                "session_id": "pi-a",
+                "expert_id": "exp-a",
             },
         },
         {
@@ -701,12 +704,25 @@ def test_session_booking_counts_from_persisted_created_flag():
                 "title": "XSS",
                 "status": "confirmed",
                 "created": False,
+                "session_id": "pi-a",
+                "expert_id": "exp-a",
             },
         },
         {
             "role": "agent",
             "msg_type": "vuln_found",
-            "content": {"type": "vuln_found_error", "error": "persist failed"},
+            "content": {
+                "title": "Other expert",
+                "status": "confirmed",
+                "created": True,
+                "session_id": "pi-b",
+                "expert_id": "exp-b",
+            },
+        },
+        {
+            "role": "agent",
+            "msg_type": "vuln_found",
+            "content": {"type": "vuln_found_error", "error": "persist failed", "session_id": "pi-a"},
         },
         {
             "role": "agent",
@@ -714,11 +730,38 @@ def test_session_booking_counts_from_persisted_created_flag():
             "content": {"text": "not a finding"},
         },
     ]
-    confirms, new_ids = session_booking_from_messages(messages)
+    confirms, new_ids = session_booking_from_messages(messages, session_id="pi-a")
     assert confirms == 2
     assert new_ids == 1
 
-    payload = build_case_context_payload(messages=messages, conversation_id="conv-session")
+    other, other_new = session_booking_from_messages(messages, session_id="pi-b")
+    assert other == 1
+    assert other_new == 1
+
+    none, none_new = session_booking_from_messages(messages)
+    assert none == 0
+    assert none_new == 0
+
+    payload = build_case_context_payload(
+        messages=messages,
+        conversation_id="conv-session",
+        booking_session_id="pi-a",
+    )
     assert payload["session_confirms"] == 2
     assert payload["session_new_identities"] == 1
+
+    by_expert, by_expert_new = session_booking_from_messages(messages, expert_id="exp-a")
+    assert by_expert == 2
+    assert by_expert_new == 1
+
+    roster = {
+        "participants": {
+            "exp-a": {"expert_id": "exp-a", "session_instance_id": "pi-a"},
+            "exp-b": {"expert_id": "exp-b", "session_instance_id": "pi-b"},
+        }
+    }
+    assert booking_scope_from_assign(roster, expert_id="exp-a") == ("pi-a", "exp-a")
+    assert booking_scope_from_assign(roster, expert_id="exp-b") == ("pi-b", "exp-b")
+    assert booking_scope_from_assign(roster, expert_id="exp-missing") == (None, "exp-missing")
+    assert booking_scope_from_assign(roster, expert_id=None) == (None, None)
 

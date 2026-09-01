@@ -105,10 +105,33 @@ class TestApplyVulnPersistResult(unittest.TestCase):
         self.assertIs(out["created"], False)
 
 
+    def test_success_keeps_persist_nonce_for_node_ack(self):
+        msg = _incoming_vuln_found(persist_nonce="nonce-543", finding_id="f_local")
+        persisted = {"id": "uuid-ledger-1", "created": True}
+        out = apply_vuln_persist_result(msg, persisted)
+        self.assertEqual(out["persist_nonce"], "nonce-543")
+        self.assertEqual(out["finding_id"], "f_local")
+        self.assertIs(out["created"], True)
+
+    def test_error_keeps_persist_nonce_for_node_ack(self):
+        msg = _incoming_vuln_found(persist_nonce="nonce-fail")
+        out = apply_vuln_persist_result(msg, None)
+        self.assertEqual(out["type"], "vuln_found_error")
+        self.assertEqual(out["persist_nonce"], "nonce-fail")
+        self.assertIs(out["created"], False)
+
+
 class TestVulnFoundErrorFrame(unittest.TestCase):
     def test_preserves_context_fields(self):
         frame = _vuln_found_error_frame(
-            {"conversation_id": "c", "task_id": "t", "title": "T"},
+            {
+                "conversation_id": "c",
+                "task_id": "t",
+                "title": "T",
+                "persist_nonce": "nonce-err",
+                "session_id": "pi-a",
+                "expert_id": "exp-a",
+            },
             "missing conversation_id",
         )
         self.assertEqual(frame["type"], "vuln_found_error")
@@ -117,6 +140,9 @@ class TestVulnFoundErrorFrame(unittest.TestCase):
         self.assertEqual(frame["title"], "T")
         self.assertEqual(frame["error"], "missing conversation_id")
         self.assertIs(frame["created"], False)
+        self.assertEqual(frame["persist_nonce"], "nonce-err")
+        self.assertEqual(frame["session_id"], "pi-a")
+        self.assertEqual(frame["expert_id"], "exp-a")
 
 
 if __name__ == "__main__":
