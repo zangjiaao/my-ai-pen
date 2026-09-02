@@ -545,6 +545,21 @@ def test_coverage_sketch_from_surfaces_caps_untested_samples():
     assert len(sketch["untested_samples"]) == 5
 
 
+def test_coverage_sketch_new_uses_persisted_is_new():
+    rows = [
+        {"coverage": "untested", "status": "seen", "is_new": True, "path_key": "/novel"},
+        {"coverage": "untested", "status": "seen", "is_new": False, "path_key": "/old"},
+        {"coverage": "tested", "status": "seen", "is_new": True, "path_key": "/tested-new"},
+        {"coverage": "skipped", "is_new": True, "path_key": "/skip-new"},
+        {"coverage": "untested", "is_new": True, "path_key": "/novel2"},
+    ]
+    sketch = coverage_sketch_from_surfaces(rows)
+    assert sketch["new"] == 2
+    assert sketch["untested"] == 3
+    assert sketch["tested"] == 1
+    assert sketch["skipped"] == 1
+
+
 def test_prior_index_module_key_folds_dvwa_paths():
     assert prior_index_module_key("/vulnerabilities/exec/") == "/vulnerabilities/exec"
     assert prior_index_module_key("/hackable/uploads/cmd_shell.php") == "/hackable/uploads"

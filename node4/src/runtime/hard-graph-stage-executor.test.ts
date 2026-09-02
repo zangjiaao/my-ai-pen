@@ -459,5 +459,105 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
   }
 }
 
+// --- #543: Graph captain piSid is written back to child (and parent) lifecycle ---
+{
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-session-sid-"));
+  const plan = new HardGraphPlanStore(graph!);
+  const runUsage = createUsageLedgerFromEnv();
+  const panel = new PanelAgentTracker("sid-bind", "Expert");
+  const pq = createProcessQualityState();
+  const parentRuntime = {
+    task: {
+      taskId: "sid-bind-task",
+      conversationId: "sid-bind-conv",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    piDir: taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: new ProcessFactStore(join(taskDir, "facts")),
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: { plan, usage: runUsage, panel, stageId: "init" },
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+      agentSessionId: "parent-free-sid",
+    },
+  } as unknown as ToolRuntime;
+
+  let childAtPrompt: ToolRuntime | undefined;
+  const executor = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: {
+      id: "pentest",
+      label: "Pentest",
+      missionLines: [],
+      workLines: [],
+      toolNames: ["todo", "fact", "write"],
+      bookingMode: "finding",
+      settlementNote: "test",
+    } as any,
+    boundSessionFactory: async ({ runtime }) => ({
+      session: {
+        sessionId: "graph-pi-sid",
+        async prompt() {
+          childAtPrompt = runtime;
+        },
+        async abort() {},
+        async dispose() {},
+        subscribe() {
+          return () => {};
+        },
+        steer() {},
+        followUp() {},
+        messages: [],
+      } as any,
+    }),
+  });
+  await executor({
+    graphId: graph!.id,
+    stage: initStage!,
+    stageIndex: 0,
+    attempt: 1,
+    tools: ["todo", "fact", "write"],
+    toolProfile: {},
+    handoff: {
+      summary: "",
+      surfaces: [],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: [],
+    },
+  });
+  assert.equal(
+    childAtPrompt?.lifecycle.agentSessionId,
+    "graph-pi-sid",
+    "finding(confirm) must stamp Graph piSid, not the parent's Free sid",
+  );
+  assert.equal(
+    parentRuntime.lifecycle.agentSessionId,
+    "graph-pi-sid",
+    "parent/park/roster share the Graph captain sid",
+  );
+  await rm(taskDir, { recursive: true, force: true });
+}
+
 await rm(workDir, { recursive: true, force: true });
 console.log("hard-graph-stage-executor.test.ts: ok");

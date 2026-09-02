@@ -247,8 +247,10 @@ export function buildHardGraphStageChildRuntime(options: {
   tools: string[];
   pack: RolePack;
   abortSignal?: AbortSignal;
+  /** Graph captain pi Agent.sessionId (stageSid). Prefer this over the parent's Free sid. */
+  agentSessionId?: string;
 }): { childRuntime: ToolRuntime; packForStage: RolePack } {
-  const { parent, workDir, tools, pack, abortSignal } = options;
+  const { parent, workDir, tools, pack, abortSignal, agentSessionId } = options;
   const packForStage: RolePack = { ...pack, toolNames: tools };
   const processFacts = new ProcessFactStore(join(workDir, "facts"));
   const allowSubagent = tools.includes("subagent");
@@ -285,7 +287,9 @@ export function buildHardGraphStageChildRuntime(options: {
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
       processQuality,
-      agentSessionId: parent.lifecycle.agentSessionId,
+      agentSessionId:
+        String(agentSessionId || parent.lifecycle.agentSessionId || "").trim() ||
+        parent.lifecycle.agentSessionId,
       skillBodyFingerprints:
         parent.lifecycle.skillBodyFingerprints ||
         (parent.lifecycle.skillBodyFingerprints = {}),
@@ -840,6 +844,7 @@ export function createHardGraphStageExecutor(options: {
         tools: input.tools,
         pack,
         abortSignal,
+        agentSessionId: stageSid,
       });
       // A1: prior stage candidates + observations into book-capable stages
       const continuitySeed = seedStageLifecycleFromParent(parentRuntime, childRuntime);
@@ -925,9 +930,11 @@ export function createHardGraphStageExecutor(options: {
         }
       }
 
-      // Collab copy: bind pi Agent.sessionId onto shared panel Main.
-      const piSid = String(session.sessionId || "").trim();
+      // Collab copy + finding(confirm) stamp: same pi Agent.sessionId as roster.
+      const piSid = String(session.sessionId || stageSid || "").trim();
       if (piSid) {
+        childRuntime.lifecycle.agentSessionId = piSid;
+        parentRuntime.lifecycle.agentSessionId = piSid;
         obsCtx.agentSessionId = piSid;
         try {
           panel.setAgentSessionId(piSid);

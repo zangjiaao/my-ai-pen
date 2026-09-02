@@ -906,11 +906,31 @@ def vuln_scope_sql_clause(port_scope: dict[str, set[str] | None]):
     return or_(*parts) if parts else false()
 
 
+def _surface_row_is_new(row: dict[str, Any]) -> bool | None:
+    """Inventory novelty flag (Spec #410). None when the row has no is_new signal."""
+    if "is_new" in row:
+        raw = row.get("is_new")
+    elif "isNew" in row:
+        raw = row.get("isNew")
+    else:
+        return None
+    if raw is None:
+        return None
+    from app.services.surface_inventory import coerce_is_new_flag
+
+    return bool(coerce_is_new_flag(raw, default=False))
+
+
 def coverage_sketch_from_surfaces(surfaces: list[Any] | None) -> dict[str, Any]:
-    """Capped coverage counts + untested samples from Case surface_ledger rows."""
+    """Capped coverage counts + untested samples from Case surface_ledger rows.
+
+    ``new`` prefers persisted ``is_new`` (untested only). When no row carries the
+    flag, fall back to first-touch ``status=seen|new`` so legacy ledgers stay honest.
+    """
     rows = [s for s in (surfaces or []) if isinstance(s, dict)]
     tested = untested = skipped = new = 0
     samples: list[str] = []
+    has_is_new = any(_surface_row_is_new(s) is not None for s in rows)
     for s in rows:
         cov = str(s.get("coverage") or "untested").strip().lower()
         if cov == "tested":
@@ -922,9 +942,14 @@ def coverage_sketch_from_surfaces(surfaces: list[Any] | None) -> dict[str, Any]:
             loc = str(s.get("path_key") or s.get("location") or s.get("path") or "").strip()
             if loc and loc not in samples and len(samples) < COVERAGE_SAMPLE_CAP:
                 samples.append(loc[:160])
-        status = str(s.get("status") or "").strip().lower()
-        if cov not in ("tested", "skipped") and status in ("seen", "new"):
-            new += 1
+        untested_cov = cov not in ("tested", "skipped")
+        if has_is_new:
+            if untested_cov and _surface_row_is_new(s) is True:
+                new += 1
+        else:
+            status = str(s.get("status") or "").strip().lower()
+            if untested_cov and status in ("seen", "new"):
+                new += 1
     out: dict[str, Any] = {
         "new": new,
         "untested": untested,
